@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ c.title }} · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>{{ c.title }}</h1>
+<div class="panel">
+  <p>게시판: <a href="{{ c.board_url }}" target="_blank" rel="noopener">{{ c.board_url }}</a></p>
+  {% if c.write_url %}<p>글쓰기 화면: <a href="{{ c.write_url }}" target="_blank" rel="noopener">{{ c.write_url }}</a></p>{% endif %}
+  <p class="muted">초기 활용 판단(개발 제안): {{ c.dev_note }}</p>
+  {% if blockers %}
+    <p><b>제출 대기 사유</b></p>
+    <ul class="list bad">{% for b in blockers %}<li>{{ b }}</li>{% endfor %}</ul>
+  {% else %}<p><span class="badge ok">이 코너의 제출 조건이 모두 기록되어 있습니다</span></p>{% endif %}
+  {% if warnings %}<ul class="list warn">{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+  <div class="actions">
+    <form method="post" action="{{ url_for('corner_confirm_notice', cid=c.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="secondary" title="공식 게시판의 최신 공지를 직접 읽었을 때만 누르세요">공지 확인 완료 (지금 직접 봤음)</button>
+    </form>
+    {% if c.notice_checked_at %}<span class="muted">마지막 확인: {{ c.notice_checked_at }}</span>{% endif %}
+  </div>
+</div>
+
+<form method="post" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>모집 조건 <span class="muted">공식 공지에서 확인한 내용</span></h2>
+  <div class="row3">
+    <div>
+      <label>현재 사연 모집 여부</label>
+      <select name="recruiting">{% for k, v in RECRUITING.items() %}<option value="{{ k }}" {{ 'selected' if c.recruiting == k }}>{{ v }}</option>{% endfor %}</select>
+    </div>
+    <div>
+      <label>마감 <span class="hint">YYYY-MM-DD 또는 YYYY-MM-DD HH:MM</span></label>
+      <input type="text" name="deadline" value="{{ c.deadline or '' }}" placeholder="상시 모집이면 비워 두기">
+    </div>
+    <div>
+      <label>글자 제한 <span class="hint">(공백 포함)</span></label>
+      <input type="number" name="char_limit" value="{{ c.char_limit or '' }}" min="1">
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>필수 항목</label>
+      <input type="text" name="required_fields" value="{{ c.required_fields or '' }}" placeholder="예: 제목, 내용, 신청곡">
+    </div>
+    <div>
+      <label>창작물·AI 보조 작성 관련 공지</label>
+      <select name="ai_assist_policy">{% for k, v in AI_POLICY.items() %}<option value="{{ k }}" {{ 'selected' if c.ai_assist_policy == k }}>{{ v }}</option>{% endfor %}</select>
+    </div>
+  </div>
+  <label>공지 원문 붙여넣기 <span class="hint">— 다음에 붙여 넣은 공지가 달라지면 재검토 전까지 제출을 멈춥니다</span></label>
+  <textarea name="notice_text">{{ c.notice_text or '' }}</textarea>
+  <label class="inline"><input type="checkbox" name="is_target" value="1" {{ 'checked' if c.is_target }}> 제출 대상 코너로 지정</label>
+
+  <details style="margin-top:12px">
+    <summary>글쓰기 화면 입력 설정 (읽기 전용 점검 후 채우기)</summary>
+    <label>글쓰기 화면 주소</label>
+    <input type="url" name="write_url" value="{{ c.write_url or '' }}">
+    <div class="row3">
+      <div><label>제목 입력 요소</label><input type="text" name="title_selector" value="{{ c.title_selector or '' }}" placeholder='예: input[name="title"]'></div>
+      <div><label>본문 입력 요소</label><input type="text" name="body_selector" value="{{ c.body_selector or '' }}" placeholder="iframe 안이면: iframe#editor || body"></div>
+      <div><label>신청곡 입력 요소 <span class="hint">(있으면)</span></label><input type="text" name="song_selector" value="{{ c.song_selector or '' }}"></div>
+    </div>
+  </details>
+  <div class="actions"><button>저장</button></div>
+</form>
+
+<div class="panel">
+  <h2>글쓰기 화면 읽기 전용 점검</h2>
+  <p class="muted">브라우저가 열리면 직접 로그인하고 글쓰기 화면까지 들어가세요. 도구는 입력 요소·글자 제한 안내·CAPTCHA 흔적을 읽기만 하고 아무것도 입력하거나 누르지 않습니다. 로그인 정보는 저장하지 않습니다.</p>
+  <form method="post" action="{{ url_for('corner_inspect', cid=c.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="secondary" {{ 'disabled' if not c.write_url or stopped }}>점검용 브라우저 열기</button>
+  </form>
+  {% for name, text in reports %}
+    <details style="margin-top:10px"><summary>{{ name }}</summary><pre class="box">{{ text }}</pre></details>
+  {% endfor %}
+</div>
+{% endblock %}

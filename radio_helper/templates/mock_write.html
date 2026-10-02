@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>모의 글쓰기 화면</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="mock-site">
+  <span class="mock-tag">로컬 모의 화면 — 실제 SBS 사이트가 아닙니다</span>
+  <h1 style="margin-top:12px">사연 보내기 (모의, cornerid={{ cornerid }})</h1>
+  <form method="post" action="{{ url_for('mock_write', cornerid=cornerid) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>제목</label>
+    <input type="text" name="title" maxlength="100">
+    <label>내용</label>
+    <textarea name="content" class="tall"></textarea>
+    <label>신청곡</label>
+    <input type="text" name="song">
+    <div class="actions"><button type="submit">등록</button></div>
+  </form>
+</div>
+</body>
+</html>

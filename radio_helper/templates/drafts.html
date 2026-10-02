@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}원고 검토함 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>원고 검토함</h1>
+<p class="muted">원고를 여러 개 만드는 것과 실제로 여러 곳에 보내는 것은 다릅니다. 한 경험은 한 곳에만 보냅니다.
+새 원고는 <a href="{{ url_for('experiences') }}">실제 경험</a> 화면에서 만듭니다.</p>
+<div class="panel table-wrap">
+<table>
+  <tr><th>#</th><th>제목</th><th>코너</th><th>경험</th><th>출처</th><th>상태</th></tr>
+  {% for d in rows %}
+  <tr>
+    <td>{{ d.id }}</td>
+    <td><a href="{{ url_for('draft_edit', did=d.id) }}">{{ d.title or '(제목 없음)' }}</a></td>
+    <td>{{ d.corner_title }}</td>
+    <td class="muted">#{{ d.experience_id }} {{ d.exp_label or d.exp_story[:20] }}</td>
+    <td class="muted">{{ SOURCE[d.source] }}</td>
+    <td><span class="badge {{ 'ok' if d.status == 'approved' }}">{{ DRAFT_STATUS[d.status] }}</span></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">원고가 없습니다.</td></tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}

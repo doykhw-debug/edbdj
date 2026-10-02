@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>오늘의 할 일</h1>
+
+{% if not profile_ready %}
+<div class="flash warn">먼저 <a href="{{ url_for('profile') }}">기본 정보</a>에서 방송용 이름·문체·공개하지 않을 단어를 정하세요.</div>
+{% endif %}
+
+<div class="grid" style="margin-bottom:16px">
+  <a class="stat" href="{{ url_for('experiences') }}"><span class="muted">실제 경험</span><b>{{ counts.experiences }}</b><span class="muted">사실 확인 {{ counts.confirmed }}건</span></a>
+  <a class="stat" href="{{ url_for('drafts') }}"><span class="muted">검토 대기 원고</span><b>{{ counts.drafts }}</b><span class="muted">승인됨 {{ counts.approved }}건</span></a>
+  <a class="stat" href="{{ url_for('submissions') }}"><span class="muted">등록 확인 필요</span><b>{{ counts.unresolved }}</b><span class="muted">입력만 함·결과 불명</span></a>
+  <a class="stat" href="{{ url_for('quizzes') }}"><span class="muted">대기 중 퀴즈</span><b>{{ counts.quizzes }}</b><span class="muted">고릴라 입력은 직접</span></a>
+</div>
+
+<div class="panel">
+  <h2>제출 대상 코너 상태</h2>
+  {% for c, (blockers, warnings) in target_status %}
+    <p><a href="{{ url_for('corner_edit', cid=c.id) }}"><b>{{ c.title }}</b></a>
+      {% if blockers %}<span class="badge bad">제출 대기 {{ blockers|length }}</span>{% else %}<span class="badge ok">조건 확인됨</span>{% endif %}</p>
+    {% if blockers %}<ul class="list bad">{% for b in blockers %}<li>{{ b }}</li>{% endfor %}</ul>{% endif %}
+    {% if warnings %}<ul class="list warn">{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>{% endif %}
+  {% else %}
+    <p class="muted">제출 대상으로 지정된 코너가 없습니다.</p>
+  {% endfor %}
+</div>
+
+<div class="panel">
+  <h2>진행 순서</h2>
+  <ol>
+    <li><a href="{{ url_for('profile') }}">기본 정보</a>를 한 번 정합니다. 비밀번호는 묻지 않습니다.</li>
+    <li><a href="{{ url_for('experiences') }}">실제 경험</a>을 3건 정도 적고 "실제 있었던 일" 확인란을 체크합니다.</li>
+    <li>코너의 최신 공지를 직접 보고 <a href="{{ url_for('corners') }}">코너</a>에 모집 여부·마감·글자 제한을 적은 뒤 "공지 확인 완료"를 누릅니다.</li>
+    <li>경험 화면에서 원고를 만들고, 필요하면 AI 요청문으로 다듬은 결과를 붙여 넣습니다.</li>
+    <li>검사 결과를 보고 고친 뒤 "실제와 같음"을 체크해 승인합니다.</li>
+    <li>먼저 <b>모의 화면 입력 시험</b>을 해 보고, 조건이 모두 확인되면 실제 화면에 <b>입력만</b> 합니다. 등록 버튼은 직접 누릅니다.</li>
+    <li>게시판에서 글이 올라간 것을 확인하면 <a href="{{ url_for('submissions') }}">제출 이력</a>에 상태와 글 주소를 남깁니다.</li>
+  </ol>
+</div>
+
+<div class="panel">
+  <h2>최근 기록</h2>
+  {% for e in events %}
+    <div><span class="muted">{{ e.at }}</span> · {{ e.message }}</div>
+  {% else %}<p class="muted">아직 기록이 없습니다.</p>{% endfor %}
+</div>
+{% endblock %}

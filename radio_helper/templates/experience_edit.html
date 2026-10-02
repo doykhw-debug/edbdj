@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}실제 경험 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+{% set e = e or {} %}
+<h1>{{ '경험 #' ~ eid if eid else '새 경험' }}</h1>
+<form method="post" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="row">
+    <div>
+      <label>짧은 이름 <span class="hint">(목록에서 알아보기 위한 메모, 선택)</span></label>
+      <input type="text" name="label" value="{{ e.label or '' }}" placeholder="예: 아이가 편집 화면 본 날">
+    </div>
+    <div>
+      <label>언제 있었던 일인지 <span class="hint">(대략)</span></label>
+      <input type="text" name="when_text" value="{{ e.when_text or '' }}" placeholder="예: 지난주 토요일 아침에">
+    </div>
+  </div>
+  <label>누가 등장하는지 <span class="hint">(실명 불필요)</span></label>
+  <input type="text" name="people" value="{{ e.people or '' }}" placeholder="예: 나, 옆지기, 첫째(7살)">
+  <label>실제로 있었던 일 <span class="hint">— 편하게 설명하세요. 이 문장이 원고의 바탕이 됩니다.</span></label>
+  <textarea name="story" class="tall" required>{{ e.story or '' }}</textarea>
+  <label>기억나는 말이나 장면 <span class="hint">(한 줄에 하나)</span></label>
+  <textarea name="quotes">{{ e.quotes or '' }}</textarea>
+  <label class="inline"><input type="radio" name="quote_kind" value="none" {{ 'checked' if (e.quote_kind or 'none') == 'none' }}> 해당 없음</label>
+  <label class="inline"><input type="radio" name="quote_kind" value="exact" {{ 'checked' if e.quote_kind == 'exact' }}> 정확히 이렇게 말했음</label>
+  <label class="inline"><input type="radio" name="quote_kind" value="gist" {{ 'checked' if e.quote_kind == 'gist' }}> 취지만 기억함 (직접 인용으로 쓰지 않음)</label>
+  <div class="row">
+    <div>
+      <label>웃기거나 속상하거나 놀랐던 포인트</label>
+      <textarea name="highlight">{{ e.highlight or '' }}</textarea>
+    </div>
+    <div>
+      <label>실제 결말</label>
+      <textarea name="ending">{{ e.ending or '' }}</textarea>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>사실을 바꾸면 안 되는 부분</label>
+      <textarea name="fixed_facts">{{ e.fixed_facts or '' }}</textarea>
+    </div>
+    <div>
+      <label>가리고 싶은 내용 <span class="hint">— 쉼표로 구분한 짧은 단어는 원고에서 ○○로 가리고 검사합니다</span></label>
+      <textarea name="hide">{{ e.hide or '' }}</textarea>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>신청곡 <span class="hint">(선택)</span></label>
+      <input type="text" name="song" value="{{ e.song or '' }}" placeholder="가수 - 곡명">
+    </div>
+    <div>
+      <label>다른 방송·게시판 제출/채택 이력</label>
+      <input type="text" name="prior_history" value="{{ e.prior_history or '' }}" placeholder="없으면 비워 두기">
+    </div>
+  </div>
+  <label class="inline" style="margin-top:14px"><input type="checkbox" name="user_confirmed" value="1" {{ 'checked' if e.user_confirmed }}>
+    <b>위 내용은 실제로 있었던 일입니다.</b> <span class="hint">(체크하지 않으면 원고를 제출 대상으로 쓸 수 없습니다)</span></label>
+  <div class="actions"><button>저장</button></div>
+</form>
+
+{% if eid %}
+<div class="panel">
+  <h2>이 경험으로 원고 만들기</h2>
+  <p class="muted">템플릿 초안은 위에 적은 문장을 그대로 배치하고 인사·맺음말만 붙입니다. 사건을 보태지 않습니다.
+  다듬고 싶으면 원고 화면의 "AI 요청문"을 복사해 쓰던 대화형 AI에 붙여 넣고 결과를 다시 가져오세요.</p>
+  <form method="post" action="{{ url_for('draft_new') }}" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="experience_id" value="{{ eid }}">
+    <select name="corner_id" style="max-width:360px">
+      {% for c in corners %}<option value="{{ c.id }}">{{ c.title }}{{ ' (제출 대상)' if c.is_target }}</option>{% endfor %}
+    </select>
+    <button>원고 만들기</button>
+  </form>
+  {% if drafts %}
+  <table style="margin-top:12px">
+    <tr><th>원고</th><th>코너</th><th>상태</th></tr>
+    {% for d in drafts %}
+    <tr><td><a href="{{ url_for('draft_edit', did=d.id) }}">#{{ d.id }} {{ d.title }}</a></td><td>{{ d.corner_title }}</td>
+      <td><span class="badge {{ 'ok' if d.status == 'approved' }}">{{ DRAFT_STATUS[d.status] }}</span></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

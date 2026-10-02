@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}코너 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>코너 목록 <span class="muted">김영철의 파워FM</span></h1>
+<p class="muted">게시판이 있다고 지금 모집 중이라는 뜻은 아닙니다. "초기 활용 판단"은 개발 제안일 뿐 방송국 공지가 아닙니다.
+모집 여부·마감·글자 제한은 공식 게시판 공지를 직접 보고 적습니다.</p>
+<div class="panel table-wrap">
+<table>
+  <tr><th>코너</th><th>모집 여부</th><th>공지 확인</th><th>제출 대상</th><th>초기 활용 판단</th></tr>
+  {% for c in corners %}
+  <tr>
+    <td><a href="{{ url_for('corner_edit', cid=c.id) }}">{{ c.title }}</a><br><span class="muted">{{ c.kind }}</span></td>
+    <td><span class="badge {{ 'ok' if c.recruiting == 'open' else ('bad' if c.recruiting == 'closed' else '') }}">{{ RECRUITING[c.recruiting] }}</span></td>
+    <td>
+      {% if c.notice_changed %}<span class="badge bad">공지 바뀜·재검토</span>
+      {% elif c.notice_checked_at %}<span class="badge ok">{{ c.notice_checked_at[:10] }}</span>
+      {% else %}<span class="badge">미확인</span>{% endif %}
+    </td>
+    <td>{% if c.is_target %}<span class="badge info">대상</span>{% endif %}</td>
+    <td class="muted">{{ c.dev_note }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}제출 이력 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>제출 이력·당첨 확인</h1>
+<p class="muted">글 등록 성공 ≠ 사연 채택 ≠ 당첨 ≠ 상품 수령. 각각 따로 기록합니다.
+다른 청취자 댓글은 공식 당첨 발표로 보지 않습니다. 결과 불명인 글은 다시 보내지 말고 게시판에서 먼저 확인하세요.</p>
+{% for s in rows %}
+<form method="post" action="{{ url_for('submission_update', sid=s.id) }}" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>#{{ s.id }} {{ s.title }}
+    <span class="badge {{ 'ok' if s.post_status == 'posted' else ('bad' if s.post_status == 'failed' else 'warn') }}">{{ POST_STATUS[s.post_status] }}</span></h2>
+  <p class="muted">{{ s.corner_title }} · 경험 #{{ s.experience_id }} {{ s.exp_label or '' }} · {{ s.created_at }}{% if s.draft_id %} · <a href="{{ url_for('draft_edit', did=s.draft_id) }}">원고 #{{ s.draft_id }}</a>{% endif %}</p>
+  <div class="row">
+    <div><label>글 등록</label>
+      <select name="post_status">{% for k, v in POST_STATUS.items() %}<option value="{{ k }}" {{ 'selected' if s.post_status == k }}>{{ v }}</option>{% endfor %}</select></div>
+    <div><label>글 주소</label><input type="url" name="post_url" value="{{ s.post_url or '' }}"></div>
+  </div>
+  <div class="row3">
+    {% for key, label in [('adopted', '사연 채택(방송 소개)'), ('won', '당첨(공식 발표)'), ('prize_received', '상품 수령')] %}
+    <div><label>{{ label }}</label>
+      <select name="{{ key }}">{% for k, v in YES_NO.items() %}<option value="{{ k }}" {{ 'selected' if s[key] == k }}>{{ v }}</option>{% endfor %}</select></div>
+    {% endfor %}
+  </div>
+  <label>메모</label>
+  <input type="text" name="note" value="{{ s.note or '' }}">
+  <details style="margin-top:8px"><summary>보낸 본문</summary><pre class="box">{{ s.body }}</pre></details>
+  <div class="actions"><button class="secondary">저장</button></div>
+</form>
+{% else %}
+<div class="panel muted">제출 이력이 없습니다.</div>
+{% endfor %}
+{% endblock %}

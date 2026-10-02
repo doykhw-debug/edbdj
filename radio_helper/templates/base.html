@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}라디오 참여 도우미{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+{% if stopped %}<div class="stopbar">일괄 중지 중 — 모든 입력 작업이 멈춰 있습니다. <a href="{{ url_for('settings') }}" style="color:#fff;text-decoration:underline">설정</a></div>{% endif %}
+<header>
+  <span class="brand">라디오 참여 도우미</span>
+  {% set ep = request.endpoint or '' %}
+  <nav>
+    <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep == 'dashboard' }}">홈</a>
+    <a href="{{ url_for('profile') }}" class="{{ 'on' if ep == 'profile' }}">기본 정보</a>
+    <a href="{{ url_for('corners') }}" class="{{ 'on' if ep.startswith('corner') }}">코너</a>
+    <a href="{{ url_for('experiences') }}" class="{{ 'on' if ep.startswith('experience') }}">실제 경험</a>
+    <a href="{{ url_for('drafts') }}" class="{{ 'on' if ep.startswith('draft') }}">원고 검토함</a>
+    <a href="{{ url_for('submissions') }}" class="{{ 'on' if ep.startswith('submission') }}">제출 이력</a>
+    <a href="{{ url_for('quizzes') }}" class="{{ 'on' if ep.startswith('quiz') }}">퀴즈</a>
+    <a href="{{ url_for('settings') }}" class="{{ 'on' if ep == 'settings' }}">설정·일괄 중지</a>
+  </nav>
+</header>
+<main>
+  {% for cat, msg in get_flashed_messages(with_categories=true) %}
+    <div class="flash {{ cat }}">{{ msg }}</div>
+  {% endfor %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

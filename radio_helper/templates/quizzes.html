@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}퀴즈 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>고릴라 퀴즈 기록</h1>
+<p class="muted">이번 단계에서는 방송 음성 수집과 고릴라 화면 조작을 하지 않습니다. 들은 문제를 기록하면 같은 문제의 재안내는 한 건으로 묶고,
+조건이 불분명하면 보류로 표시합니다. 정답 입력은 고릴라 앱에서 직접 하고 결과를 여기에 남깁니다.</p>
+
+<form method="post" action="{{ url_for('quiz_new') }}" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>문제 기록</h2>
+  <div class="row3">
+    <div><label>채널</label><input type="text" name="channel" value="파워FM"></div>
+    <div><label>프로그램</label><input type="text" name="program" value="김영철의 파워FM"></div>
+    <div><label>방송일</label><input type="date" name="broadcast_date" value="{{ today }}"></div>
+  </div>
+  <div class="row3">
+    <div><label>문제 번호/구분 <span class="hint">(없으면 문제 내용으로 구분)</span></label><input type="text" name="question_key" placeholder="예: 1부 퀴즈"></div>
+    <div><label>종류</label><select name="kind">{% for k, v in QUIZ_KIND.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+    <div><label>고릴라 응모 인정 여부</label><select name="gorilla_accepted">{% for k, v in YES_NO.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></div>
+  </div>
+  <label>문제</label><input type="text" name="question">
+  <div class="row3">
+    <div><label>보기</label><input type="text" name="options"></div>
+    <div><label>마감</label><input type="text" name="deadline" placeholder="예: 오전 9시 정답 발표 전"></div>
+    <div><label>응모 채널</label><input type="text" name="entry_channel" value="고릴라"></div>
+  </div>
+  <div class="actions"><button>기록</button></div>
+</form>
+
+{% for q, reasons in rows %}
+<form method="post" action="{{ url_for('quiz_update', qid=q.id) }}" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>#{{ q.id }} {{ q.broadcast_date }} {{ q.program }} — {{ q.question_key }}
+    {% if reasons %}<span class="badge warn">보류</span>{% else %}<span class="badge ok">직접 입력 가능</span>{% endif %}
+    {% if q.repeat_count > 1 %}<span class="badge info">재안내 {{ q.repeat_count - 1 }}회</span>{% endif %}</h2>
+  {% if reasons %}<ul class="list warn">{% for r in reasons %}<li>{{ r }}</li>{% endfor %}</ul>{% endif %}
+  <div class="row3">
+    <div><label>종류</label><select name="kind">{% for k, v in QUIZ_KIND.items() %}<option value="{{ k }}" {{ 'selected' if q.kind == k }}>{{ v }}</option>{% endfor %}</select></div>
+    <div><label>고릴라 응모 인정</label><select name="gorilla_accepted">{% for k, v in YES_NO.items() %}<option value="{{ k }}" {{ 'selected' if q.gorilla_accepted == k }}>{{ v }}</option>{% endfor %}</select></div>
+    <div><label>마감</label><input type="text" name="deadline" value="{{ q.deadline or '' }}"></div>
+  </div>
+  <label>문제</label><input type="text" name="question" value="{{ q.question or '' }}">
+  <div class="row">
+    <div><label>보기</label><input type="text" name="options" value="{{ q.options or '' }}"></div>
+    <div><label>정답 후보</label><input type="text" name="answer" value="{{ q.answer or '' }}"></div>
+  </div>
+  <label class="inline"><input type="checkbox" name="answer_verified" value="1" {{ 'checked' if q.answer_verified }}> 정답 후보를 확인했음</label>
+  <div class="row">
+    <div><label>입력 상태</label><select name="entry_status">{% for k, v in QUIZ_ENTRY.items() %}<option value="{{ k }}" {{ 'selected' if q.entry_status == k }}>{{ v }}</option>{% endfor %}</select></div>
+    <div><label>메모</label><input type="text" name="note" value="{{ q.note or '' }}"></div>
+  </div>
+  <div class="row3">
+    {% for key, label in [('answer_accepted', '정답 인정'), ('won', '당첨(공식 발표)'), ('prize_received', '상품 수령')] %}
+    <div><label>{{ label }}</label>
+      <select name="{{ key }}">{% for k, v in YES_NO.items() %}<option value="{{ k }}" {{ 'selected' if q[key] == k }}>{{ v }}</option>{% endfor %}</select></div>
+    {% endfor %}
+  </div>
+  <div class="actions"><button class="secondary">저장</button></div>
+</form>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>모의 등록 완료</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="mock-site">
+  <span class="mock-tag">로컬 모의 화면 — 실제 SBS 사이트가 아닙니다</span>
+  <h1 style="margin-top:12px">모의 등록 완료 #{{ post.id }}</h1>
+  <h2>{{ post.title }}</h2>
+  <pre class="box">{{ post.content }}</pre>
+  {% if post.song %}<p>신청곡: {{ post.song }}</p>{% endif %}
+  <p class="muted">{{ post.created_at }}</p>
+</div>
+</body>
+</html>

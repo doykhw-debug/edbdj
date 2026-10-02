@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}기본 정보 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>기본 정보 <span class="muted">처음 한 번 정하는 정보</span></h1>
+<form method="post" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="row">
+    <div>
+      <label>방송에 사용할 이름 또는 별명</label>
+      <input type="text" name="nickname" value="{{ p.nickname }}" placeholder="예: 편집하는 아빠">
+    </div>
+    <div>
+      <label>공개 가능한 거주 지역 범위 <span class="hint">(선택, 시·군 정도)</span></label>
+      <input type="text" name="region" value="{{ p.region }}" placeholder="예: 경기 용인">
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>공개 가능한 직업 표현</label>
+      <input type="text" name="job_label" value="{{ p.job_label }}" placeholder="예: 제약 영업">
+    </div>
+    <div>
+      <label>가족을 부를 익명 호칭</label>
+      <input type="text" name="family_aliases" value="{{ p.family_aliases }}" placeholder="예: 아내 → 옆지기, 아이 → 첫째">
+    </div>
+  </div>
+  <label>피하고 싶은 소재와 공개하지 않을 정보</label>
+  <textarea name="avoid_topics">{{ p.avoid_topics }}</textarea>
+  <label>본문에 나오면 안 되는 단어 <span class="hint">— 가족·회사·거래처 실명 등. 쉼표로 구분하면 원고에서 ○○로 가리고, 남아 있으면 승인을 막습니다.</span></label>
+  <input type="text" name="banned_words" value="{{ p.banned_words }}" placeholder="예: 홍길동, ○○제약, △△약국">
+
+  <div class="row">
+    <div>
+      <label>기본 문체</label>
+      <select name="tone">
+        {% for t in ['유쾌함', '담백함', '따뜻함', '기타'] %}
+          <option value="{{ t }}" {{ 'selected' if p.tone == t }}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>문체 '기타'일 때 설명</label>
+      <input type="text" name="tone_other" value="{{ p.tone_other }}">
+    </div>
+  </div>
+  <label>신청곡 취향 또는 곡 <span class="hint">(선택)</span></label>
+  <input type="text" name="song_pref" value="{{ p.song_pref }}">
+
+  <div class="row">
+    <div>
+      <label>전화 연결 참여 가능 여부 <span class="hint">(코너가 요구할 때만)</span></label>
+      <select name="phone_ok">
+        {% for v in ['', '가능', '불가', '상황에 따라'] %}<option value="{{ v }}" {{ 'selected' if p.phone_ok == v }}>{{ v or '선택 안 함' }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>직접 로그인 방식 <span class="hint">(비밀번호는 입력하지 않습니다)</span></label>
+      <select name="login_method">
+        {% for v in ['', 'SBS 아이디', '카카오', '네이버', '구글', '애플', '기타 소셜 로그인'] %}<option value="{{ v }}" {{ 'selected' if p.login_method == v }}>{{ v or '선택 안 함' }}</option>{% endfor %}
+      </select>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>테스트 PC에서 고릴라·홈페이지 로그인이 가능한지</label>
+      <input type="text" name="test_pc_login_ok" value="{{ p.test_pc_login_ok }}" placeholder="예: 홈페이지 가능, 고릴라 PC앱 미설치">
+    </div>
+    <div>
+      <label>퀴즈 계정 구분값 <span class="hint">— 중복 확인용 별칭. 아이디를 적을 필요 없음</span></label>
+      <input type="text" name="account_label" value="{{ p.account_label }}" placeholder="예: 내 계정">
+    </div>
+  </div>
+  <div class="actions"><button>저장</button></div>
+</form>
+{% endblock %}
