@@ -635,6 +635,8 @@ def create_app(data_dir: str | None = None) -> Flask:
     def quizbot_tool():
         tool = form("tool")
         args = {"check": ["check"], "auto-setup": ["auto-setup"], "inspect": ["inspect-gorilla"],
+                "select-window": ["select", "window"], "select-input": ["select", "input"],
+                "select-send": ["select", "send"],
                 "calibrate-input": ["calibrate", "input"],
                 "calibrate-send": ["calibrate", "send"], "type-test": ["type-test"]}.get(tool)
         if args is None:
@@ -647,12 +649,16 @@ def create_app(data_dir: str | None = None) -> Flask:
             "check": "환경을 점검합니다. 10~30초 뒤 이 화면을 새로 고치세요.",
             "auto-setup": "열린 창 중에서 고릴라 채팅창을 찾습니다 (읽기만 함). 10~30초 뒤 이 화면을 새로 고치세요.",
             "inspect": "고릴라 창의 화면 요소를 읽습니다 (아무것도 누르지 않음).",
+            "select-window": "화면이 어두워지면 고릴라 창 전체를 마우스로 끌어 네모로 감싸세요. 손을 떼면 저장됩니다.",
+            "select-input": "화면이 어두워지면 고릴라의 '공감로그 글쓰기' 칸을 마우스로 끌어 네모로 그리세요.",
+            "select-send": "화면이 어두워지면 고릴라의 파란 '전송' 버튼을 마우스로 끌어 네모로 그리세요.",
             "calibrate-input": "지금 7초 안에 마우스를 고릴라의 '공감로그 글쓰기' 칸 위에 올려 두고 움직이지 마세요.",
             "calibrate-send": "지금 7초 안에 마우스를 고릴라의 파란 '전송' 버튼 위에 올려 두고 움직이지 마세요.",
             "type-test": "고릴라 입력칸에 '입력 테스트'를 넣습니다. 보내지 않으니 확인 후 직접 지우세요.",
         }
         flash(f"{messages[tool]} (기록: {log_name})")
-        return redirect(url_for("quizbot" if tool == "check" else "gorilla", wait=1))
+        wait = 25 if tool.startswith(("select", "calibrate")) else 12
+        return redirect(url_for("quizbot" if tool == "check" else "gorilla", wait=wait))
 
     @app.route("/gorilla", methods=["GET", "POST"])
     def gorilla():
@@ -680,6 +686,10 @@ def create_app(data_dir: str | None = None) -> Flask:
         if report and auto and report["file"][len("gorilla_"):] < auto["file"][len("gorilla_auto_"):]:
             report = None  # 자동 찾기 이전의 점검 결과는 다른 창을 봤을 수 있다
         coords = {k: qconfig.get(g.conn, f"gorilla.{k}") for k in ("input_x", "input_y", "send_x", "send_y")}
+        from .quizbot.gorilla import parse_rect
+
+        rects = {k: parse_rect(qconfig.get(g.conn, f"gorilla.{k}_rect")) for k in ("input", "send")}
+        region = parse_rect(qconfig.get(g.conn, "gorilla.screen_region"))
         log_dir = db.data_dir() / "logs"
         tool_logs = sorted(log_dir.glob("quizbot_*.log"), key=lambda f: f.stat().st_mtime, reverse=True) \
             if log_dir.exists() else []
@@ -692,7 +702,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             break
         return render_template("gorilla.html", keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
                                labels=qconfig.LABELS, report=report, auto=auto, coords=coords, last_tool=last_tool,
-                               waiting=bool(request.args.get("wait")))
+                               rects=rects, region=region,
+                               waiting=request.args.get("wait", type=int))
 
     # ── 로컬 모의 글쓰기 화면 ─────────────────────────────────────
     @app.route("/mock/write", methods=["GET", "POST"])

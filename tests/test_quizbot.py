@@ -611,3 +611,37 @@ def test_find_window_prefers_calibrated_size(monkeypatch):
     monkeypatch.setattr(gorilla, "_control_names", lambda w, ct, limit=300: [])
     g = gorilla.Gorilla(config.GorillaConfig(process_name="gorealra.exe", window_title="", window_size="640,950"))
     assert g.find_window() is chat[0]
+
+
+def test_region_settings_relative_to_window():
+    chat = {"title": "공감로그", "process": "gorealra.exe", "rect": (700, 0, 1340, 950), "point": (0, 0)}
+    st, msg = gorilla.region_settings("input", (800, 880, 1200, 940), chat, None)
+    assert st["gorilla.input_rect"] == "0.1562,0.9263,0.7812,0.9895"
+    assert (float(st["gorilla.input_x"]), float(st["gorilla.input_y"])) == (0.4688, 0.9579)
+    assert st["gorilla.input_mode"] == "coords" and st["gorilla.process_name"] == "gorealra.exe"
+    assert st["gorilla.window_size"] == "640,950" and "입력칸" in msg
+    st, _ = gorilla.region_settings("send", (1230, 870, 1330, 945), chat, None)
+    assert st["gorilla.send_mode"] == "coords" and "gorilla.input_mode" not in st
+
+
+def test_region_settings_window_region_and_errors():
+    browser = {"title": "고릴라·인식 설정 · 라디오 참여 도우미 - Aside", "process": "aside.exe", "rect": (0, 0, 1, 1)}
+    with pytest.raises(gorilla.GorillaError):
+        gorilla.region_settings("input", (10, 10, 100, 40), browser, None)  # 브라우저 위에 그림
+    with pytest.raises(gorilla.GorillaError):
+        gorilla.region_settings("input", (10, 10, 12, 12), browser, None)  # 너무 작음
+
+    # 창 인식이 안 되는 경우: 화면 영역을 기준으로
+    app = {"title": "", "process": "", "rect": (0, 0, 1920, 1080)}
+    st, _ = gorilla.region_settings("window", (700, 0, 1340, 950), app, None)
+    assert st["gorilla.screen_region"] == "700,0,1340,950" and st["gorilla.input_x"] == ""
+    region = tuple(int(v) for v in gorilla.parse_rect(st["gorilla.screen_region"]))
+    st2, msg = gorilla.region_settings("input", (800, 880, 1200, 940), browser, region)  # 영역 기준이면 창 정보와 무관
+    assert st2["gorilla.input_rect"] == "0.1562,0.9263,0.7812,0.9895" and "영역" in msg
+    with pytest.raises(gorilla.GorillaError):
+        gorilla.region_settings("send", (1500, 100, 1600, 150), app, region)  # 영역 밖
+
+
+def test_parse_rect():
+    assert gorilla.parse_rect("1,2,3,4") == (1.0, 2.0, 3.0, 4.0)
+    assert gorilla.parse_rect("") is None and gorilla.parse_rect("1,2") is None and gorilla.parse_rect("a,b,c,d") is None

@@ -4,8 +4,11 @@
   check            필요한 구성 요소·API 키·고릴라 창·스피커 점검
   auto-setup       열린 창 중 고릴라 채팅창을 찾아 설정 저장 (읽기만 함)
   inspect-gorilla  고릴라 창의 화면 요소 목록 저장 (읽기만 함)
-  calibrate input  5초 뒤 마우스 위치를 채팅 입력칸 위치로 저장
-  calibrate send   5초 뒤 마우스 위치를 전송 버튼 위치로 저장
+  select window    화면에 네모를 그려 고릴라 창 전체 영역 저장 (창 인식이 안 될 때)
+  select input     화면에 네모를 그려 채팅 입력칸 영역 저장
+  select send      화면에 네모를 그려 전송 버튼 영역 저장
+  calibrate input  7초 뒤 마우스 위치를 채팅 입력칸 위치로 저장
+  calibrate send   7초 뒤 마우스 위치를 전송 버튼 위치로 저장
   type-test        고릴라 입력칸에 '입력 테스트'를 넣기만 함 (보내지 않음)
 """
 
@@ -122,6 +125,21 @@ def cmd_calibrate(conn, target: str) -> int:
     return 0
 
 
+def cmd_select(conn, target: str) -> int:
+    from .gorilla import Gorilla
+
+    result = Gorilla(config.GorillaConfig.load(conn)).select(target)
+    if result is None:
+        say("취소했습니다. 아무것도 바꾸지 않았습니다.")
+        return 1
+    settings, message = result
+    for key, value in settings.items():
+        db.set_setting(conn, key, value)
+    db.log(conn, "gorilla", message)
+    say(message)
+    return 0
+
+
 def cmd_type_test(conn) -> int:
     from .gorilla import Gorilla
 
@@ -133,8 +151,8 @@ def cmd_type_test(conn) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
-    ap.add_argument("command", choices=["run", "check", "auto-setup", "inspect-gorilla", "calibrate", "type-test"])
-    ap.add_argument("target", nargs="?", choices=["input", "send"])
+    ap.add_argument("command", choices=["run", "check", "auto-setup", "inspect-gorilla", "select", "calibrate", "type-test"])
+    ap.add_argument("target", nargs="?", choices=["window", "input", "send"])
     args = ap.parse_args(argv)
     conn = db.connect()
     db.init_db(conn)
@@ -150,8 +168,12 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_auto_setup(conn)
         if args.command == "inspect-gorilla":
             return cmd_inspect(conn)
-        if args.command == "calibrate":
+        if args.command == "select":
             if not args.target:
+                ap.error("select 에는 window, input, send 중 하나가 필요합니다.")
+            return cmd_select(conn, args.target)
+        if args.command == "calibrate":
+            if args.target not in ("input", "send"):
                 ap.error("calibrate 에는 input 또는 send 가 필요합니다.")
             return cmd_calibrate(conn, args.target)
         return cmd_type_test(conn)

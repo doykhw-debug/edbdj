@@ -7,18 +7,41 @@
   <h2>1. 고릴라 창 맞추기</h2>
   <p class="muted">고릴라 PC 앱을 켜고 <b>파워FM 공감로그(채팅) 화면</b>을 열어 둔 상태에서 순서대로 하세요. 고릴라 창을 최소화하지 마세요.</p>
   <ol>
-    <li><b>자동 찾기</b> — 열린 창 중 고릴라 창을 찾아 저장합니다. 브라우저와 이 도우미 화면은 제외합니다. (읽기만 함)</li>
-    <li><b>입력칸 위치 지정</b> — 누른 뒤 7초 안에 마우스를 고릴라의 '공감로그 글쓰기' 칸 위에 올려 두세요. 마우스 아래 창을 고릴라 창으로 저장하므로, 자동 찾기가 안 돼도 이것만으로 설정됩니다.</li>
-    <li><b>전송 버튼 위치 지정</b> — 같은 방법으로 파란 '전송' 버튼 위에 마우스를 올려 두세요.</li>
+    <li><b>입력칸 영역 지정</b> — 버튼을 누르면 화면이 어두워집니다. 고릴라의 <b>'공감로그 글쓰기' 칸</b>을 마우스로 끌어 네모로 그리세요. 손을 떼면 저장됩니다.
+      네모가 놓인 창을 고릴라 창으로 기억하고, 창 안에서의 위치(비율)로 저장하므로 창을 옮겨도 됩니다.</li>
+    <li><b>전송 버튼 영역 지정</b> — 같은 방법으로 파란 <b>'전송' 버튼</b>을 네모로 그리세요.</li>
     <li><b>입력 테스트</b> — 입력칸에 '입력 테스트'를 넣기만 하고 보내지 않습니다. 들어갔는지 확인하고 직접 지우세요.</li>
   </ol>
   <div class="actions">
-    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="auto-setup"><button {{ 'disabled' if stopped }}>자동 찾기</button></form>
-    {% for tool, label in [('calibrate-input', '입력칸 위치 지정'), ('calibrate-send', '전송 버튼 위치 지정'), ('type-test', '입력 테스트'), ('inspect', '창 점검(상세)')] %}
-    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="{{ tool }}"><button class="secondary" {{ 'disabled' if stopped }}>{{ label }}</button></form>
+    {% for tool, label, primary in [('select-input', '① 입력칸 영역 지정', True), ('select-send', '② 전송 버튼 영역 지정', True), ('type-test', '③ 입력 테스트', False)] %}
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="{{ tool }}"><button class="{{ '' if primary else 'secondary' }}" {{ 'disabled' if stopped }}>{{ label }}</button></form>
     {% endfor %}
   </div>
-  {% if waiting %}<div class="flash" id="waitbox">실행 중입니다… 12초 뒤 이 화면이 자동으로 새로 고쳐집니다.</div>{% endif %}
+  <details style="margin-top:10px"><summary class="muted">창 인식이 안 될 때 / 다른 방법</summary>
+    <p class="muted">입력 테스트가 엉뚱한 곳에 글자를 넣으면, <b>고릴라 창 영역 지정</b>으로 고릴라 창 전체를 네모로 감싼 뒤 ①②를 다시 하세요.
+    이 방식은 창 대신 화면의 그 영역을 기준으로 하므로, 고릴라 창을 옮기면 다시 지정해야 합니다.</p>
+    <div class="actions">
+      {% for tool, label in [('select-window', '고릴라 창 영역 지정'), ('auto-setup', '자동 찾기'), ('inspect', '창 점검(상세)')] %}
+      <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="{{ tool }}"><button class="secondary" {{ 'disabled' if stopped }}>{{ label }}</button></form>
+      {% endfor %}
+    </div>
+  </details>
+
+  {% if rects.input or rects.send or region %}
+  <div style="display:flex;gap:16px;align-items:flex-start;margin-top:14px;flex-wrap:wrap">
+    <svg viewBox="0 0 100 140" width="120" height="168" role="img" aria-label="저장한 위치" style="border:1px solid var(--line);border-radius:8px;background:#fff">
+      <rect x="1" y="1" width="98" height="138" fill="#f6f7f9" stroke="#98a2b3" stroke-dasharray="3 2"/>
+      {% if rects.input %}<rect x="{{ rects.input[0]*100 }}" y="{{ rects.input[1]*140 }}" width="{{ (rects.input[2]-rects.input[0])*100 }}" height="{{ (rects.input[3]-rects.input[1])*140 }}" fill="#2554c733" stroke="#2554c7" stroke-width="1.5"/>{% endif %}
+      {% if rects.send %}<rect x="{{ rects.send[0]*100 }}" y="{{ rects.send[1]*140 }}" width="{{ (rects.send[2]-rects.send[0])*100 }}" height="{{ (rects.send[3]-rects.send[1])*140 }}" fill="#18794e33" stroke="#18794e" stroke-width="1.5"/>{% endif %}
+    </svg>
+    <div class="muted">
+      <div><b>기준</b>: {{ '지정한 화면 영역 ' ~ (region|map('int')|join(', ')) if region else '고릴라 창 (' ~ (values['gorilla.process_name'] or '프로그램 미확인') ~ ')' }}</div>
+      <div><span style="color:#2554c7">■</span> 입력칸 {{ '저장됨' if rects.input else '미지정' }}</div>
+      <div><span style="color:#18794e">■</span> 전송 버튼 {{ '저장됨' if rects.send else '미지정 (Enter 키로 전송)' }}</div>
+    </div>
+  </div>
+  {% endif %}
+  {% if waiting %}<div class="flash" id="waitbox">실행 중입니다… {{ waiting }}초 뒤 이 화면이 자동으로 새로 고쳐집니다.</div>{% endif %}
   {% if last_tool %}
     <p style="margin-top:12px"><b>최근 실행 결과</b> <span class="muted">{{ last_tool[0] }}</span></p>
     <pre class="box">{{ last_tool[1] }}</pre>
@@ -61,6 +84,6 @@
   <div class="actions"><button>저장</button></div>
 </form>
 {% if waiting %}
-<script>setTimeout(function () { location.href = location.pathname; }, 12000);</script>
+<script>setTimeout(function () { location.href = location.pathname; }, {{ waiting * 1000 }});</script>
 {% endif %}
 {% endblock %}

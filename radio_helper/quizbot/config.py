@@ -29,6 +29,9 @@ DEFAULTS = {
     # 고릴라 화면
     "gorilla.process_name": "",           # '자동 찾기'·'위치 지정'으로 저장되는 고릴라 프로그램(실행 파일) 이름
     "gorilla.window_size": "",            # 위치 지정 때 잰 창 크기 "너비,높이"
+    "gorilla.screen_region": "",          # 고릴라 창 영역을 네모로 지정했을 때 화면 좌표 "왼,위,오른,아래"
+    "gorilla.input_rect": "",             # 입력칸 네모 (기준 대비 비율 "x1,y1,x2,y2")
+    "gorilla.send_rect": "",              # 전송 버튼 네모
     "gorilla.window_title": "고릴라|gorealra",
     "gorilla.input_mode": "uia",          # uia: 화면 요소로 입력칸 찾기 / coords: 지정한 위치 클릭
     "gorilla.input_auto_id": "",
@@ -90,6 +93,9 @@ def get_float(conn: sqlite3.Connection, key: str) -> float | None:
 class GorillaConfig:
     process_name: str = ""
     window_size: str = ""
+    screen_region: str = ""
+    input_rect: str = ""
+    send_rect: str = ""
     window_title: str = DEFAULTS["gorilla.window_title"]
     input_mode: str = "uia"
     input_auto_id: str = ""

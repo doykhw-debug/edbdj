@@ -120,32 +120,169 @@ def process_name(pid: int) -> str:
     return ""
 
 
-def window_under_cursor() -> dict:
-    """마우스 아래에 있는 최상위 창 정보 (화면 요소가 안 보이는 앱도 됨)."""
+def _dpi_aware() -> None:
+    """클릭(pywinauto)과 같은 물리 화면 좌표를 쓰도록 DPI 인식을 켠다."""
+    import importlib
+
+    importlib.import_module("pywinauto")
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
+
+def window_at_point(x: int, y: int) -> dict:
+    """화면 좌표 (x, y)에 있는 최상위 창 정보 (화면 요소가 안 보이는 앱도 됨)."""
     import ctypes
     from ctypes import wintypes
 
-    import importlib
-
-    importlib.import_module("pywinauto")  # 클릭과 같은 화면 좌표계(DPI 인식)를 쓰도록 먼저 불러온다
-
     user32 = ctypes.windll.user32
-    pt = wintypes.POINT()
-    user32.GetCursorPos(ctypes.byref(pt))
     user32.WindowFromPoint.argtypes = [wintypes.POINT]
     user32.WindowFromPoint.restype = wintypes.HWND
-    hwnd = user32.WindowFromPoint(pt)
+    hwnd = user32.WindowFromPoint(wintypes.POINT(x, y))
     root = user32.GetAncestor(hwnd, 2) if hwnd else None  # GA_ROOT
     if not root:
-        raise GorillaError("마우스 아래에서 창을 찾지 못했습니다.")
+        raise GorillaError("그 위치에서 창을 찾지 못했습니다.")
     rect = wintypes.RECT()
     user32.GetWindowRect(root, ctypes.byref(rect))
     buf = ctypes.create_unicode_buffer(512)
     user32.GetWindowTextW(root, buf, 512)
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(root, ctypes.byref(pid))
-    return {"title": buf.value, "process": process_name(pid.value),
-            "rect": (rect.left, rect.top, rect.right, rect.bottom), "point": (pt.x, pt.y)}
+    return {"hwnd": root, "title": buf.value, "process": process_name(pid.value),
+            "rect": (rect.left, rect.top, rect.right, rect.bottom), "point": (x, y)}
+
+
+def window_under_cursor() -> dict:
+    import ctypes
+    from ctypes import wintypes
+
+    _dpi_aware()
+    pt = wintypes.POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    return window_at_point(pt.x, pt.y)
+
+
+def select_rectangle(prompt: str, timeout_s: int = 90) -> tuple[int, int, int, int] | None:
+    """화면을 어둡게 덮고 마우스로 네모를 끌게 한다. 손을 떼면 바로 저장. 취소는 Esc 또는 오른쪽 클릭."""
+    import ctypes
+    import tkinter as tk
+
+    _dpi_aware()
+    user32 = ctypes.windll.user32
+    vx, vy = user32.GetSystemMetrics(76), user32.GetSystemMetrics(77)   # 가상 화면(여러 모니터) 왼쪽 위
+    vw, vh = user32.GetSystemMetrics(78), user32.GetSystemMetrics(79)
+    state = {"start": None, "box": None, "result": None}
+
+    root = tk.Tk()
+    root.overrideredirect(True)
+    root.attributes("-topmost", True)
+    root.attributes("-alpha", 0.35)
+    root.geometry(f"{vw}x{vh}+{vx}+{vy}")
+    canvas = tk.Canvas(root, cursor="crosshair", bg="black", highlightthickness=0)
+    canvas.pack(fill="both", expand=True)
+    canvas.create_text(vw // 2, 60, fill="white", font=("Malgun Gothic", 20, "bold"), justify="center",
+                       text=f"{prompt}\n마우스로 끌어서 네모를 그리면 바로 저장됩니다 · 취소: Esc 또는 오른쪽 클릭")
+
+    def press(e):
+        state["start"] = (e.x, e.y)
+        if state["box"]:
+            canvas.delete(state["box"])
+        state["box"] = canvas.create_rectangle(e.x, e.y, e.x, e.y, outline="#ffeb3b", width=4)
+
+    def drag(e):
+        if state["start"]:
+            x0, y0 = state["start"]
+            canvas.coords(state["box"], x0, y0, e.x, e.y)
+
+    def release(e):
+        if not state["start"]:
+            return
+        x0, y0 = state["start"]
+        l, r = sorted((x0, e.x))
+        t, b = sorted((y0, e.y))
+        if r - l >= 4 and b - t >= 4:
+            state["result"] = (l + vx, t + vy, r + vx, b + vy)
+            root.destroy()
+
+    def cancel(_e=None):
+        root.destroy()
+
+    canvas.bind("<ButtonPress-1>", press)
+    canvas.bind("<B1-Motion>", drag)
+    canvas.bind("<ButtonRelease-1>", release)
+    canvas.bind("<ButtonPress-3>", cancel)
+    root.bind("<Escape>", cancel)
+    root.after(timeout_s * 1000, cancel)
+    root.focus_force()
+    root.mainloop()
+    return state["result"]
+
+
+def parse_rect(text: str | None) -> tuple[float, ...] | None:
+    try:
+        parts = tuple(float(v) for v in (text or "").split(","))
+    except ValueError:
+        return None
+    return parts if len(parts) == 4 else None
+
+
+def rect_fraction(ref: tuple[int, int, int, int], rect: tuple[int, int, int, int]) -> tuple[float, float, float, float]:
+    left, top, right, bottom = ref
+    w, h = max(1, right - left), max(1, bottom - top)
+    return tuple(round(v, 4) for v in ((rect[0] - left) / w, (rect[1] - top) / h,
+                                        (rect[2] - left) / w, (rect[3] - top) / h))
+
+
+def region_settings(target: str, rect: tuple[int, int, int, int], info: dict,
+                    screen_region: tuple[int, ...] | None) -> tuple[dict, str]:
+    """끌어서 그린 네모 → 저장할 설정 (순수 계산).
+    target: window(고릴라 창 전체 영역) / input(입력칸) / send(전송 버튼)
+    info: 네모 가운데에 있는 창 정보"""
+    l, t, r, b = rect
+    if r - l < 4 or b - t < 4:
+        raise GorillaError("네모가 너무 작습니다. 다시 그려 주세요.")
+    win_ok = not is_excluded(info["title"], info["process"])
+    settings: dict[str, str] = {}
+    if win_ok and info["process"]:
+        settings["gorilla.process_name"] = info["process"]
+    if target == "window":
+        settings.update({
+            "gorilla.screen_region": f"{l},{t},{r},{b}",
+            "gorilla.input_mode": "coords", "gorilla.send_mode": "coords",
+            # 기준이 바뀌었으니 예전 입력칸·버튼 위치는 지운다
+            "gorilla.input_x": "", "gorilla.input_y": "", "gorilla.input_rect": "",
+            "gorilla.send_x": "", "gorilla.send_y": "", "gorilla.send_rect": "",
+        })
+        if win_ok:
+            settings["gorilla.window_title"] = re.escape(info["title"]) if info["title"] else ""
+        return settings, (f"고릴라 창 영역을 저장했습니다 ({r - l}×{b - t}). 이제 입력칸과 전송 버튼 영역을 지정하세요. "
+                          "이 방식은 고릴라 창을 옮기면 영역을 다시 지정해야 합니다.")
+    if screen_region:
+        ref = tuple(int(v) for v in screen_region)
+        basis = "저장한 고릴라 창 영역"
+    else:
+        if not win_ok:
+            raise GorillaError(f"네모 가운데가 고릴라가 아닌 창('{info['title'][:40]}', {info['process']}) 위에 있습니다. "
+                               "고릴라 창 위에 그려 주세요.")
+        ref = info["rect"]
+        wl, wt, wr, wb = ref
+        settings.update({"gorilla.window_title": re.escape(info["title"]) if info["title"] else "",
+                         "gorilla.window_size": f"{wr - wl},{wb - wt}"})
+        basis = f"'{info['title'] or '(제목 없음)'}' 창"
+    fx1, fy1, fx2, fy2 = rect_fraction(ref, rect)
+    cx, cy, _, _ = rect_fraction(ref, ((l + r) / 2, (t + b) / 2, r, b))
+    if not (0 <= cx <= 1 and 0 <= cy <= 1):
+        raise GorillaError("네모가 고릴라 창(영역) 밖에 있습니다.")
+    settings.update({
+        f"gorilla.{target}_rect": f"{fx1},{fy1},{fx2},{fy2}",
+        f"gorilla.{target}_x": str(cx), f"gorilla.{target}_y": str(cy),
+        "gorilla.input_mode" if target == "input" else "gorilla.send_mode": "coords",
+    })
+    label = "입력칸" if target == "input" else "전송 버튼"
+    return settings, f"{label} 영역을 저장했습니다: {basis} 기준 가로 {cx:.0%}, 세로 {cy:.0%} 지점을 누릅니다."
 
 
 def calibration_settings(target: str, info: dict) -> dict:
@@ -229,11 +366,32 @@ class Gorilla:
 
     def is_running(self) -> bool:
         try:
+            if self._region() is not None:
+                return self._region_window_info() is not None
             return bool(self._candidates())
         except Exception:
             return False
 
+    def _region(self) -> tuple[int, int, int, int] | None:
+        r = parse_rect(self.cfg.screen_region)
+        return tuple(int(v) for v in r) if r else None
+
+    def _region_window_info(self) -> dict | None:
+        region = self._region()
+        if region is None:
+            return None
+        info = window_at_point((region[0] + region[2]) // 2, (region[1] + region[3]) // 2)
+        if is_excluded(info["title"], info["process"]) or (
+                self.cfg.process_name and info["process"] and info["process"] != self.cfg.process_name.lower()):
+            raise GorillaError("저장한 고릴라 창 영역에 다른 창이 있습니다. 고릴라 창을 그 자리에 두거나 영역을 다시 지정하세요.")
+        return info
+
     def _window(self):
+        if self._region() is not None:
+            from pywinauto import Desktop
+
+            info = self._region_window_info()
+            return Desktop(backend="uia").window(handle=info["hwnd"]).wrapper_object()
         w = self.find_window()
         if w is None:
             raise GorillaError("고릴라 창을 찾지 못했습니다. 고릴라 PC 앱을 켜고 '자동 찾기'를 다시 하세요.")
@@ -243,6 +401,10 @@ class Gorilla:
     def _rect(w) -> tuple[int, int, int, int]:
         r = w.rectangle()
         return r.left, r.top, r.right, r.bottom
+
+    def _ref_rect(self, w) -> tuple[int, int, int, int]:
+        """위치 비율의 기준: 지정한 화면 영역이 있으면 그 영역, 없으면 고릴라 창."""
+        return self._region() or self._rect(w)
 
     # ── 자동 찾기·점검·위치 지정 ─────────────────────────────────
     def auto_setup(self) -> dict:
@@ -321,6 +483,16 @@ class Gorilla:
                 "button_names": sorted({i["name"] for i in items if i["control_type"] == "Button" and i["name"]})[:50],
                 "controls": items}
 
+    def select(self, target: str) -> tuple[dict, str] | None:
+        prompts = {"window": "고릴라 창 전체를 네모로 감싸 주세요",
+                   "input": "고릴라의 '공감로그 글쓰기' 입력칸을 네모로 그려 주세요",
+                   "send": "고릴라의 파란 '전송' 버튼을 네모로 그려 주세요"}
+        rect = select_rectangle(prompts[target])
+        if rect is None:
+            return None
+        info = window_at_point((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+        return region_settings(target, rect, info, None if target == "window" else self._region())
+
     @staticmethod
     def calibrate(target: str) -> tuple[dict, str]:
         info = window_under_cursor()
@@ -384,7 +556,7 @@ class Gorilla:
         if self.cfg.input_mode == "coords":
             if self.cfg.input_x is None or self.cfg.input_y is None:
                 raise GorillaError("입력칸 위치가 지정되지 않았습니다. '입력칸 위치 지정'을 하세요.")
-            mouse.click(coords=fraction_to_point(self._rect(w), self.cfg.input_x, self.cfg.input_y))
+            mouse.click(coords=fraction_to_point(self._ref_rect(w), self.cfg.input_x, self.cfg.input_y))
             time.sleep(0.2)
             self._paste(text)
             return None
@@ -410,7 +582,7 @@ class Gorilla:
         if mode == "coords":
             if self.cfg.send_x is None or self.cfg.send_y is None:
                 raise GorillaError("전송 버튼 위치가 지정되지 않았습니다.")
-            mouse.click(coords=fraction_to_point(self._rect(w), self.cfg.send_x, self.cfg.send_y))
+            mouse.click(coords=fraction_to_point(self._ref_rect(w), self.cfg.send_x, self.cfg.send_y))
             return
         if mode in ("button", "auto"):
             pattern = re.compile(self.cfg.send_button_name or SEND_BUTTON_HINT.pattern)
