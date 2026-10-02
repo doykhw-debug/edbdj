@@ -647,12 +647,12 @@ def create_app(data_dir: str | None = None) -> Flask:
             "check": "환경을 점검합니다. 10~30초 뒤 이 화면을 새로 고치세요.",
             "auto-setup": "열린 창 중에서 고릴라 채팅창을 찾습니다 (읽기만 함). 10~30초 뒤 이 화면을 새로 고치세요.",
             "inspect": "고릴라 창의 화면 요소를 읽습니다 (아무것도 누르지 않음).",
-            "calibrate-input": "5초 안에 마우스를 고릴라 채팅 입력칸 위에 올려 두세요.",
-            "calibrate-send": "5초 안에 마우스를 고릴라 전송 버튼 위에 올려 두세요.",
+            "calibrate-input": "지금 7초 안에 마우스를 고릴라의 '공감로그 글쓰기' 칸 위에 올려 두고 움직이지 마세요.",
+            "calibrate-send": "지금 7초 안에 마우스를 고릴라의 파란 '전송' 버튼 위에 올려 두고 움직이지 마세요.",
             "type-test": "고릴라 입력칸에 '입력 테스트'를 넣습니다. 보내지 않으니 확인 후 직접 지우세요.",
         }
         flash(f"{messages[tool]} (기록: {log_name})")
-        return redirect(url_for("quizbot" if tool == "check" else "gorilla"))
+        return redirect(url_for("quizbot" if tool == "check" else "gorilla", wait=1))
 
     @app.route("/gorilla", methods=["GET", "POST"])
     def gorilla():
@@ -680,8 +680,19 @@ def create_app(data_dir: str | None = None) -> Flask:
         if report and auto and report["file"][len("gorilla_"):] < auto["file"][len("gorilla_auto_"):]:
             report = None  # 자동 찾기 이전의 점검 결과는 다른 창을 봤을 수 있다
         coords = {k: qconfig.get(g.conn, f"gorilla.{k}") for k in ("input_x", "input_y", "send_x", "send_y")}
+        log_dir = db.data_dir() / "logs"
+        tool_logs = sorted(log_dir.glob("quizbot_*.log"), key=lambda f: f.stat().st_mtime, reverse=True) \
+            if log_dir.exists() else []
+        last_tool = None
+        for f in tool_logs[:5]:
+            text = f.read_text(encoding="utf-8", errors="replace").strip()
+            if "퀴즈 자동 참여를 시작합니다" in text:
+                continue  # 실행기 기록은 제외하고 설정 도구 결과만
+            last_tool = (f.name, text[-1500:] or "(아직 진행 중이거나 출력 없음)")
+            break
         return render_template("gorilla.html", keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
-                               labels=qconfig.LABELS, report=report, auto=auto, coords=coords)
+                               labels=qconfig.LABELS, report=report, auto=auto, coords=coords, last_tool=last_tool,
+                               waiting=bool(request.args.get("wait")))
 
     # ── 로컬 모의 글쓰기 화면 ─────────────────────────────────────
     @app.route("/mock/write", methods=["GET", "POST"])

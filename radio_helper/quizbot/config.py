@@ -17,12 +17,18 @@ DEFAULTS = {
     "quizbot.cooldown_seconds": "60",
     "quizbot.max_analyses_per_window": "15",
     "quizbot.max_sends_per_hour": "4",
+    # 사연·주제 모집
+    "quizbot.story_settle_seconds": "30",
+    "quizbot.story_cooldown_seconds": "600",
+    "quizbot.max_story_analyses_per_window": "4",
+    "quizbot.max_story_sends_per_hour": "2",
     # 분석 (Claude API)
     "quizbot.model": "claude-opus-5-5",
     "quizbot.effort": "medium",
     "quizbot.autostart": "0",
     # 고릴라 화면
-    "gorilla.process_name": "",           # '자동 찾기'로 저장되는 고릴라 프로그램(실행 파일) 이름
+    "gorilla.process_name": "",           # '자동 찾기'·'위치 지정'으로 저장되는 고릴라 프로그램(실행 파일) 이름
+    "gorilla.window_size": "",            # 위치 지정 때 잰 창 크기 "너비,높이"
     "gorilla.window_title": "고릴라|gorealra",
     "gorilla.input_mode": "uia",          # uia: 화면 요소로 입력칸 찾기 / coords: 지정한 위치 클릭
     "gorilla.input_auto_id": "",
@@ -43,7 +49,11 @@ LABELS = {
     "quizbot.settle_seconds": "퀴즈 신호 후 대기(초)",
     "quizbot.cooldown_seconds": "분석 간 최소 간격(초)",
     "quizbot.max_analyses_per_window": "예약 1회당 최대 분석 횟수(비용 상한)",
-    "quizbot.max_sends_per_hour": "시간당 최대 전송 수",
+    "quizbot.max_sends_per_hour": "시간당 최대 퀴즈 전송 수",
+    "quizbot.story_settle_seconds": "사연 모집 신호 후 대기(초)",
+    "quizbot.story_cooldown_seconds": "사연 분석 간 최소 간격(초)",
+    "quizbot.max_story_analyses_per_window": "예약 1회당 최대 사연 분석 횟수",
+    "quizbot.max_story_sends_per_hour": "시간당 최대 사연 전송 수",
     "quizbot.model": "Claude 모델",
     "quizbot.effort": "분석 노력 수준 (low/medium/high)",
     "gorilla.process_name": "고릴라 프로그램 이름 (자동 찾기로 채워짐)",
@@ -79,6 +89,7 @@ def get_float(conn: sqlite3.Connection, key: str) -> float | None:
 @dataclass
 class GorillaConfig:
     process_name: str = ""
+    window_size: str = ""
     window_title: str = DEFAULTS["gorilla.window_title"]
     input_mode: str = "uia"
     input_auto_id: str = ""

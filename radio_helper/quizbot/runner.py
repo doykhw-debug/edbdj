@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -17,10 +18,10 @@ from difflib import SequenceMatcher
 from typing import Callable, Protocol
 
 from .. import db, quiz
-from . import config
-from .answerer import AnswererError, QuizAnalysis
+from . import config, story
+from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
 from .audio import rms
-from .detector import Detector, TranscriptBuffer
+from .detector import Detector, TranscriptBuffer, is_story_signal
 from .schedule import Window, active_window, next_window
 
 SILENCE_RMS = 0.002
@@ -38,6 +39,7 @@ class Transcriber(Protocol):
 
 class Answerer(Protocol):
     def analyze(self, program: str, transcript: str, known: list[tuple[int, str]]) -> QuizAnalysis: ...
+    def analyze_story(self, program: str, transcript: str, profile: dict, experiences: list[dict]) -> StoryAnalysis: ...
 
 
 class Sender(Protocol):
@@ -56,6 +58,7 @@ class Deps:
     sleep: Callable[[float], None] = time.sleep
     lock: Callable[[], object] | None = None            # 입력 작업 직렬화 (웹 입력 도구와 공유)
     log: Callable[[str], None] = lambda m: print(m, flush=True)
+    notify: Callable[[str], None] = lambda m: None      # 확인할 글이 생겼을 때 알림 (윈도우: 알림음)
 
 
 # ── 판단 ────────────────────────────────────────────────────────────
@@ -113,6 +116,7 @@ class Runner:
     conn: sqlite3.Connection
     deps: Deps
     analyses: int = 0
+    story_analyses: int = 0
 
     def state(self, text: str) -> None:
         db.set_setting(self.conn, "quizbot.state", text)
@@ -166,6 +170,11 @@ class Runner:
                             cooldown_seconds=config.get_int(self.conn, "quizbot.cooldown_seconds"))
         max_analyses = config.get_int(self.conn, "quizbot.max_analyses_per_window")
         self.analyses = 0
+        story_detector = Detector(settle_seconds=config.get_int(self.conn, "quizbot.story_settle_seconds"),
+                                  cooldown_seconds=config.get_int(self.conn, "quizbot.story_cooldown_seconds"),
+                                  signal=is_story_signal) if schedule["story_enabled"] else None
+        max_story = config.get_int(self.conn, "quizbot.max_story_analyses_per_window")
+        self.story_analyses = 0
         silent = 0
         db.log(self.conn, "quizbot", f"{program} 예약 시작 ({w.start:%H:%M}~{w.end:%H:%M})")
         with self.deps.recorder_factory(chunk_seconds) as recorder:
@@ -186,6 +195,12 @@ class Runner:
                                       (w.schedule_id, w.broadcast_date, now.strftime("%Y-%m-%d %H:%M:%S"), text))
                     self.conn.commit()
                     detector.feed(now, text)
+                    if story_detector is not None:
+                        story_detector.feed(now, text)
+                if story_detector is not None and story_detector.is_due(now):
+                    story_detector.mark_analyzed(now)
+                    if self.story_analyses < max_story:
+                        self.analyze_story(schedule, w, buffer.window(now, config.get_int(self.conn, "quizbot.context_seconds")))
                 if detector.is_due(now):
                     detector.mark_analyzed(now)
                     if self.analyses < max_analyses:
@@ -259,20 +274,107 @@ class Runner:
         self.try_send(qid, schedule)
         return qid
 
+    def _schedule(self, schedule, schedule_id):
+        if schedule is not None and schedule["id"] == schedule_id:
+            return schedule
+        return self.conn.execute(
+            "SELECT s.*, p.title AS program FROM quiz_schedules s JOIN programs p ON p.id = s.program_id "
+            "WHERE s.id = ?", (schedule_id,)).fetchone()
+
     def process_approved(self, schedule) -> None:
-        """관리 화면에서 '이 답으로 보내기'를 누른 문제를 보낸다."""
-        rows = self.conn.execute(
+        """관리 화면에서 '보내기'를 누른 퀴즈 정답·사연 글을 보낸다."""
+        quizzes = self.conn.execute(
             "SELECT id, schedule_id FROM quizzes WHERE approved = 1 AND entry_status = 'pending'").fetchall()
-        if rows and not self.deps.sender.is_running():
+        stories = self.conn.execute(
+            "SELECT id, schedule_id FROM story_posts WHERE approved = 1 AND status = 'pending'").fetchall()
+        if (quizzes or stories) and not self.deps.sender.is_running():
             self.conn.execute("UPDATE quizzes SET decision = ? WHERE approved = 1 AND entry_status = 'pending'",
+                              ("승인됨 — 고릴라가 켜지면 보냄",))
+            self.conn.execute("UPDATE story_posts SET decision = ? WHERE approved = 1 AND status = 'pending'",
                               ("승인됨 — 고릴라가 켜지면 보냄",))
             self.conn.commit()
             return
-        for r in rows:
-            sch = schedule if schedule is not None and schedule["id"] == r["schedule_id"] else self.conn.execute(
-                "SELECT s.*, p.title AS program FROM quiz_schedules s JOIN programs p ON p.id = s.program_id "
-                "WHERE s.id = ?", (r["schedule_id"],)).fetchone()
-            self.try_send(r["id"], sch)
+        for r in quizzes:
+            self.try_send(r["id"], self._schedule(schedule, r["schedule_id"]))
+        for r in stories:
+            self.try_send_story(r["id"], self._schedule(schedule, r["schedule_id"]))
+
+    # ── 사연·주제 모집 ───────────────────────────────────────────
+    def analyze_story(self, schedule, w: Window, transcript: str) -> int | None:
+        program = schedule["program"]
+        exps = story.candidate_experiences(self.conn)
+        if not exps:
+            return None  # 쓸 수 있는 실제 경험이 없으면 유료 분석을 하지 않는다
+        self.story_analyses += 1
+        try:
+            res = self.deps.answerer.analyze_story(program, transcript, story.masked_profile(self.conn), exps)
+        except Exception as e:
+            db.log(self.conn, "quizbot", f"{program} 사연 분석 실패: {str(e)[:120]}")
+            return None
+        if not res.is_call or not res.topic.strip():
+            return None
+        existing = self.conn.execute("SELECT * FROM story_posts WHERE program = ? AND broadcast_date = ?",
+                                     (program, w.broadcast_date)).fetchall()
+        dup = story.find_duplicate(existing, res.topic)
+        if dup:
+            self.conn.execute("UPDATE story_posts SET repeat_count = repeat_count + 1, updated_at = ? WHERE id = ?",
+                              (db.now(), dup))
+            self.conn.commit()
+            return dup
+        exp = None
+        if res.experience_id in {e["id"] for e in exps}:
+            exp = self.conn.execute("SELECT * FROM experiences WHERE id = ?", (res.experience_id,)).fetchone()
+        message, source = (res.message or "").strip(), "ai"
+        if exp is not None and res.use_user_line and (exp["gorilla_line"] or "").strip():
+            message, source = exp["gorilla_line"].strip(), "user_line"
+        if exp is None:
+            message = ""
+        warnings = story.message_checks(self.conn, message, exp, source, res.added_facts) if exp is not None else []
+        note = res.fit_reason if exp is not None else "주제에 맞는 실제 경험이 없음 — 직접 써서 보내거나 건너뛰세요"
+        cur = self.conn.execute(
+            """INSERT INTO story_posts (schedule_id, program, broadcast_date, topic, experience_id, message, source,
+                   gorilla_accepted, deadline, warnings, excerpt, note, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (schedule["id"], program, w.broadcast_date, res.topic.strip(), exp["id"] if exp is not None else None,
+             message, source, res.gorilla_accepted, res.deadline_hint or None,
+             json.dumps(warnings, ensure_ascii=False), transcript[-2000:], note, db.now(), db.now()))
+        self.conn.commit()
+        pid = cur.lastrowid
+        db.log(self.conn, "quizbot", f"{program} 사연 주제 감지 #{pid}: {res.topic[:40]} → "
+                                     + (f"경험 #{exp['id']} 사용" if exp is not None else "맞는 경험 없음"))
+        if self.try_send_story(pid, schedule) is None:
+            self.deps.notify(f"사연 주제 '{res.topic[:30]}' — 확인 대기")
+        return pid
+
+    def try_send_story(self, pid: int, schedule) -> str | None:
+        post = self.conn.execute("SELECT * FROM story_posts WHERE id = ?", (pid,)).fetchone()
+        reasons = story.decide(self.conn, post, schedule, self.deps.now(),
+                               config.get_int(self.conn, "quizbot.max_story_sends_per_hour"))
+        if reasons:
+            self.conn.execute("UPDATE story_posts SET decision = ?, updated_at = ? WHERE id = ?",
+                              ("보류: " + " / ".join(reasons), db.now(), pid))
+            self.conn.commit()
+            return None
+        text = post["message"].strip()
+        self.conn.execute(
+            "UPDATE story_posts SET status = 'unknown', sent_at = ?, decision = ?, updated_at = ? "
+            "WHERE id = ? AND status = 'pending'",
+            (db.now(), "사용자 승인 후 전송" if post["approved"] else "직접 쓴 한 줄 자동 전송", db.now(), pid))
+        self.conn.commit()
+        try:
+            if self.deps.lock is not None:
+                with self.deps.lock():
+                    result = self.deps.sender.send(text)
+            else:
+                result = self.deps.sender.send(text)
+            status, detail = result.status, result.detail
+        except Exception as e:
+            status, detail = "unknown", f"전송 중 오류: {type(e).__name__}: {str(e)[:120]}"
+        self.conn.execute("UPDATE story_posts SET status = ?, note = COALESCE(note || ' / ', '') || ?, updated_at = ? "
+                          "WHERE id = ?", (status, detail, db.now(), pid))
+        self.conn.commit()
+        db.log(self.conn, "quizbot", f"사연 #{pid} 고릴라 전송 → {quiz.ENTRY_LABELS.get(status, status)} ({detail})")
+        return status
 
     def try_send(self, qid: int, schedule) -> str | None:
         q = self.conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
@@ -333,7 +435,16 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
     from .gorilla import Gorilla
     from .stt import WhisperTranscriber
 
+    def notify(_message: str) -> None:
+        try:
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            pass
+
     return Deps(
+        notify=notify,
         recorder_factory=lambda chunk: LoopbackRecorder(chunk),
         transcriber_factory=lambda model, program: WhisperTranscriber(model, program),
         answerer=ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort")),

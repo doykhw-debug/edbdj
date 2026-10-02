@@ -154,6 +154,30 @@ CREATE TABLE IF NOT EXISTS quiz_schedules (
     updated_at        TEXT NOT NULL
 );
 
+-- 진행자가 주제를 주고 사연·메시지를 받을 때, 내 실제 경험으로 만든 공감로그 글 (확인 후 전송)
+CREATE TABLE IF NOT EXISTS story_posts (
+    id               INTEGER PRIMARY KEY,
+    schedule_id      INTEGER,
+    program          TEXT NOT NULL,
+    broadcast_date   TEXT NOT NULL,
+    topic            TEXT NOT NULL,
+    experience_id    INTEGER REFERENCES experiences(id),
+    message          TEXT NOT NULL DEFAULT '',
+    source           TEXT NOT NULL DEFAULT 'ai',        -- ai: AI 초안 / user_line: 직접 쓴 한 줄
+    status           TEXT NOT NULL DEFAULT 'pending',   -- pending / entered / posted / unknown / failed / skipped
+    approved         INTEGER NOT NULL DEFAULT 0,
+    gorilla_accepted TEXT NOT NULL DEFAULT 'unknown',
+    deadline         TEXT,
+    decision         TEXT,
+    warnings         TEXT,                              -- 검사 결과 JSON
+    excerpt          TEXT,
+    repeat_count     INTEGER NOT NULL DEFAULT 1,
+    sent_at          TEXT,
+    note             TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+
 -- 방송 음성 인식 결과 (오디오 자체는 저장하지 않는다)
 CREATE TABLE IF NOT EXISTS transcripts (
     id             INTEGER PRIMARY KEY,
@@ -221,6 +245,13 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
 
 # 기존 데이터베이스에 나중에 추가된 칼럼
 _ADDED_COLUMNS = {
+    "experiences": [
+        ("gorilla_line", "TEXT"),                       # 공감로그용 한 줄 (사용자가 직접 씀, 200자 이내)
+    ],
+    "quiz_schedules": [
+        ("story_enabled", "INTEGER NOT NULL DEFAULT 1"),         # 사연·주제 모집도 듣기
+        ("story_auto_user_line", "INTEGER NOT NULL DEFAULT 0"),  # 직접 쓴 한 줄은 확인 없이 전송
+    ],
     "quizzes": [
         ("source", "TEXT NOT NULL DEFAULT 'manual'"),   # manual / auto
         ("schedule_id", "INTEGER"),

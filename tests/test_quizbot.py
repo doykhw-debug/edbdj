@@ -522,11 +522,15 @@ def test_idle_outside_window(conn):
 
 # ── 고릴라 창 자동 찾기 ──────────────────────────────────────────────
 class FakeWin:
-    def __init__(self, title):
-        self.title = title
+    def __init__(self, title, rect=(0, 0, 400, 800)):
+        self.title, self.rect = title, rect
 
     def window_text(self):
         return self.title
+
+    def rectangle(self):
+        left, top, right, bottom = self.rect
+        return SimpleNamespace(left=left, top=top, right=right, bottom=bottom)
 
 
 def fake_desktop(monkeypatch, windows):
@@ -577,3 +581,33 @@ def test_find_window_ignores_browser_and_prefers_chat(monkeypatch):
     assert g.find_window().title == "공감로그" and g.is_running()
     fake_desktop(monkeypatch, [BROWSER])
     assert not g.is_running()
+
+
+def test_auto_setup_title_only_window_goes_to_coords(monkeypatch):
+    fake_desktop(monkeypatch, [BROWSER, ("고릴라", "electron.exe", [], [])])
+    report = gorilla.Gorilla(config.GorillaConfig()).auto_setup()
+    st = report["settings"]
+    assert st["gorilla.input_mode"] == "coords" and st["gorilla.send_mode"] == "coords"
+    assert st["gorilla.process_name"] == "electron.exe" and "위치 지정" in report["message"]
+
+
+def test_calibration_uses_window_under_mouse():
+    info = {"title": "공감로그", "process": "gorealra.exe", "rect": (100, 100, 500, 900), "point": (300, 820)}
+    st = gorilla.calibration_settings("input", info)
+    assert (st["gorilla.input_x"], st["gorilla.input_y"]) == ("0.5", "0.9")
+    assert st["gorilla.input_mode"] == "coords" and st["gorilla.process_name"] == "gorealra.exe"
+    assert st["gorilla.window_size"] == "400,800" and st["gorilla.window_title"] == "공감로그"
+    st = gorilla.calibration_settings("send", info)
+    assert st["gorilla.send_mode"] == "coords" and "gorilla.input_mode" not in st
+    with pytest.raises(gorilla.GorillaError):
+        gorilla.calibration_settings("input", {"title": "고릴라·인식 설정 · 라디오 참여 도우미 - Aside",
+                                               "process": "aside.exe", "rect": (0, 0, 10, 10), "point": (5, 5)})
+
+
+def test_find_window_prefers_calibrated_size(monkeypatch):
+    player = (FakeWin("", (0, 0, 700, 950)), "", "gorealra.exe")
+    chat = (FakeWin("", (700, 0, 1340, 950)), "", "gorealra.exe")
+    monkeypatch.setattr(gorilla, "_top_windows", lambda: [player, chat])
+    monkeypatch.setattr(gorilla, "_control_names", lambda w, ct, limit=300: [])
+    g = gorilla.Gorilla(config.GorillaConfig(process_name="gorealra.exe", window_title="", window_size="640,950"))
+    assert g.find_window() is chat[0]

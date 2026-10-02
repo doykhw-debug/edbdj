@@ -110,17 +110,15 @@ def cmd_inspect(conn) -> int:
 def cmd_calibrate(conn, target: str) -> int:
     from .gorilla import Gorilla
 
-    g = Gorilla(config.GorillaConfig.load(conn))
     label = "채팅 입력칸" if target == "input" else "전송 버튼"
-    for n in range(5, 0, -1):
-        say(f"{n}초 뒤 마우스 위치를 {label}으로 저장합니다…")
+    for n in range(7, 0, -1):
+        say(f"{n}초 뒤 마우스가 있는 곳을 고릴라 {label} 위치로 저장합니다…")
         time.sleep(1)
-    fx, fy = g.cursor_fraction()
-    db.set_setting(conn, f"gorilla.{target}_x", str(fx))
-    db.set_setting(conn, f"gorilla.{target}_y", str(fy))
-    db.set_setting(conn, "gorilla.input_mode" if target == "input" else "gorilla.send_mode", "coords")
-    db.log(conn, "gorilla", f"{label} 위치 저장: 창 너비 {fx:.0%}, 높이 {fy:.0%} 지점")
-    say(f"{label} 위치를 저장했습니다 ({fx:.3f}, {fy:.3f}).")
+    settings, message = Gorilla.calibrate(target)
+    for key, value in settings.items():
+        db.set_setting(conn, key, value)
+    db.log(conn, "gorilla", message)
+    say(message)
     return 0
 
 

@@ -20,6 +20,23 @@ def is_quiz_signal(text: str) -> bool:
     return any(p.search(text) for p in _SIGNALS)
 
 
+# 진행자가 청취자에게 주제를 주고 사연·메시지를 보내 달라고 할 때.
+# 라디오는 '사연'이라는 말을 자주 하므로(사연 소개 등) '보내 달라·주제' 같은 요청 표현과 함께일 때만 본다.
+STORY_SIGNALS = [
+    r"사연\s*(을|를|도|들)?\s*((보내|남겨|올려)(?!\s*주신|\s*주셨)|기다|받습|받아요|모집|주세요|참여)",
+    r"(오늘의|이번\s*주|오늘)\s*(주제|키워드|질문|테마)",
+    r"주제(는|로|가)\s",
+    r"(이야기|경험|에피소드|추억)\s*(을|를|도)?\s*(보내|남겨|들려|나눠|공유)",
+    r"공감\s*로그\s*(로|에)?\s*(보내|남겨|참여|많이)",
+    r"문자\s*(로|를)?\s*(보내|남겨|참여)",
+]
+_STORY_SIGNALS = [re.compile(p) for p in STORY_SIGNALS]
+
+
+def is_story_signal(text: str) -> bool:
+    return any(p.search(text) for p in _STORY_SIGNALS)
+
+
 @dataclass
 class TranscriptBuffer:
     max_seconds: int = 600
@@ -43,8 +60,10 @@ class Detector:
     due_at: datetime | None = None
     last_analysis: datetime | None = None
 
+    signal: object = is_quiz_signal
+
     def feed(self, at: datetime, text: str) -> None:
-        if self.due_at is None and is_quiz_signal(text):
+        if self.due_at is None and self.signal(text):
             earliest = at + timedelta(seconds=self.settle_seconds)
             if self.last_analysis is not None:
                 earliest = max(earliest, self.last_analysis + timedelta(seconds=self.cooldown_seconds))

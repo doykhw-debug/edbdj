@@ -20,7 +20,9 @@ import re
 import time
 from dataclasses import dataclass
 
-from .config import GorillaConfig
+from .config import DEFAULTS, GorillaConfig
+
+DEFAULT_TITLE = DEFAULTS["gorilla.window_title"]
 
 # 제목에 '고릴라'가 들어갈 수 있지만 고릴라 앱이 아닌 창
 OWN_TITLE = "라디오 참여 도우미"
@@ -118,6 +120,52 @@ def process_name(pid: int) -> str:
     return ""
 
 
+def window_under_cursor() -> dict:
+    """마우스 아래에 있는 최상위 창 정보 (화면 요소가 안 보이는 앱도 됨)."""
+    import ctypes
+    from ctypes import wintypes
+
+    import importlib
+
+    importlib.import_module("pywinauto")  # 클릭과 같은 화면 좌표계(DPI 인식)를 쓰도록 먼저 불러온다
+
+    user32 = ctypes.windll.user32
+    pt = wintypes.POINT()
+    user32.GetCursorPos(ctypes.byref(pt))
+    user32.WindowFromPoint.argtypes = [wintypes.POINT]
+    user32.WindowFromPoint.restype = wintypes.HWND
+    hwnd = user32.WindowFromPoint(pt)
+    root = user32.GetAncestor(hwnd, 2) if hwnd else None  # GA_ROOT
+    if not root:
+        raise GorillaError("마우스 아래에서 창을 찾지 못했습니다.")
+    rect = wintypes.RECT()
+    user32.GetWindowRect(root, ctypes.byref(rect))
+    buf = ctypes.create_unicode_buffer(512)
+    user32.GetWindowTextW(root, buf, 512)
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(root, ctypes.byref(pid))
+    return {"title": buf.value, "process": process_name(pid.value),
+            "rect": (rect.left, rect.top, rect.right, rect.bottom), "point": (pt.x, pt.y)}
+
+
+def calibration_settings(target: str, info: dict) -> dict:
+    """마우스 위치로 잰 창 정보 → 저장할 설정 (순수 계산)."""
+    if is_excluded(info["title"], info["process"]):
+        raise GorillaError(f"마우스가 고릴라가 아닌 창('{info['title'][:40]}', {info['process']}) 위에 있습니다. "
+                           "고릴라 창의 해당 위치에 마우스를 올려 두세요.")
+    fx, fy = point_to_fraction(info["rect"], *info["point"])
+    left, top, right, bottom = info["rect"]
+    settings = {
+        f"gorilla.{target}_x": str(fx), f"gorilla.{target}_y": str(fy),
+        "gorilla.input_mode" if target == "input" else "gorilla.send_mode": "coords",
+        "gorilla.window_title": re.escape(info["title"]) if info["title"] else "",
+        "gorilla.window_size": f"{right - left},{bottom - top}",
+    }
+    if info["process"]:
+        settings["gorilla.process_name"] = info["process"]
+    return settings
+
+
 def _top_windows():
     """(창, 제목, 프로그램 이름) 목록"""
     from pywinauto import Desktop
@@ -148,7 +196,12 @@ class Gorilla:
     def _candidates(self):
         wins = [(w, t, p) for w, t, p in _top_windows() if not is_excluded(t, p)]
         if self.cfg.process_name:
-            return [x for x in wins if x[2] == self.cfg.process_name.lower()]
+            cands = [x for x in wins if x[2] == self.cfg.process_name.lower()]
+            # 자동 찾기·위치 지정으로 저장한 제목일 때만 좁힌다 (기본 패턴 '고릴라'는 플레이어 창만 고르게 됨)
+            if len(cands) > 1 and self.cfg.window_title and self.cfg.window_title != DEFAULT_TITLE:
+                titled = [x for x in cands if re.search(self.cfg.window_title, x[1] or "", re.I)]
+                cands = titled or cands
+            return cands
         pattern = re.compile(self.cfg.window_title or "고릴라", re.I)
         matched = [x for x in wins if x[1] and pattern.search(x[1])]
         # 제목이 맞은 창과 같은 프로그램의 다른 창(예: 따로 뜬 공감로그 창)도 후보에 넣는다
@@ -159,6 +212,16 @@ class Gorilla:
         cands = self._candidates()
         if len(cands) <= 1:
             return cands[0][0] if cands else None
+        if self.cfg.window_size:
+            # 위치 지정 때 잰 창과 크기가 가장 비슷한 창 (제목이 바뀌는 앱 대비)
+            try:
+                tw, th = (int(v) for v in self.cfg.window_size.split(","))
+                def size_gap(x):
+                    left, top, right, bottom = self._rect(x[0])
+                    return abs((right - left) - tw) + abs((bottom - top) - th)
+                return min(cands, key=size_gap)[0]
+            except (ValueError, AttributeError):
+                pass
         # 같은 프로그램 창이 여럿이면(플레이어/공감로그) 채팅 입력칸이 있는 창을 고른다
         best = max(cands, key=lambda x: score_window(x[1], x[2], _control_names(x[0], "Edit"),
                                                      _control_names(x[0], "Button")))
@@ -197,9 +260,20 @@ class Gorilla:
         candidates = sorted((r for r in rows if r["score"] > 0), key=lambda r: -r["score"])
         report = {"windows": rows, "chosen": candidates[0] if candidates else None, "settings": {}}
         best = report["chosen"]
-        if not best or best["score"] < 5:
-            report["message"] = ("고릴라 채팅창을 확실히 찾지 못했습니다. 고릴라 PC 앱에서 파워FM 공감로그(채팅) 화면을 "
-                                 "열어 두고 다시 하세요. 아래 창 목록을 캡처해 보내 주셔도 됩니다.")
+        if not best or best["score"] < 2:
+            report["message"] = ("고릴라 창을 찾지 못했습니다. 고릴라 PC 앱을 켜고 공감로그 화면을 연 뒤 다시 하거나, "
+                                 "'입력칸 위치 지정'으로 고릴라 입력칸 위에 마우스를 올려 바로 지정하세요.")
+            return report
+        if best["score"] < 5 and not best["edits"]:
+            # 고릴라 창은 맞지만 화면 요소(입력칸)가 보이지 않는 앱 → 위치 지정 방식
+            settings = {"gorilla.window_title": re.escape(best["title"]) if best["title"] else "",
+                        "gorilla.input_mode": "coords", "gorilla.send_mode": "coords"}
+            if best["process"]:
+                settings["gorilla.process_name"] = best["process"]
+            report["settings"] = settings
+            report["message"] = (f"고릴라 창 '{best['title']}' ({best['process'] or '프로그램 이름 미확인'})을 찾았지만, "
+                                 "이 앱은 입력칸이 화면 요소로 보이지 않습니다. 이제 '입력칸 위치 지정'과 "
+                                 "'전송 버튼 위치 지정'을 해 주세요.")
             return report
         settings = {"gorilla.window_title": re.escape(best["title"]) if best["title"] else "고릴라"}
         if best["process"]:
@@ -247,15 +321,14 @@ class Gorilla:
                 "button_names": sorted({i["name"] for i in items if i["control_type"] == "Button" and i["name"]})[:50],
                 "controls": items}
 
-    def cursor_fraction(self) -> tuple[float, float]:
-        import ctypes
-
-        class POINT(ctypes.Structure):
-            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-        pt = POINT()
-        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-        return point_to_fraction(self._rect(self._window()), pt.x, pt.y)
+    @staticmethod
+    def calibrate(target: str) -> tuple[dict, str]:
+        info = window_under_cursor()
+        settings = calibration_settings(target, info)
+        label = "채팅 입력칸" if target == "input" else "전송 버튼"
+        return settings, (f"{label} 위치를 저장했습니다: '{info['title'] or '(제목 없음)'}' 창"
+                          f" ({info['process'] or '프로그램 미확인'})의 가로 {float(settings[f'gorilla.{target}_x']):.0%},"
+                          f" 세로 {float(settings[f'gorilla.{target}_y']):.0%} 지점")
 
     # ── 입력·전송 ───────────────────────────────────────────────
     def _find_input(self, w):

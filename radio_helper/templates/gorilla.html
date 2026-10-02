@@ -7,16 +7,22 @@
   <h2>1. 고릴라 창 맞추기</h2>
   <p class="muted">고릴라 PC 앱을 켜고 <b>파워FM 공감로그(채팅) 화면</b>을 열어 둔 상태에서 순서대로 하세요. 고릴라 창을 최소화하지 마세요.</p>
   <ol>
-    <li><b>자동 찾기</b> — 열린 창을 모두 살펴 '공감로그 글쓰기' 입력칸과 '전송' 버튼이 있는 창을 찾아 설정을 저장합니다. 브라우저와 이 도우미 화면은 제외합니다. (읽기만 함)</li>
-    <li><b>입력 테스트</b> — 찾은 창의 입력칸에 '입력 테스트'를 넣기만 하고 보내지 않습니다. 고릴라 입력칸에 글자가 들어갔는지 확인하고 직접 지우세요.</li>
-    <li>입력 테스트가 안 되면 <b>입력칸 위치 지정</b>·<b>전송 버튼 위치 지정</b>을 합니다. 버튼을 누르고 5초 안에 마우스를 고릴라의 해당 위치에 올려 두세요.</li>
+    <li><b>자동 찾기</b> — 열린 창 중 고릴라 창을 찾아 저장합니다. 브라우저와 이 도우미 화면은 제외합니다. (읽기만 함)</li>
+    <li><b>입력칸 위치 지정</b> — 누른 뒤 7초 안에 마우스를 고릴라의 '공감로그 글쓰기' 칸 위에 올려 두세요. 마우스 아래 창을 고릴라 창으로 저장하므로, 자동 찾기가 안 돼도 이것만으로 설정됩니다.</li>
+    <li><b>전송 버튼 위치 지정</b> — 같은 방법으로 파란 '전송' 버튼 위에 마우스를 올려 두세요.</li>
+    <li><b>입력 테스트</b> — 입력칸에 '입력 테스트'를 넣기만 하고 보내지 않습니다. 들어갔는지 확인하고 직접 지우세요.</li>
   </ol>
   <div class="actions">
     <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="auto-setup"><button {{ 'disabled' if stopped }}>자동 찾기</button></form>
-    {% for tool, label in [('type-test', '입력 테스트'), ('calibrate-input', '입력칸 위치 지정'), ('calibrate-send', '전송 버튼 위치 지정'), ('inspect', '창 점검(상세)')] %}
+    {% for tool, label in [('calibrate-input', '입력칸 위치 지정'), ('calibrate-send', '전송 버튼 위치 지정'), ('type-test', '입력 테스트'), ('inspect', '창 점검(상세)')] %}
     <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="{{ tool }}"><button class="secondary" {{ 'disabled' if stopped }}>{{ label }}</button></form>
     {% endfor %}
   </div>
+  {% if waiting %}<div class="flash" id="waitbox">실행 중입니다… 12초 뒤 이 화면이 자동으로 새로 고쳐집니다.</div>{% endif %}
+  {% if last_tool %}
+    <p style="margin-top:12px"><b>최근 실행 결과</b> <span class="muted">{{ last_tool[0] }}</span></p>
+    <pre class="box">{{ last_tool[1] }}</pre>
+  {% endif %}
   <p class="muted">현재 설정: 프로그램 {{ values['gorilla.process_name'] or '(미지정)' }} · 입력 {{ values['gorilla.input_mode'] }} · 전송 {{ values['gorilla.send_mode'] }}
     {% if coords.input_x %} · 입력칸 위치 {{ coords.input_x }}, {{ coords.input_y }}{% endif %}{% if coords.send_x %} · 전송 버튼 위치 {{ coords.send_x }}, {{ coords.send_y }}{% endif %}</p>
 
@@ -54,4 +60,7 @@
   </div>
   <div class="actions"><button>저장</button></div>
 </form>
+{% if waiting %}
+<script>setTimeout(function () { location.href = location.pathname; }, 12000);</script>
+{% endif %}
 {% endblock %}
