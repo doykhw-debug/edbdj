@@ -1,6 +1,7 @@
 """python -m radio_helper.quizbot <명령>
 
-  run              예약에 따라 퀴즈 자동 참여 (관리 화면의 '시작' 버튼과 같음)
+  run              실행기: '청취 시작'이 켜져 있으면 바로 듣고, 아니면 예약에 따라 듣는다
+  captions         항상 위에 뜨는 자막 창
   check            필요한 구성 요소·API 키·고릴라 창·스피커 점검
   auto-setup       열린 창 중 고릴라 채팅창을 찾아 설정 저장 (읽기만 함)
   inspect-gorilla  고릴라 창의 화면 요소 목록 저장 (읽기만 함)
@@ -28,8 +29,9 @@ def say(msg: str) -> None:
 
 
 def cmd_run(conn) -> int:
-    if config.runner_alive(conn):
-        say("[중단] 퀴즈 자동 참여가 이미 실행 중입니다.")
+    lock = config.instance_lock("quizbot_run")
+    if lock is None:
+        say("[중단] 듣기 실행기가 이미 실행 중입니다.")
         return 2
     from .runner import Runner, build_real_deps
 
@@ -151,7 +153,8 @@ def cmd_type_test(conn) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
-    ap.add_argument("command", choices=["run", "check", "auto-setup", "inspect-gorilla", "select", "calibrate", "type-test"])
+    ap.add_argument("command", choices=["run", "captions", "check", "auto-setup", "inspect-gorilla", "select",
+                                        "calibrate", "type-test"])
     ap.add_argument("target", nargs="?", choices=["window", "input", "send"])
     args = ap.parse_args(argv)
     conn = db.connect()
@@ -159,6 +162,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "run":
             return cmd_run(conn)
+        if args.command == "captions":
+            from .captions import run_window
+
+            lock = config.instance_lock("captions")
+            if lock is None:
+                say("자막 창이 이미 열려 있습니다.")
+                return 0
+            run_window()
+            return 0
         if args.command == "check":
             return cmd_check(conn)
         if db.is_stopped(conn):

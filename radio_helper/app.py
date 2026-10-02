@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -11,11 +12,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import db, gates, generator, quiz
+from . import db, gates, generator, quiz, seed
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
+from .quizbot import live
 from .quizbot import schedule as qschedule
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +26,10 @@ RECRUITING = {"unknown": "미확인", "open": "모집 중", "closed": "모집 �
 AI_POLICY = {"unknown": "미확인", "allowed": "제한 없음 확인", "restricted": "제한 있음"}
 DRAFT_STATUS = {"draft": "작성 중", "approved": "승인됨", "archived": "보관"}
 SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "manual": "직접 작성"}
+STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀"}
+LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
+                ("live.captions", "captions"))
+INSPECT_IMAGE = re.compile(r"gorilla_[a-z0-9_]+\.png")
 
 
 def create_app(data_dir: str | None = None) -> Flask:
@@ -42,6 +48,7 @@ def create_app(data_dir: str | None = None) -> Flask:
     app.jinja_env.globals.update(
         YES_NO=YES_NO, RECRUITING=RECRUITING, AI_POLICY=AI_POLICY, DRAFT_STATUS=DRAFT_STATUS,
         SOURCE=SOURCE, POST_STATUS=STATUS_LABELS, QUIZ_KIND=quiz.KIND_LABELS, QUIZ_ENTRY=quiz.ENTRY_LABELS,
+        STORY_SOURCE=STORY_SOURCE,
     )
 
     # ── 보안: 로컬 전용 + 위조 요청 차단 ─────────────────────────────
@@ -64,7 +71,10 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.context_processor
     def inject():
-        return {"csrf_token": session.get("csrf", ""), "stopped": db.is_stopped(g.conn) if "conn" in g else False}
+        if "conn" not in g:
+            return {"csrf_token": session.get("csrf", ""), "stopped": False, "nav_pending": {}, "listening": False}
+        return {"csrf_token": session.get("csrf", ""), "stopped": db.is_stopped(g.conn),
+                "nav_pending": pending_counts(g.conn), "listening": live.is_active(g.conn)}
 
     def one(sql, *params):
         row = g.conn.execute(sql, params).fetchone()
@@ -75,8 +85,89 @@ def create_app(data_dir: str | None = None) -> Flask:
     def form(name: str, default: str = "") -> str:
         return (request.form.get(name) or default).strip()
 
-    # ── 대시보드 ───────────────────────────────────────────────────
+    # ── 청취 (첫 화면) ─────────────────────────────────────────────
+    def channel_list() -> list[str]:
+        found = [r[0] for r in g.conn.execute(
+            "SELECT DISTINCT channel FROM programs WHERE on_air = 1 AND channel NOT IN ('', '미확인')")]
+        return seed.CHANNELS + sorted(c for c in found if c not in seed.CHANNELS)
+
+    def setup_items() -> list[dict]:
+        from .quizbot.answerer import get_api_key
+
+        c = g.conn
+        try:
+            check = json.loads(db.get_setting(c, "quizbot.check") or "null")
+        except ValueError:
+            check = None
+        failed = [i["name"] for i in (check or {}).get("items", []) if not i.get("ok")]
+        confirmed = c.execute("SELECT COUNT(*) FROM experiences WHERE user_confirmed = 1").fetchone()[0]
+        input_set = bool(qconfig.get(c, "gorilla.input_rect") or qconfig.get(c, "gorilla.input_x"))
+        return [
+            {"name": "Claude API 키", "ok": bool(get_api_key()), "url": url_for("quizbot"),
+             "detail": "퀴즈·사연 분석에 필요"},
+            {"name": "고릴라 입력칸 지정", "ok": input_set, "url": url_for("gorilla"),
+             "detail": "공감로그 글쓰기 칸·전송 버튼을 네모로 지정"},
+            {"name": "환경 점검", "ok": bool(check) and not failed, "url": url_for("quizbot"),
+             "detail": ("확인 필요: " + ", ".join(failed)) if failed else ("" if check else "아직 안 함")},
+            {"name": "사연용 실제 경험", "ok": confirmed > 0, "url": url_for("experiences"),
+             "detail": f"확인한 경험 {confirmed}건" if confirmed else "없으면 사연은 보내지 않음 (퀴즈는 됨)"},
+        ]
+
     @app.get("/")
+    def home():
+        c = g.conn
+        return render_template(
+            "home.html", vm=live.view_model(c, lines=12), setup=setup_items(), channels=channel_list(),
+            options={name: live.flag(c, key) for key, name in LIVE_OPTIONS},
+            captions_open=_fresh(db.get_setting(c, "captions.heartbeat"), 15))
+
+    @app.get("/live.json")
+    def live_json():
+        vm = live.view_model(g.conn, lines=12)
+        vm["captions_open"] = _fresh(db.get_setting(g.conn, "captions.heartbeat"), 15)
+        return vm
+
+    @app.post("/listen/start")
+    def listen_start():
+        c = g.conn
+        if db.is_stopped(c):
+            flash("일괄 중지가 켜져 있습니다. 설정에서 해제한 뒤 청취를 시작하세요.", "error")
+            return redirect(url_for("home"))
+        channel = form("channel") or qconfig.get(c, "live.channel")
+        if channel not in channel_list():
+            abort(400)
+        db.set_setting(c, "live.channel", channel)
+        for key, name in LIVE_OPTIONS:
+            db.set_setting(c, key, "1" if request.form.get(name) else "0")
+        was_active = live.is_active(c)
+        db.set_setting(c, "live.active", "1")
+        db.set_setting(c, "quizbot.stop", "0")
+        if not qconfig.runner_alive(c) and not _fresh(db.get_setting(c, "quizbot.launched_at"), 60):
+            # 실행기는 하나만 뜬다 (두 번째는 잠금을 못 얻고 바로 끝남)
+            db.set_setting(c, "quizbot.state", "시작 중")
+            db.set_setting(c, "quizbot.launched_at", db.now())
+            launch_quizbot(["run"])
+        if live.flag(c, "live.captions") and not _fresh(db.get_setting(c, "captions.heartbeat"), 15):
+            launch_quizbot(["captions"])
+        if was_active:
+            flash(f"청취 설정을 바꿨습니다 — {channel}")
+        else:
+            db.log(c, "quizbot", f"청취 시작 요청 — {channel}")
+            flash(f"{channel} 청취를 시작합니다. 처음 한 번은 음성 인식 모델을 내려받느라 몇 분 걸릴 수 있습니다.")
+        return redirect(url_for("home"))
+
+    @app.post("/listen/stop")
+    def listen_stop():
+        c = g.conn
+        db.set_setting(c, "live.active", "0")
+        if not c.execute("SELECT 1 FROM quiz_schedules WHERE enabled = 1").fetchone():
+            db.set_setting(c, "quizbot.stop", "1")  # 예약이 없으면 실행기도 끝낸다
+        db.log(c, "quizbot", "청취 중지 요청 (사용자)")
+        flash("청취를 멈춥니다. 지금 듣고 있는 10초 조각이 끝나면 멈추고, 자막 창은 몇 초 뒤 닫힙니다.")
+        return redirect(url_for("home"))
+
+    # ── 게시판 사연 (원고·코너 제출 순서) ─────────────────────────
+    @app.get("/board")
     def dashboard():
         c = g.conn
         counts = {
@@ -122,7 +213,9 @@ def create_app(data_dir: str | None = None) -> Flask:
     def programs():
         rows = g.conn.execute(
             """SELECT p.*, (SELECT COUNT(*) FROM corners c WHERE c.program = p.title) AS boards
-               FROM programs p WHERE p.on_air = 1 ORDER BY p.start_time""").fetchall()
+               FROM programs p WHERE p.on_air = 1
+               ORDER BY CASE p.channel WHEN '파워FM' THEN 0 WHEN '러브FM' THEN 1 ELSE 2 END, p.channel, p.start_time"""
+        ).fetchall()
         candidates = g.conn.execute("SELECT * FROM programs WHERE on_air = 0 ORDER BY id").fetchall()
         last = g.conn.execute(
             "SELECT * FROM events WHERE kind = 'programs' ORDER BY id DESC LIMIT 1").fetchone()
@@ -429,11 +522,19 @@ def create_app(data_dir: str | None = None) -> Flask:
     # ── 퀴즈 ──────────────────────────────────────────────────────
     @app.get("/quizzes")
     def quizzes():
-        rows = g.conn.execute("SELECT * FROM quizzes ORDER BY broadcast_date DESC, id DESC").fetchall()
-        stopped = db.is_stopped(g.conn)
-        on_air = g.conn.execute("SELECT title FROM programs WHERE on_air = 1 ORDER BY start_time").fetchall()
+        c = g.conn
+        rows = c.execute("SELECT * FROM quizzes WHERE source IS NULL OR source != 'auto' "
+                         "ORDER BY broadcast_date DESC, id DESC").fetchall()
+        stopped = db.is_stopped(c)
+        on_air = c.execute("SELECT title FROM programs WHERE on_air = 1 ORDER BY start_time").fetchall()
+        pending = c.execute("SELECT * FROM quizzes WHERE source = 'auto' AND entry_status IN ('pending', 'failed') "
+                            "ORDER BY id DESC LIMIT 30").fetchall()
+        auto = c.execute("SELECT * FROM quizzes WHERE source = 'auto' AND entry_status NOT IN ('pending', 'failed') "
+                         "ORDER BY id DESC LIMIT 100").fetchall()
         return render_template("quizzes.html", rows=[(q, quiz.hold_reasons(q, stopped)) for q in rows],
-                               today=time.strftime("%Y-%m-%d"), programs=[r["title"] for r in on_air])
+                               pending=pending, auto=auto, YES_NO_KEYS=list(YES_NO),
+                               today=time.strftime("%Y-%m-%d"), programs=[r["title"] for r in on_air],
+                               channels=channel_list())
 
     @app.post("/quizzes/new")
     def quiz_new():
@@ -471,6 +572,19 @@ def create_app(data_dir: str | None = None) -> Flask:
         g.conn.commit()
         flash(f"퀴즈 #{qid}을(를) 저장했습니다.")
         return redirect(url_for("quizzes"))
+
+    @app.post("/quizzes/<int:qid>/result")
+    def quiz_result(qid):
+        """자동으로 보낸 퀴즈의 결과(정답 인정·당첨·상품 수령)만 기록한다."""
+        one("SELECT id FROM quizzes WHERE id = ?", qid)
+        vals = {k: form(k, "unknown") for k in ("answer_accepted", "won", "prize_received")}
+        if any(v not in YES_NO for v in vals.values()):
+            abort(400)
+        g.conn.execute("UPDATE quizzes SET answer_accepted = ?, won = ?, prize_received = ?, updated_at = ? WHERE id = ?",
+                       (vals["answer_accepted"], vals["won"], vals["prize_received"], db.now(), qid))
+        g.conn.commit()
+        flash(f"퀴즈 #{qid} 결과를 저장했습니다.")
+        return redirect(url_for("quizzes") + "#auto")
 
     # ── 설정·일괄 중지 ────────────────────────────────────────────
     @app.route("/settings", methods=["GET", "POST"])
@@ -510,28 +624,15 @@ def create_app(data_dir: str | None = None) -> Flask:
             check = json.loads(db.get_setting(c, "quizbot.check") or "null")
         except ValueError:
             check = None
-        pending = c.execute("SELECT * FROM quizzes WHERE source = 'auto' AND entry_status IN ('pending', 'failed') "
-                            "ORDER BY id DESC LIMIT 20").fetchall()
-        recent = c.execute("SELECT * FROM quizzes WHERE source = 'auto' AND entry_status NOT IN ('pending', 'failed') "
-                           "ORDER BY id DESC LIMIT 20").fetchall()
-        story_pending = c.execute(
-            """SELECT sp.*, e.label AS exp_label, e.story AS exp_story FROM story_posts sp
-               LEFT JOIN experiences e ON e.id = sp.experience_id
-               WHERE sp.status IN ('pending', 'failed') ORDER BY sp.id DESC LIMIT 20""").fetchall()
-        story_recent = c.execute("SELECT * FROM story_posts WHERE status NOT IN ('pending', 'failed') "
-                                 "ORDER BY id DESC LIMIT 10").fetchall()
-        lines = c.execute("SELECT * FROM transcripts ORDER BY id DESC LIMIT 30").fetchall()
-        programs_ = c.execute("SELECT id, title, start_time, end_time FROM programs WHERE on_air = 1 "
-                              "ORDER BY start_time").fetchall()
+        programs_ = c.execute("SELECT id, channel, title, start_time, end_time FROM programs WHERE on_air = 1 "
+                              "ORDER BY channel, start_time").fetchall()
         return render_template(
             "quizbot.html", schedules=schedules, active=active, nxt=nxt, by_id=by_id,
             alive=qconfig.runner_alive(c), state=db.get_setting(c, "quizbot.state"),
             heartbeat=db.get_setting(c, "quizbot.heartbeat"), check=check, has_key=bool(get_api_key()),
-            pending=pending, recent=recent, lines=list(reversed(lines)), programs=programs_,
-            story_pending=[(p, json.loads(p["warnings"] or "[]")) for p in story_pending], story_recent=story_recent,
-            confirmed_experiences=c.execute("SELECT COUNT(*) FROM experiences WHERE user_confirmed = 1").fetchone()[0],
-            days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
-            autostart=qconfig.get(c, "quizbot.autostart") == "1")
+            programs=programs_, days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
+            autostart=qconfig.get(c, "quizbot.autostart") == "1",
+            live_min_confidence=qconfig.get(c, "live.min_confidence"))
 
     @app.post("/quizbot/start")
     def quizbot_start():
@@ -543,12 +644,13 @@ def create_app(data_dir: str | None = None) -> Flask:
             db.set_setting(g.conn, "quizbot.stop", "0")
             db.set_setting(g.conn, "quizbot.state", "시작 중")
             log_name = launch_quizbot(["run"])
-            flash(f"퀴즈 자동 참여를 시작합니다. 이 PC가 켜져 있고 관리 화면 창이 열려 있는 동안 동작합니다. (기록: {log_name})")
+            flash(f"예약 듣기 실행기를 시작합니다. 예약 시간에만 듣습니다. 바로 들으려면 첫 화면의 '청취 시작'을 누르세요. (기록: {log_name})")
         return redirect(url_for("quizbot"))
 
     @app.post("/quizbot/stop")
     def quizbot_stop():
         db.set_setting(g.conn, "quizbot.stop", "1")
+        db.set_setting(g.conn, "live.active", "0")
         db.log(g.conn, "quizbot", "멈춤 요청 (사용자)")
         flash("멈춤을 요청했습니다. 지금 듣고 있는 구간이 끝나면 멈춥니다 (최대 30초 정도).")
         return redirect(url_for("quizbot"))
@@ -556,6 +658,8 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.post("/quizbot/settings")
     def quizbot_settings():
         db.set_setting(g.conn, "quizbot.autostart", "1" if request.form.get("autostart") else "0")
+        if form("live_min_confidence"):
+            db.set_setting(g.conn, "live.min_confidence", str(_confidence(form("live_min_confidence"))))
         key = (request.form.get("api_key") or "").strip()
         if key:
             from .quizbot.answerer import save_api_key
@@ -584,11 +688,13 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("quizbot"))
         g.conn.execute(
             """INSERT INTO quiz_schedules (program_id, days, start_time, end_time, auto_submit, min_confidence,
-                   gorilla_confirmed, story_enabled, story_auto_user_line, gift_enabled, enabled, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                   gorilla_confirmed, story_enabled, story_auto_user_line, story_auto_ai, gift_enabled, enabled,
+                   created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
             (prog["id"], days, start, end, 1 if request.form.get("auto_submit") else 0,
              _confidence(form("min_confidence")), 1 if request.form.get("gorilla_confirmed") else 0,
              1 if request.form.get("story_enabled") else 0, 1 if request.form.get("story_auto_user_line") else 0,
+             1 if request.form.get("story_auto_ai") else 0,
              1 if request.form.get("gift_enabled") else 0, db.now(), db.now()))
         g.conn.commit()
         db.log(g.conn, "quizbot", f"예약 추가: {prog['title']} {qschedule.days_label(days)} {start}~{end}")
@@ -605,15 +711,20 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("quizbot"))
         g.conn.execute(
             """UPDATE quiz_schedules SET enabled = ?, auto_submit = ?, min_confidence = ?, gorilla_confirmed = ?,
-                   story_enabled = ?, story_auto_user_line = ?, gift_enabled = ?, updated_at = ? WHERE id = ?""",
+                   story_enabled = ?, story_auto_user_line = ?, story_auto_ai = ?, gift_enabled = ?, updated_at = ?
+               WHERE id = ?""",
             (1 if request.form.get("enabled") else 0, 1 if request.form.get("auto_submit") else 0,
              _confidence(form("min_confidence"), sch["min_confidence"]),
              1 if request.form.get("gorilla_confirmed") else 0, 1 if request.form.get("story_enabled") else 0,
-             1 if request.form.get("story_auto_user_line") else 0, 1 if request.form.get("gift_enabled") else 0,
-             db.now(), sid))
+             1 if request.form.get("story_auto_user_line") else 0, 1 if request.form.get("story_auto_ai") else 0,
+             1 if request.form.get("gift_enabled") else 0, db.now(), sid))
         g.conn.commit()
         flash("예약을 저장했습니다.")
         return redirect(url_for("quizbot"))
+
+    def back_to(default: str) -> str:
+        """확인 대기 글을 처리한 뒤 돌아갈 화면 (첫 화면에서 눌렀으면 첫 화면으로)."""
+        return "home" if form("back") == "home" else default
 
     @app.post("/quizbot/quizzes/<int:qid>/approve")
     def quizbot_approve(qid):
@@ -621,10 +732,10 @@ def create_app(data_dir: str | None = None) -> Flask:
         answer = form("answer") or (q["answer"] or "")
         if q["entry_status"] not in ("pending", "failed"):
             flash("이미 보냈거나 결과 불명인 문제는 다시 보내지 않습니다.", "error")
-            return redirect(url_for("quizbot"))
+            return redirect(url_for(back_to("quizzes")) + "#pending")
         if not answer:
             flash("정답을 적어 주세요.", "error")
-            return redirect(url_for("quizbot"))
+            return redirect(url_for(back_to("quizzes")) + "#pending")
         send_text = form("send_text") or None
         g.conn.execute(
             "UPDATE quizzes SET answer = ?, send_text = ?, approved = 1, kind = 'new', entry_status = 'pending', "
@@ -634,8 +745,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         if qconfig.runner_alive(g.conn):
             flash("승인했습니다. 실행기가 고릴라로 보냅니다.")
         else:
-            flash("승인했습니다. 퀴즈 자동 참여가 꺼져 있어 '시작'을 눌러야 보내집니다.", "warn")
-        return redirect(url_for("quizbot"))
+            flash("승인했습니다. 청취가 꺼져 있어 첫 화면에서 '청취 시작'을 눌러야 보내집니다.", "warn")
+        return redirect(url_for(back_to("quizzes")) + "#pending")
 
     @app.post("/quizbot/quizzes/<int:qid>/skip")
     def quizbot_skip(qid):
@@ -644,7 +755,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                        "WHERE id = ? AND entry_status IN ('pending', 'failed')", (db.now(), qid))
         g.conn.commit()
         flash(f"퀴즈 #{qid}은(는) 보내지 않습니다.")
-        return redirect(url_for("quizbot"))
+        return redirect(url_for(back_to("quizzes")) + "#pending")
 
     @app.post("/quizbot/stories/<int:pid>/approve")
     def story_approve(pid):
@@ -653,7 +764,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         post = one("SELECT * FROM story_posts WHERE id = ?", pid)
         if post["status"] not in ("pending", "failed"):
             flash("이미 보냈거나 결과 불명인 글은 다시 보내지 않습니다.", "error")
-            return redirect(url_for("quizbot"))
+            return redirect(url_for(back_to("stories")))
         message = (request.form.get("message") or "").strip()
         exp = g.conn.execute("SELECT * FROM experiences WHERE id = ?", (post["experience_id"],)).fetchone() \
             if post["experience_id"] else None
@@ -672,15 +783,15 @@ def create_app(data_dir: str | None = None) -> Flask:
                 if w["level"] == "block":
                     flash(w["message"], "error")
             flash("위 문제를 고친 뒤 다시 보내기를 누르세요.", "error")
-            return redirect(url_for("quizbot"))
+            return redirect(url_for(back_to("stories")))
         g.conn.execute("UPDATE story_posts SET approved = 1, status = 'pending', decision = ?, updated_at = ? "
                        "WHERE id = ?", ("승인됨 — 실행기가 곧 보냄", db.now(), pid))
         g.conn.commit()
         db.log(g.conn, "quizbot", f"사연 #{pid} 보내기 승인 (사용자)")
         flash("승인했습니다. 실행기가 고릴라로 보냅니다." if qconfig.runner_alive(g.conn)
-              else "승인했습니다. 퀴즈 자동 참여가 꺼져 있어 '시작'을 눌러야 보내집니다.",
+              else "승인했습니다. 청취가 꺼져 있어 첫 화면에서 '청취 시작'을 눌러야 보내집니다.",
               "message" if qconfig.runner_alive(g.conn) else "warn")
-        return redirect(url_for("quizbot"))
+        return redirect(url_for(back_to("stories")))
 
     @app.post("/quizbot/stories/<int:pid>/skip")
     def story_skip(pid):
@@ -689,15 +800,37 @@ def create_app(data_dir: str | None = None) -> Flask:
                        "WHERE id = ? AND status IN ('pending', 'failed')", (db.now(), pid))
         g.conn.commit()
         flash(f"사연 #{pid}은(는) 보내지 않습니다.")
-        return redirect(url_for("quizbot"))
+        return redirect(url_for(back_to("stories")))
 
     @app.get("/quizbot/pending.json")
     def quizbot_pending():
+        return {**pending_counts(g.conn), "state": db.get_setting(g.conn, "quizbot.state")}
+
+    @app.get("/stories")
+    def stories():
         c = g.conn
-        quizzes_n = c.execute("SELECT COUNT(*) FROM quizzes WHERE source = 'auto' AND entry_status = 'pending' "
-                              "AND approved = 0").fetchone()[0]
-        stories_n = c.execute("SELECT COUNT(*) FROM story_posts WHERE status = 'pending' AND approved = 0").fetchone()[0]
-        return {"quizzes": quizzes_n, "stories": stories_n, "state": db.get_setting(c, "quizbot.state")}
+        pending = c.execute(
+            """SELECT sp.*, e.label AS exp_label, e.story AS exp_story FROM story_posts sp
+               LEFT JOIN experiences e ON e.id = sp.experience_id
+               WHERE sp.status IN ('pending', 'failed') ORDER BY sp.id DESC LIMIT 30""").fetchall()
+        recent = c.execute(
+            """SELECT sp.*, e.label AS exp_label FROM story_posts sp LEFT JOIN experiences e ON e.id = sp.experience_id
+               WHERE sp.status NOT IN ('pending', 'failed') ORDER BY sp.id DESC LIMIT 100""").fetchall()
+        counts = {
+            "confirmed": c.execute("SELECT COUNT(*) FROM experiences WHERE user_confirmed = 1").fetchone()[0],
+            "experiences": c.execute("SELECT COUNT(*) FROM experiences").fetchone()[0],
+            "drafts": c.execute("SELECT COUNT(*) FROM drafts WHERE status = 'draft'").fetchone()[0],
+            "unresolved": c.execute(
+                "SELECT COUNT(*) FROM submissions WHERE post_status IN ('filled','unknown')").fetchone()[0],
+        }
+        return render_template("stories.html", pending=[(p, json.loads(p["warnings"] or "[]")) for p in pending],
+                               recent=recent, counts=counts)
+
+    @app.get("/inspect-image/<name>")
+    def inspect_image(name):
+        if not INSPECT_IMAGE.fullmatch(name):
+            abort(404)
+        return send_from_directory(db.data_dir() / "inspect", name, max_age=0)
 
     @app.get("/gifts")
     def gifts():
@@ -815,9 +948,18 @@ def create_app(data_dir: str | None = None) -> Flask:
                 continue  # 실행기 기록은 제외하고 설정 도구 결과만
             last_tool = (f.name, text[-1500:] or "(아직 진행 중이거나 출력 없음)")
             break
+        shots = []
+        for name, label in (("gorilla_test", "③ 입력 테스트 — 빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치"),
+                            ("gorilla_select_input", "① 입력칸으로 지정한 영역"),
+                            ("gorilla_select_send", "② 전송 버튼으로 지정한 영역"),
+                            ("gorilla_select_window", "고릴라 창으로 지정한 영역")):
+            f = db.data_dir() / "inspect" / f"{name}.png"
+            if f.exists():
+                stamp = datetime.fromtimestamp(f.stat().st_mtime)
+                shots.append({"file": f.name, "label": label, "at": f"{stamp:%m/%d %H:%M:%S}", "v": int(stamp.timestamp())})
         return render_template("gorilla.html", keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
                                labels=qconfig.LABELS, report=report, auto=auto, coords=coords, last_tool=last_tool,
-                               rects=rects, region=region,
+                               rects=rects, region=region, shots=shots,
                                waiting=request.args.get("wait", type=int))
 
     # ── 로컬 모의 글쓰기 화면 ─────────────────────────────────────
@@ -863,6 +1005,24 @@ def launch_programs_refresh() -> str:
 
 def launch_quizbot(args: list[str]) -> str:
     return launch_module("radio_helper.quizbot", args, "quizbot")
+
+
+def pending_counts(conn) -> dict:
+    """확인을 기다리는 자동 감지 퀴즈·사연 수 (메뉴 배지·알림용)."""
+    return {
+        "quizzes": conn.execute("SELECT COUNT(*) FROM quizzes WHERE source = 'auto' AND entry_status = 'pending' "
+                                "AND approved = 0").fetchone()[0],
+        "stories": conn.execute("SELECT COUNT(*) FROM story_posts WHERE status = 'pending' AND approved = 0"
+                                ).fetchone()[0],
+    }
+
+
+def _fresh(stamp: str | None, seconds: int) -> bool:
+    """'YYYY-MM-DD HH:MM:SS' 기록이 지금부터 seconds 초 안쪽인지."""
+    try:
+        return (datetime.now() - datetime.strptime(stamp or "", "%Y-%m-%d %H:%M:%S")).total_seconds() < seconds
+    except ValueError:
+        return False
 
 
 def _confidence(text: str, default: float = 0.8) -> float:

@@ -272,6 +272,11 @@ _ADDED_COLUMNS = {
         ("story_enabled", "INTEGER NOT NULL DEFAULT 1"),         # 사연·주제 모집도 듣기
         ("story_auto_user_line", "INTEGER NOT NULL DEFAULT 0"),  # 직접 쓴 한 줄은 확인 없이 전송
         ("gift_enabled", "INTEGER NOT NULL DEFAULT 1"),          # 선물 정보도 기록
+        ("story_auto_ai", "INTEGER NOT NULL DEFAULT 0"),         # AI 초안도 검사 통과 시 자동 전송
+    ],
+    "transcripts": [
+        ("channel", "TEXT"),
+        ("program", "TEXT"),
     ],
     "quizzes": [
         ("source", "TEXT NOT NULL DEFAULT 'manual'"),   # manual / auto
@@ -304,14 +309,16 @@ def init_db(conn: sqlite3.Connection) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (seed.PROGRAM, kind, title, board_url, write_url, dev_note, is_target, now()),
         )
-    for code, title, host, start, end, days in seed.POWERFM_PROGRAMS:
-        conn.execute(
-            """INSERT OR IGNORE INTO programs
-               (channel, code, title, host, start_time, end_time, days, main_url, on_air, source, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
-            (seed.CHANNEL_POWERFM, code, title, host or None, start, end, days, seed.program_main_url(code),
-             seed.POWERFM_SEED_SOURCE, now()),
-        )
+    for channel, programs in ((seed.CHANNEL_POWERFM, seed.POWERFM_PROGRAMS),
+                              (seed.CHANNEL_LOVEFM, seed.LOVEFM_PROGRAMS)):
+        for code, title, host, start, end, days in programs:
+            conn.execute(
+                """INSERT OR IGNORE INTO programs
+                   (channel, code, title, host, start_time, end_time, days, main_url, on_air, source, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                (channel, code, title, host or None, start, end, days, seed.program_main_url(code),
+                 seed.POWERFM_SEED_SOURCE, now()),
+            )
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('global_stop', '0')")
     conn.commit()
 

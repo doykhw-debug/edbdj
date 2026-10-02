@@ -5,3 +5,4 @@ numpy>=1.26
 keyring>=25
 PyAudioWPatch>=0.2.12; sys_platform == "win32"
 pywinauto>=0.6.9; sys_platform == "win32"
+Pillow>=10

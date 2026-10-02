@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}사연 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>사연 <span class="muted">고릴라 공감로그 · 게시판 사연</span></h1>
+
+<div class="grid" style="margin-bottom:16px">
+  <a class="stat" href="{{ url_for('experiences') }}"><span class="muted">실제 경험</span><b>{{ counts.experiences }}</b><span class="muted">사실 확인 {{ counts.confirmed }}건 · 사연은 이것으로만 씀</span></a>
+  <a class="stat" href="{{ url_for('import_page') }}"><span class="muted">특징·경험 가져오기</span><b>↓</b><span class="muted">파일로 한 번에 넣기</span></a>
+  <a class="stat" href="{{ url_for('drafts') }}"><span class="muted">게시판 원고 검토</span><b>{{ counts.drafts }}</b><span class="muted">작성 중 원고</span></a>
+  <a class="stat" href="{{ url_for('submissions') }}"><span class="muted">게시판 제출 이력</span><b>{{ counts.unresolved }}</b><span class="muted">등록 확인 필요</span></a>
+</div>
+
+<div class="panel" id="pending">
+  <h2>확인 대기 <span class="muted">진행자가 주제를 주고 사연을 받을 때 · 경고가 있거나 경험이 안 맞아 자동으로 보내지 않은 글</span></h2>
+  {% if not counts.confirmed %}
+    <div class="flash warn">'실제로 있었던 일'로 확인한 경험이 없어 사연 글을 만들지 않습니다.
+      <a href="{{ url_for('experiences') }}">실제 경험</a>을 적거나 <a href="{{ url_for('import_page') }}">가져오기</a>를 하세요.</div>
+  {% endif %}
+  {% for p, warns in pending %}
+  <div style="border-bottom:1px solid var(--line);padding:10px 0">
+    <b>#{{ p.id }} {{ p.program }}</b> <span class="muted">{{ p.created_at }}</span>
+    {% if p.status == 'failed' %}<span class="badge bad">전송 실패</span>{% endif %}
+    <span class="badge {{ 'ok' if p.source == 'user_line' else 'info' }}">{{ STORY_SOURCE.get(p.source, p.source) }}</span>
+    <p style="margin:6px 0"><b>주제</b>: {{ p.topic }}{% if p.deadline %} <span class="muted">· 마감 {{ p.deadline }}</span>{% endif %}
+      <span class="muted">· 고릴라 응모 {{ YES_NO.get(p.gorilla_accepted, p.gorilla_accepted) }}</span></p>
+    <p class="muted" style="margin:0">{% if p.experience_id %}사용한 경험: <a href="{{ url_for('experience_edit', eid=p.experience_id) }}">#{{ p.experience_id }} {{ p.exp_label or (p.exp_story or '')[:30] }}</a>{% endif %}
+      {% if p.note %} · {{ p.note }}{% endif %}</p>
+    {% if warns %}<ul class="list {{ 'bad' if warns|selectattr('level', 'equalto', 'block')|list else 'warn' }}">{% for w in warns %}<li>{{ w.message }}</li>{% endfor %}</ul>{% endif %}
+    {% if p.decision %}<p class="muted" style="margin:0">{{ p.decision }}</p>{% endif %}
+    <form method="post" action="{{ url_for('story_approve', pid=p.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <textarea name="message" maxlength="200" oninput="this.nextElementSibling.textContent = this.value.length + '/200자'" placeholder="공감로그에 보낼 글">{{ p.message }}</textarea>
+      <span class="muted">{{ p.message|length }}/200자</span>
+      <div class="actions"><button>이 글로 보내기</button></div>
+    </form>
+    <details><summary class="muted">판단에 쓴 자막</summary><pre class="box">{{ p.excerpt or '' }}</pre></details>
+    <form method="post" action="{{ url_for('story_skip', pid=p.id) }}" style="margin-top:6px"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">보내지 않음</button></form>
+  </div>
+  {% else %}<p class="muted">없음</p>{% endfor %}
+</div>
+
+<div class="panel table-wrap">
+  <h2>보낸 사연·처리 기록</h2>
+  <table>
+    <tr><th>#</th><th>프로그램 · 주제</th><th>보낸 글</th><th>경험</th><th>상태</th></tr>
+    {% for p in recent %}
+    <tr><td>{{ p.id }}</td>
+      <td>{{ p.program }}<br><span class="muted">{{ p.topic }}</span></td>
+      <td>{{ p.message or '' }}<br><span class="muted">{{ STORY_SOURCE.get(p.source, p.source) }} · {{ p.decision or '' }}</span></td>
+      <td>{% if p.experience_id %}<a href="{{ url_for('experience_edit', eid=p.experience_id) }}">#{{ p.experience_id }} {{ p.exp_label or '' }}</a>{% endif %}</td>
+      <td><span class="badge {{ 'ok' if p.status == 'posted' else ('warn' if p.status in ('entered', 'unknown') else '') }}">{{ QUIZ_ENTRY.get(p.status, p.status) }}</span>
+        <br><span class="muted">{{ p.sent_at or p.updated_at }}</span></td></tr>
+    {% else %}<tr><td colspan="5" class="muted">없음</td></tr>{% endfor %}
+  </table>
+  <p class="muted">한 경험은 한 번만 씁니다. 공감로그로 보낸 경험은 게시판 원고로 다시 제출하지 않습니다.</p>
+</div>
+
+<div class="panel">
+  <h2>게시판 사연 (긴 글)</h2>
+  <p class="muted">프로그램 게시판에 올리는 긴 사연은 <a href="{{ url_for('dashboard') }}">게시판 사연 순서</a> →
+    <a href="{{ url_for('drafts') }}">원고 검토함</a> → <a href="{{ url_for('submissions') }}">제출 이력</a> 순서로 합니다.
+    등록 버튼은 직접 누릅니다.</p>
+</div>
+{% endblock %}

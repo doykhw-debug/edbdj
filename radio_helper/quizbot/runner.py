@@ -18,7 +18,7 @@ from difflib import SequenceMatcher
 from typing import Callable, Protocol
 
 from .. import db, quiz
-from . import config, story
+from . import config, live, story
 from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
 from .audio import rms
 from .detector import Detector, TranscriptBuffer, is_gift_signal, is_story_signal
@@ -27,6 +27,8 @@ from .schedule import Window, active_window, next_window
 SILENCE_RMS = 0.002
 SILENT_CHUNKS_WARN = 4
 SIMILAR_QUESTION = 0.85  # 짧은 한국어 문장은 0.6이면 다른 문제도 같다고 본다
+GORILLA_HOLD = "대기: 고릴라 창을 찾지 못함 — 찾으면 보냄"
+HELD_RETRY_MINUTES = 20  # 이보다 오래된 보류 글은 늦었으므로 자동으로 보내지 않는다
 
 
 class Recorder(Protocol):
@@ -131,65 +133,110 @@ class Runner:
         return self.conn.execute(
             "SELECT s.*, p.title AS program, p.channel AS channel FROM quiz_schedules s JOIN programs p ON p.id = s.program_id").fetchall()
 
-    def run_forever(self, idle_seconds: int = 20) -> None:
+    def report_level(self, level: int) -> None:
+        db.set_setting(self.conn, "quizbot.level", str(level))
+        db.set_setting(self.conn, "quizbot.level_at", self.deps.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    def run_forever(self, idle_seconds: int = 5) -> None:
         self.state("시작함")
         while not self.should_stop():
             now = self.deps.now()
+            if live.is_active(self.conn):
+                self._guarded(self.run_live)
+                continue
             schedules = self.schedules()
             w = active_window(schedules, now)
             if w is None:
                 nxt = next_window(schedules, now)
-                self.state(f"대기 중 — 다음 예약 {nxt.start:%m/%d %H:%M}" if nxt else "대기 중 — 예약 없음")
+                self.state(f"대기 중 — 다음 예약 {nxt.start:%m/%d %H:%M}" if nxt else "대기 중 — '청취 시작'을 누르세요")
                 self.process_approved(None)
                 self.deps.sleep(idle_seconds)
                 continue
-            try:
-                self.run_window(w)
-            except Exception as e:  # 녹음 장치·모델 내려받기 등 실패 → 기록하고 30초 뒤 다시 시도
-                msg = f"{type(e).__name__}: {str(e)[:150]}"
-                db.log(self.conn, "quizbot", f"예약 실행 중 오류 — 30초 뒤 다시 시도: {msg}")
-                self.state(f"오류 후 대기 중 — {msg}")
-                self.deps.sleep(30)
+            self._guarded(lambda: self.run_window(w))
         db.set_setting(self.conn, "quizbot.stop", "0")
         self.state("멈춤")
 
-    def run_window(self, w: Window) -> None:
-        schedule = self.conn.execute(
-            "SELECT s.*, p.title AS program, p.channel AS channel FROM quiz_schedules s JOIN programs p ON p.id = s.program_id "
-            "WHERE s.id = ?", (w.schedule_id,)).fetchone()
-        program = schedule["program"]
-        # 고릴라가 켜질 때까지 기다린다
-        while not self.deps.sender.is_running():
-            if self.should_stop() or self.deps.now() >= w.end:
-                return
-            self.state(f"{program} 예약 중 — 고릴라가 실행 중이 아님 (30초마다 확인)")
+    def _guarded(self, fn) -> None:
+        try:
+            fn()
+        except Exception as e:  # 녹음 장치·모델 내려받기 등 실패 → 기록하고 30초 뒤 다시 시도
+            msg = f"{type(e).__name__}: {str(e)[:150]}"
+            db.log(self.conn, "quizbot", f"듣기 중 오류 — 30초 뒤 다시 시도: {msg}")
+            self.state(f"오류 후 대기 중 — {msg}")
             self.deps.sleep(30)
 
+    def run_window(self, w: Window) -> None:
+        schedule = self.conn.execute(
+            "SELECT s.*, p.title AS program, p.channel AS channel FROM quiz_schedules s "
+            "JOIN programs p ON p.id = s.program_id WHERE s.id = ?", (w.schedule_id,)).fetchone()
+        db.log(self.conn, "quizbot", f"{schedule['program']} 예약 시작 ({w.start:%H:%M}~{w.end:%H:%M})")
+        self._listen(lambda now: (schedule, w), lambda now: now < w.end)
+
+    def run_live(self) -> None:
+        """'청취 시작': 예약과 상관없이 지금 듣는 채널을 '청취 중지'까지 듣는다."""
+        def get_session(now):
+            day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            return live.session(self.conn, now), Window(None, day, day + timedelta(days=1))
+
+        db.log(self.conn, "quizbot", f"청취 시작 — {config.get(self.conn, 'live.channel')}")
+        self._listen(get_session, lambda now: live.is_active(self.conn), wait_for_gorilla=False)
+        db.log(self.conn, "quizbot", "청취 멈춤")
+
+    def _listen(self, get_session, keep_going, wait_for_gorilla: bool = True) -> None:
+        """녹음 → 음성 인식 → 퀴즈·사연·선물 감지 → 분석 → 전송. get_session(now) → (설정, 구간).
+
+        예약 듣기는 고릴라가 켜질 때까지 기다린다. '청취 시작'은 고릴라 창을 못 찾아도 듣기·자막을 계속하고,
+        보낼 글은 고릴라 창을 찾을 때까지 보류한다.
+        """
+        session, w = get_session(self.deps.now())
+        while wait_for_gorilla and not self.deps.sender.is_running():
+            if self.should_stop() or not keep_going(self.deps.now()):
+                return
+            self.state(f"{session['program']} — 고릴라가 실행 중이 아님 (30초마다 확인)")
+            self.deps.sleep(30)
+        gorilla_ok = self.deps.sender.is_running()
+        gorilla_checked = self.deps.now()
+        if not gorilla_ok:
+            db.log(self.conn, "quizbot", "고릴라 창을 찾지 못했습니다 — 듣기·자막은 계속하고, 보낼 글은 고릴라 창을 찾으면 보냅니다.")
+
+        self.state("음성 인식 준비 중 (처음 한 번은 모델 내려받기로 몇 분 걸릴 수 있음)")
+        transcriber = self.deps.transcriber_factory(config.get(self.conn, "quizbot.whisper_model"), session["program"])
         chunk_seconds = config.get_int(self.conn, "quizbot.chunk_seconds")
-        transcriber = self.deps.transcriber_factory(config.get(self.conn, "quizbot.whisper_model"), program)
+        context = config.get_int(self.conn, "quizbot.context_seconds")
         buffer = TranscriptBuffer()
         detector = Detector(settle_seconds=config.get_int(self.conn, "quizbot.settle_seconds"),
                             cooldown_seconds=config.get_int(self.conn, "quizbot.cooldown_seconds"))
-        max_analyses = config.get_int(self.conn, "quizbot.max_analyses_per_window")
-        self.analyses = 0
         story_detector = Detector(settle_seconds=config.get_int(self.conn, "quizbot.story_settle_seconds"),
                                   cooldown_seconds=config.get_int(self.conn, "quizbot.story_cooldown_seconds"),
-                                  signal=is_story_signal) if schedule["story_enabled"] else None
-        max_story = config.get_int(self.conn, "quizbot.max_story_analyses_per_window")
-        self.story_analyses = 0
+                                  signal=is_story_signal)
         gift_detector = Detector(settle_seconds=config.get_int(self.conn, "quizbot.gift_settle_seconds"),
                                  cooldown_seconds=config.get_int(self.conn, "quizbot.gift_cooldown_seconds"),
-                                 signal=is_gift_signal) if schedule["gift_enabled"] else None
+                                 signal=is_gift_signal)
+        max_analyses = config.get_int(self.conn, "quizbot.max_analyses_per_window")
+        max_story = config.get_int(self.conn, "quizbot.max_story_analyses_per_window")
         max_gift = config.get_int(self.conn, "quizbot.max_gift_analyses_per_window")
-        self.gift_analyses = 0
-        silent = 0
-        db.log(self.conn, "quizbot", f"{program} 예약 시작 ({w.start:%H:%M}~{w.end:%H:%M})")
+        current, silent = None, 0
         with self.deps.recorder_factory(chunk_seconds) as recorder:
-            while self.deps.now() < w.end and not self.should_stop():
-                self.state(f"{program} 듣는 중 ({w.start:%H:%M}~{w.end:%H:%M}) · 분석 {self.analyses}회")
+            if hasattr(recorder, "on_level"):
+                recorder.on_level = self.report_level  # 녹음 중 1초마다 소리 크기를 화면에 알린다
+            while keep_going(self.deps.now()) and not self.should_stop():
+                session, w = get_session(self.deps.now())
+                program = session["program"]
+                if program != current:
+                    # 프로그램이 바뀌면 프로그램당 분석 상한을 새로 센다
+                    current, self.analyses, self.story_analyses, self.gift_analyses = program, 0, 0, 0
+                if not wait_for_gorilla and (self.deps.now() - gorilla_checked).total_seconds() >= 60:
+                    gorilla_checked, was_ok = self.deps.now(), gorilla_ok
+                    gorilla_ok = self.deps.sender.is_running()
+                    if gorilla_ok and not was_ok:
+                        db.log(self.conn, "quizbot", "고릴라 창을 찾았습니다 — 보류한 글을 보냅니다.")
+                self.state(f"{program} 듣는 중 · 분석 퀴즈 {self.analyses}·사연 {self.story_analyses}·선물 {self.gift_analyses}회"
+                           + ("" if gorilla_ok else " · 고릴라 창 못 찾음(전송 보류)"))
                 audio = recorder.read_chunk()
                 now = self.deps.now()
-                if rms(audio) < SILENCE_RMS:
+                level = rms(audio)
+                self.report_level(live.level_percent(level))
+                if level < SILENCE_RMS:
                     silent += 1
                     if silent == SILENT_CHUNKS_WARN:
                         db.log(self.conn, "quizbot", "소리가 들리지 않습니다. 고릴라 재생·음소거·기본 스피커를 확인하세요.")
@@ -198,31 +245,36 @@ class Runner:
                 text = transcriber.transcribe(audio)
                 if text:
                     buffer.add(now, text)
-                    self.conn.execute("INSERT INTO transcripts (schedule_id, broadcast_date, at, text) VALUES (?, ?, ?, ?)",
-                                      (w.schedule_id, w.broadcast_date, now.strftime("%Y-%m-%d %H:%M:%S"), text))
+                    self.conn.execute(
+                        "INSERT INTO transcripts (schedule_id, broadcast_date, at, text, channel, program) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (w.schedule_id, w.broadcast_date, now.strftime("%Y-%m-%d %H:%M:%S"), text,
+                         session["channel"], program))
                     self.conn.commit()
                     detector.feed(now, text)
-                    if story_detector is not None:
+                    if session["story_enabled"]:
                         story_detector.feed(now, text)
-                    if gift_detector is not None:
+                    if session["gift_enabled"]:
                         gift_detector.feed(now, text)
-                if gift_detector is not None and gift_detector.is_due(now):
+                if session["gift_enabled"] and gift_detector.is_due(now):
                     gift_detector.mark_analyzed(now)
                     if self.gift_analyses < max_gift:
-                        self.analyze_gifts(schedule, w, buffer.window(now, config.get_int(self.conn, "quizbot.context_seconds")))
-                if story_detector is not None and story_detector.is_due(now):
+                        self.analyze_gifts(session, w, buffer.window(now, context))
+                if session["story_enabled"] and story_detector.is_due(now):
                     story_detector.mark_analyzed(now)
                     if self.story_analyses < max_story:
-                        self.analyze_story(schedule, w, buffer.window(now, config.get_int(self.conn, "quizbot.context_seconds")))
+                        self.analyze_story(session, w, buffer.window(now, context))
                 if detector.is_due(now):
                     detector.mark_analyzed(now)
                     if self.analyses < max_analyses:
-                        self.analyze(schedule, w, buffer.window(now, config.get_int(self.conn, "quizbot.context_seconds")))
+                        self.analyze(session, w, buffer.window(now, context))
                     elif self.analyses == max_analyses:
-                        db.log(self.conn, "quizbot", f"{program}: 분석 횟수 상한({max_analyses}) 도달 — 이번 예약에서는 더 분석하지 않음")
+                        db.log(self.conn, "quizbot", f"{program}: 분석 횟수 상한({max_analyses}) 도달 — 이 프로그램에서는 더 분석하지 않음")
                         self.analyses += 1
-                self.process_approved(schedule)
-        db.log(self.conn, "quizbot", f"{program} 예약 끝 · 분석 {min(self.analyses, max_analyses)}회")
+                self.process_approved(session)
+                if gorilla_ok:
+                    self.retry_held(session)
+        db.log(self.conn, "quizbot", f"{current or session['program']} 듣기 끝 · 분석 {min(self.analyses, max_analyses)}회")
 
     def known_quizzes(self, program: str, date: str):
         return self.conn.execute(
@@ -272,8 +324,8 @@ class Runner:
             """INSERT INTO quizzes (dedupe_key, account, channel, program, broadcast_date, question_key, kind, question,
                    options, deadline, entry_channel, gorilla_accepted, answer, answer_verified, source, schedule_id,
                    confidence, excerpt, note, created_at, updated_at)
-               VALUES (?, ?, '파워FM', ?, ?, ?, 'new', ?, ?, ?, '고릴라', ?, ?, 0, 'auto', ?, ?, ?, ?, ?, ?)""",
-            (key, account, schedule["program"], w.broadcast_date, qkey, res.question, " / ".join(res.options),
+               VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, '고릴라', ?, ?, 0, 'auto', ?, ?, ?, ?, ?, ?)""",
+            (key, account, schedule["channel"] or "파워FM", schedule["program"], w.broadcast_date, qkey, res.question, " / ".join(res.options),
              res.deadline_hint or None, res.gorilla_accepted, res.answer or None, schedule["id"], res.confidence,
              transcript[-2000:], (res.formatted_message and f"전송 형식: {res.formatted_message}") or res.reasoning_note,
              db.now(), db.now()))
@@ -310,6 +362,17 @@ class Runner:
         for r in quizzes:
             self.try_send(r["id"], self._schedule(schedule, r["schedule_id"]))
         for r in stories:
+            self.try_send_story(r["id"], self._schedule(schedule, r["schedule_id"]))
+
+    def retry_held(self, schedule) -> None:
+        """고릴라 창을 못 찾아 보류한 자동 전송 글을 다시 판단해 보낸다 (최근 것만)."""
+        # created_at 은 db.now()(실제 시각)로 남으므로 같은 기준으로 비교한다
+        since = (datetime.now() - timedelta(minutes=HELD_RETRY_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
+        for r in self.conn.execute("SELECT id, schedule_id FROM quizzes WHERE entry_status = 'pending' AND approved = 0 "
+                                   "AND decision = ? AND created_at >= ?", (GORILLA_HOLD, since)).fetchall():
+            self.try_send(r["id"], self._schedule(schedule, r["schedule_id"]))
+        for r in self.conn.execute("SELECT id, schedule_id FROM story_posts WHERE status = 'pending' AND approved = 0 "
+                                   "AND decision = ? AND created_at >= ?", (GORILLA_HOLD, since)).fetchall():
             self.try_send_story(r["id"], self._schedule(schedule, r["schedule_id"]))
 
     # ── 선물 정보 ────────────────────────────────────────────────
@@ -411,6 +474,11 @@ class Runner:
                               ("보류: " + " / ".join(reasons), db.now(), pid))
             self.conn.commit()
             return None
+        if not self.deps.sender.is_running():
+            self.conn.execute("UPDATE story_posts SET decision = ?, updated_at = ? WHERE id = ?",
+                              (GORILLA_HOLD, db.now(), pid))
+            self.conn.commit()
+            return None
         text = post["message"].strip()
         self.conn.execute(
             "UPDATE story_posts SET status = 'unknown', sent_at = ?, decision = ?, updated_at = ? "
@@ -438,6 +506,11 @@ class Runner:
         if reasons:
             self.conn.execute("UPDATE quizzes SET decision = ?, updated_at = ? WHERE id = ?",
                               ("보류: " + " / ".join(reasons), db.now(), qid))
+            self.conn.commit()
+            return None
+        if not self.deps.sender.is_running():
+            self.conn.execute("UPDATE quizzes SET decision = ?, updated_at = ? WHERE id = ?",
+                              (GORILLA_HOLD, db.now(), qid))
             self.conn.commit()
             return None
         text = q["send_text"] or config.format_message(config.get(self.conn, "gorilla.message_template"), q["answer"])

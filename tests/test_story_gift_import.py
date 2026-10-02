@@ -256,14 +256,16 @@ def test_story_and_gift_pages(client, conn):
                     created_at, updated_at) VALUES ('파워FM', '김영철의 파워FM', '2026-10-05', '2026-10-05 07:20:00',
                     '영화 예매권', '사연 채택', 'story', ?, ?)""", (db.now(), db.now()))
     conn.commit()
-    page = client.get("/quizbot").get_data(as_text=True)
+    page = client.get("/stories").get_data(as_text=True)
     assert "첫 출근" in page and "AI 초안" in page
     assert client.get("/quizbot/pending.json").get_json()["stories"] == 2
     gifts = client.get("/gifts?channel=파워FM").get_data(as_text=True)
     assert "영화 예매권" in gifts and "사연 채택" in gifts
 
-    token = csrf(client, "/quizbot")
-    client.post("/quizbot/stories/1/approve", data={"csrf_token": token, "message": "직접 쓴 한 줄"})
+    assert '<span class="nav-count">2</span>' in page  # 메뉴의 '사연' 옆 확인 대기 수
+    token = csrf(client, "/stories")
+    resp = client.post("/quizbot/stories/1/approve", data={"csrf_token": token, "message": "직접 쓴 한 줄"})
+    assert resp.headers["Location"].endswith("/stories")
     p1 = conn.execute("SELECT * FROM story_posts WHERE id = 1").fetchone()
     assert (p1["approved"], p1["source"]) == (1, "user_line")
     client.post("/quizbot/stories/2/approve", data={"csrf_token": token, "message": "010-1111-2222 연락"})
@@ -284,9 +286,9 @@ def test_schedule_story_options_saved(client, conn):
     token = csrf(client, "/quizbot")
     pid = conn.execute("SELECT id FROM programs WHERE code = 'cultwoshow'").fetchone()[0]
     client.post("/quizbot/schedules", data={"csrf_token": token, "program_id": pid, "days": ["0"],
-                                            "story_enabled": "1", "gift_enabled": "1"})
+                                            "story_enabled": "1", "gift_enabled": "1", "story_auto_ai": "1"})
     s = conn.execute("SELECT * FROM quiz_schedules").fetchone()
-    assert (s["story_enabled"], s["story_auto_user_line"], s["gift_enabled"]) == (1, 0, 1)
+    assert (s["story_enabled"], s["story_auto_user_line"], s["story_auto_ai"], s["gift_enabled"]) == (1, 0, 1, 1)
     client.post(f"/quizbot/schedules/{s['id']}", data={"csrf_token": token, "enabled": "1", "story_auto_user_line": "1"})
     s = conn.execute("SELECT * FROM quiz_schedules").fetchone()
-    assert (s["story_enabled"], s["story_auto_user_line"], s["gift_enabled"]) == (0, 1, 0)
+    assert (s["story_enabled"], s["story_auto_user_line"], s["story_auto_ai"], s["gift_enabled"]) == (0, 1, 0, 0)

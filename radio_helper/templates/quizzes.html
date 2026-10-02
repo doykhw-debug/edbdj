@@ -1,15 +1,63 @@
 {% extends "base.html" %}
 {% block title %}퀴즈 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>고릴라 퀴즈 기록</h1>
-<p class="muted">이번 단계에서는 방송 음성 수집과 고릴라 화면 조작을 하지 않습니다. 들은 문제를 기록하면 같은 문제의 재안내는 한 건으로 묶고,
-조건이 불분명하면 보류로 표시합니다. 정답 입력은 고릴라 앱에서 직접 하고 결과를 여기에 남깁니다.</p>
+<h1>퀴즈 기록</h1>
 
+<div class="panel" id="pending">
+  <h2>확인 대기 <span class="muted">자동으로 들은 문제 중 자동 전송 조건을 못 채운 것</span></h2>
+  {% for q in pending %}
+  <div style="border-bottom:1px solid var(--line);padding:10px 0">
+    <b>#{{ q.id }} {{ q.channel }} · {{ q.program }}</b> <span class="muted">{{ q.created_at }}</span>
+    {% if q.entry_status == 'failed' %}<span class="badge bad">전송 실패</span>{% endif %}
+    <p style="margin:6px 0">{{ q.question }}{% if q.options %} <span class="muted">(보기: {{ q.options }})</span>{% endif %}</p>
+    <p class="muted" style="margin:0">확신도 {{ '%.2f'|format(q.confidence or 0) }} · 고릴라 응모 {{ YES_NO.get(q.gorilla_accepted, q.gorilla_accepted) }}{% if q.deadline %} · 마감 {{ q.deadline }}{% endif %}</p>
+    {% if q.decision %}<p class="muted" style="margin:0">{{ q.decision }}</p>{% endif %}
+    {% if q.note %}<p class="muted" style="margin:0">{{ q.note }}</p>{% endif %}
+    <details><summary class="muted">판단에 쓴 자막</summary><pre class="box">{{ q.excerpt or '' }}</pre></details>
+    <div class="actions">
+      <form method="post" action="{{ url_for('quizbot_approve', qid=q.id) }}" class="actions">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="text" name="answer" value="{{ q.answer or '' }}" placeholder="정답" style="width:180px">
+        <input type="text" name="send_text" value="{{ q.send_text or '' }}" placeholder="보낼 문구(비우면 기본 형식)" style="width:220px">
+        <button>이 답으로 보내기</button>
+      </form>
+      <form method="post" action="{{ url_for('quizbot_skip', qid=q.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">보내지 않음</button></form>
+    </div>
+  </div>
+  {% else %}<p class="muted">없음</p>{% endfor %}
+</div>
+
+<div class="panel table-wrap" id="auto">
+  <h2>자동으로 들은 퀴즈 <span class="muted">보낸 문제와 결과</span></h2>
+  <table>
+    <tr><th>#</th><th>채널 · 프로그램</th><th>문제</th><th>보낸 문구</th><th>상태</th><th>결과</th></tr>
+    {% for q in auto %}
+    <tr><td>{{ q.id }}</td><td>{{ q.channel }}<br>{{ q.program }}<br><span class="muted">{{ q.sent_at or q.updated_at }}</span></td>
+      <td>{{ q.question }}<br><span class="muted">{{ q.decision or '' }}</span></td>
+      <td>{{ q.send_text or '' }}</td>
+      <td><span class="badge {{ 'ok' if q.entry_status == 'posted' else ('warn' if q.entry_status in ('entered', 'unknown') else '') }}">{{ QUIZ_ENTRY.get(q.entry_status, q.entry_status) }}</span>
+        <br><span class="muted">{{ q.note or '' }}</span></td>
+      <td>
+        <form method="post" action="{{ url_for('quiz_result', qid=q.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          {% for key, label in [('answer_accepted', '정답'), ('won', '당첨'), ('prize_received', '수령')] %}
+          <label class="inline" style="margin:2px 0">{{ label }}
+            <select name="{{ key }}" style="width:auto;padding:2px 4px">{% for k, v in YES_NO.items() %}<option value="{{ k }}" {{ 'selected' if q[key] == k }}>{{ v }}</option>{% endfor %}</select></label>
+          {% endfor %}
+          <button class="secondary" style="padding:2px 8px">저장</button>
+        </form>
+      </td></tr>
+    {% else %}<tr><td colspan="6" class="muted">없음 — 첫 화면에서 '청취 시작'을 누르면 방송에서 퀴즈를 듣고 여기에 남깁니다.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<h2 style="margin-top:24px">직접 기록 <span class="muted">자동 청취 밖에서 들은 문제</span></h2>
 <form method="post" action="{{ url_for('quiz_new') }}" class="panel">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <h2>문제 기록</h2>
   <div class="row3">
-    <div><label>채널</label><input type="text" name="channel" value="파워FM"></div>
+    <div><label>채널</label><input type="text" name="channel" value="파워FM" list="channel-list">
+      <datalist id="channel-list">{% for ch in channels %}<option value="{{ ch }}">{% endfor %}</datalist></div>
     <div><label>프로그램</label><input type="text" name="program" value="김영철의 파워FM" list="onair-programs">
       <datalist id="onair-programs">{% for t in programs %}<option value="{{ t }}">{% endfor %}</datalist></div>
     <div><label>방송일</label><input type="date" name="broadcast_date" value="{{ today }}"></div>

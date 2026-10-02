@@ -1,9 +1,9 @@
-"""파워FM 프로그램 목록 끌어오기.
+"""SBS 라디오 전 채널(파워FM·러브FM·고릴라M) 프로그램 목록 끌어오기.
 
 사용자 PC에서 공식 페이지를 읽기만 한다 (로그인·입력 없음).
 - 등록된 프로그램마다 공식 메인 페이지를 열어 방송 시간·요일과 게시판 링크를 읽는다.
-- SBS 라디오 첫 화면에서 프로그램 링크를 모아, 목록에 없는 프로그램은 '후보'로 남긴다.
-  채널(파워FM/러브FM)은 링크만으로 알 수 없으므로 사용자가 확인해 추가한다.
+- SBS 라디오 첫 화면에서 프로그램 링크를 모으고, 목록에 없는 프로그램은 그 메인 페이지를 열어
+  채널과 방송 시간을 읽는다. 둘 다 읽히면 편성에 넣고, 아니면 '후보'로 남겨 사용자가 확인한다.
 
 실행: python -m radio_helper.programs refresh
 """
@@ -37,6 +37,19 @@ _PROGRAM_PATH = re.compile(r"^/radio/([A-Za-z0-9_]+)/")
 _BOARD_PATH = re.compile(r"^/radio/([A-Za-z0-9_]+)/(cornerboards|boards)/(\d+)")
 
 _PM_WORDS = ("오후", "밤", "저녁")
+_CHANNEL_WORDS = (
+    (seed.CHANNEL_POWERFM, re.compile(r"파워\s*FM|POWER\s*FM", re.I)),
+    (seed.CHANNEL_LOVEFM, re.compile(r"러브\s*FM|LOVE\s*FM", re.I)),
+    ("고릴라M", re.compile(r"고릴라\s*M(?![a-z])|GORILLA\s*M(?![a-z])", re.I)),
+)
+
+
+def detect_channel(text: str) -> str | None:
+    """페이지 글에서 가장 많이 나온 채널 이름. 메뉴처럼 모든 채널이 같은 횟수로 나오면 모른다(None)."""
+    counts = sorted(((len(rx.findall(text or "")), name) for name, rx in _CHANNEL_WORDS), reverse=True)
+    if counts[0][0] == 0 or counts[0][0] == counts[1][0]:
+        return None
+    return counts[0][1]
 
 
 @dataclass
@@ -44,6 +57,7 @@ class ProgramPageInfo:
     start: str | None = None
     end: str | None = None
     days: str | None = None
+    channel: str | None = None
     boards: list[tuple[str, str, str]] = field(default_factory=list)  # (kind, title, url)
 
 
@@ -100,7 +114,7 @@ def parse_time_range(text: str) -> tuple[str | None, str | None, str | None]:
 
 def parse_program_page(code: str, text: str, links: Iterable[tuple[str, str]], base_url: str) -> ProgramPageInfo:
     start, end, days = parse_time_range(text)
-    info = ProgramPageInfo(start=start, end=end, days=days)
+    info = ProgramPageInfo(start=start, end=end, days=days, channel=detect_channel(text))
     seen = set()
     for href, label in links:
         url = urljoin(base_url, href)
@@ -143,7 +157,8 @@ class RefreshReport:
     time_changes: list[str] = field(default_factory=list)
     unreadable: list[str] = field(default_factory=list)
     new_boards: list[str] = field(default_factory=list)
-    candidates: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)       # 채널·시간을 읽어 편성에 넣은 새 프로그램
+    candidates: list[str] = field(default_factory=list)  # 채널이나 시간을 못 읽어 확인이 필요한 프로그램
     errors: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -153,6 +168,8 @@ class RefreshReport:
         if self.unreadable:
             parts.append("시간을 읽지 못함 " + ", ".join(self.unreadable))
         parts.append(f"새 게시판 {len(self.new_boards)}개")
+        if self.added:
+            parts.append("새 프로그램 추가 " + ", ".join(self.added))
         if self.candidates:
             parts.append("새 프로그램 후보 " + ", ".join(self.candidates))
         if self.errors:
@@ -181,6 +198,8 @@ def refresh(conn: sqlite3.Connection, fetch: Fetcher, discover: bool = True) -> 
         else:
             report.unreadable.append(p["title"])
             conn.execute("UPDATE programs SET checked_at = ?, updated_at = ? WHERE id = ?", (db.now(), db.now(), p["id"]))
+        if info.channel and p["channel"] in (None, "", "미확인"):
+            conn.execute("UPDATE programs SET channel = ? WHERE id = ?", (info.channel, p["id"]))
         for kind, label, url in info.boards:
             cur = conn.execute(
                 """INSERT OR IGNORE INTO corners (program, kind, title, board_url, dev_note, is_target, updated_at)
@@ -197,11 +216,21 @@ def refresh(conn: sqlite3.Connection, fetch: Fetcher, discover: bool = True) -> 
             for code, title in discover_programs(links).items():
                 if code in known:
                     continue
+                url = seed.program_main_url(code)
+                try:
+                    page_text, page_links = fetch(url)
+                    info = parse_program_page(code, page_text, page_links, url)
+                except Exception:
+                    info = ProgramPageInfo()
+                on_air = 1 if info.channel and info.start and info.end else 0
                 conn.execute(
-                    """INSERT OR IGNORE INTO programs (channel, code, title, main_url, on_air, source, checked_at, updated_at)
-                       VALUES ('미확인', ?, ?, ?, 0, 'SBS 라디오 첫 화면에서 발견', ?, ?)""",
-                    (code, title, seed.program_main_url(code), db.now(), db.now()))
-                report.candidates.append(title)
+                    """INSERT OR IGNORE INTO programs (channel, code, title, start_time, end_time, days, main_url, on_air,
+                           source, checked_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (info.channel or "미확인", code, title, info.start, info.end, info.days, url, on_air,
+                     "공식 페이지" if on_air else "SBS 라디오 첫 화면에서 발견", db.now(), db.now()))
+                (report.added if on_air else report.candidates).append(
+                    f"{title}({info.channel} {info.start}~{info.end})" if on_air else title)
             conn.commit()
         except Exception as e:
             report.errors.append(f"라디오 첫 화면: {type(e).__name__}")

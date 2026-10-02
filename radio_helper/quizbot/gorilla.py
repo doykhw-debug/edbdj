@@ -221,6 +221,32 @@ def select_rectangle(prompt: str, timeout_s: int = 90) -> tuple[int, int, int, i
     return state["result"]
 
 
+def capture(rect: tuple[int, int, int, int], name: str, boxes=(), points=()) -> str | None:
+    """화면의 rect 영역을 찍어 data/inspect/<name>.png 로 저장한다. boxes·points 는 화면 좌표로 표시.
+    Pillow 가 없으면 건너뛴다."""
+    try:
+        from PIL import ImageDraw, ImageGrab
+    except ImportError:
+        return None
+    from .. import db
+
+    left, top, right, bottom = (int(v) for v in rect)
+    img = ImageGrab.grab(bbox=(left, top, right, bottom), all_screens=True).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    for (bl, bt, br, bb), color in boxes:
+        draw.rectangle((bl - left, bt - top, br - left, bb - top), outline=color, width=4)
+    for (x, y), color in points:
+        cx, cy = x - left, y - top
+        draw.ellipse((cx - 12, cy - 12, cx + 12, cy + 12), outline=color, width=4)
+        draw.line((cx - 18, cy, cx + 18, cy), fill=color, width=2)
+        draw.line((cx, cy - 18, cx, cy + 18), fill=color, width=2)
+    out_dir = db.data_dir() / "inspect"
+    out_dir.mkdir(exist_ok=True)
+    path = out_dir / f"{name}.png"
+    img.save(path)
+    return path.name
+
+
 def parse_rect(text: str | None) -> tuple[float, ...] | None:
     try:
         parts = tuple(float(v) for v in (text or "").split(","))
@@ -490,8 +516,20 @@ class Gorilla:
         rect = select_rectangle(prompts[target])
         if rect is None:
             return None
+        time.sleep(0.4)  # 어둡게 덮은 창이 완전히 사라진 뒤 아래 창을 본다
         info = window_at_point((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
-        return region_settings(target, rect, info, None if target == "window" else self._region())
+        settings, message = region_settings(target, rect, info, None if target == "window" else self._region())
+        ref = self._region() if target != "window" and self._region() else info["rect"]
+        if target == "window":
+            ref = rect
+        color = {"input": "#2554c7", "send": "#18794e", "window": "#f59e0b"}[target]
+        try:
+            shot = capture(ref, f"gorilla_select_{target}", boxes=[(rect, color)])
+            if shot:
+                message += f" (저장한 부분 사진: {shot})"
+        except Exception:
+            pass
+        return settings, message
 
     @staticmethod
     def calibrate(target: str) -> tuple[dict, str]:
@@ -615,9 +653,12 @@ class Gorilla:
             saved_clip = None
         w = self._window()
         try:
-            if w.is_minimized():
-                w.restore()
-            w.set_focus()
+            try:
+                if w.is_minimized():
+                    w.restore()
+                w.set_focus()
+            except Exception:
+                pass  # 일부 앱은 포커스 요청을 거부한다 → 입력칸을 직접 클릭해 앞으로 가져온다
             time.sleep(0.3)
             return fn(w)
         finally:
@@ -629,11 +670,29 @@ class Gorilla:
             if previous:
                 user32.SetForegroundWindow(previous)
 
+    def click_points(self, w) -> list[tuple[tuple[int, int], str]]:
+        ref = self._ref_rect(w)
+        points = []
+        if self.cfg.input_mode == "coords" and self.cfg.input_x is not None and self.cfg.input_y is not None:
+            points.append((fraction_to_point(ref, self.cfg.input_x, self.cfg.input_y), "#ef4444"))
+        if self.cfg.send_mode == "coords" and self.cfg.send_x is not None and self.cfg.send_y is not None:
+            points.append((fraction_to_point(ref, self.cfg.send_x, self.cfg.send_y), "#22c55e"))
+        return points
+
     def type_only(self, text: str) -> str:
-        """입력칸에 글자만 넣고 보내지 않는다 (설정 확인용)."""
+        """입력칸에 글자만 넣고 보내지 않는다 (설정 확인용). 끝나면 고릴라 창을 찍어 누른 곳을 표시한다."""
         def run(w):
             self._put_text(w, text)
-            return f"'{w.window_text()}' 창 입력칸에 글자를 넣었습니다. 보내지 않았으니 고릴라에서 직접 지워 주세요."
+            time.sleep(0.5)
+            msg = (f"'{w.window_text() or '(제목 없음)'}' 창 입력칸에 '{text}'를 넣었습니다. "
+                   "보내지 않았으니 고릴라에서 직접 지워 주세요.")
+            try:
+                shot = capture(self._ref_rect(w), "gorilla_test", points=self.click_points(w))
+                if shot:
+                    msg += f" 결과 화면: {shot} (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼 위치)"
+            except Exception as e:
+                msg += f" (화면 사진 실패: {type(e).__name__})"
+            return msg
         return self._with_focus(run)
 
     def send(self, text: str) -> SendResult:

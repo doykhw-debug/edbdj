@@ -10,7 +10,7 @@ from .. import db
 
 DEFAULTS = {
     # 녹음·인식
-    "quizbot.chunk_seconds": "15",
+    "quizbot.chunk_seconds": "10",
     "quizbot.whisper_model": "small",
     "quizbot.context_seconds": "180",     # 분석에 넘기는 최근 녹취 길이
     "quizbot.settle_seconds": "40",       # 퀴즈 신호 뒤 문제를 끝까지 듣고 분석하기까지 기다리는 시간
@@ -26,6 +26,14 @@ DEFAULTS = {
     "quizbot.gift_settle_seconds": "30",
     "quizbot.gift_cooldown_seconds": "600",
     "quizbot.max_gift_analyses_per_window": "4",
+    # 청취 시작 (한 번에 켜기)
+    "live.active": "0",
+    "live.channel": "파워FM",
+    "live.auto_quiz": "1",                # 퀴즈 정답 자동 전송
+    "live.min_confidence": "0.8",
+    "live.auto_story": "1",               # 사연: 검사를 모두 통과한 초안은 자동 전송
+    "live.gift": "1",                     # 선물 정보 기록
+    "live.captions": "1",                 # 자막 창 띄우기
     # 분석 (Claude API)
     "quizbot.model": "claude-opus-5-5",
     "quizbot.effort": "medium",
@@ -144,3 +152,28 @@ def runner_alive(conn: sqlite3.Connection, now: datetime | None = None) -> bool:
     except ValueError:
         return False
     return age < timedelta(seconds=HEARTBEAT_FRESH_SECONDS)
+
+
+def instance_lock(name: str):
+    """같은 도구(실행기·자막 창)가 두 개 뜨지 않게 하는 잠금. 이미 실행 중이면 None.
+
+    잠금은 프로세스가 끝나면 OS가 풀어 주므로, 갑자기 꺼져도 다음 실행을 막지 않는다.
+    돌려받은 파일 객체를 프로세스가 끝날 때까지 들고 있어야 한다.
+    """
+    import sys
+
+    f = open(db.data_dir() / f"{name}.lock", "a+")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f

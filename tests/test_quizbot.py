@@ -270,7 +270,7 @@ def test_full_window_sends_once_and_handles_reannounce_and_reveal(conn):
     q = qs[0]
     assert q["entry_status"] == "entered" and q["repeat_count"] == 2 and q["decision"] == "자동 전송"
     assert "방송 정답 발표: 사과" in q["note"]
-    assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 40  # 10분 / 15초
+    assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 60  # 10분 / 10초
     assert clock.now() >= MON_0700 + timedelta(minutes=10)
 
 
@@ -408,8 +408,10 @@ def test_quizbot_pages_and_actions(client, conn, monkeypatch):
                  (s["id"], db.now(), db.now()))
     conn.commit()
     qid = conn.execute("SELECT id FROM quizzes").fetchone()[0]
-    assert "문제" in client.get("/quizbot").get_data(as_text=True)
-    client.post(f"/quizbot/quizzes/{qid}/approve", data={"csrf_token": token, "answer": "사과"})
+    page = client.get("/quizzes").get_data(as_text=True)
+    assert 'id="pending"' in page and "#" + str(qid) + " 파워FM · 김영철의 파워FM" in page
+    resp = client.post(f"/quizbot/quizzes/{qid}/approve", data={"csrf_token": token, "answer": "사과"})
+    assert resp.headers["Location"].endswith("/quizzes#pending")
     q = conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
     assert (q["approved"], q["answer"], q["entry_status"]) == (1, "사과", "pending")
     client.post(f"/quizbot/quizzes/{qid}/skip", data={"csrf_token": token})

@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}청취 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+{% set missing = setup|rejectattr('ok')|list %}
+{% if missing %}
+<div class="flash warn">준비가 덜 된 항목: {% for i in missing %}<a href="{{ i.url }}">{{ i.name }}</a>{{ ', ' if not loop.last }}{% endfor %}
+  — 청취·자막은 지금도 되지만, 이 항목을 마쳐야 정답·사연을 보낼 수 있습니다.</div>
+{% endif %}
+<div class="panel live-hero">
+  <div class="live-head">
+    <span id="live-dot" class="live-dot {{ vm.status }}"></span>
+    <span id="live-status" class="live-status">{{ vm.status_text }}</span>
+    <span id="live-program" class="live-program">{{ vm.channel }} · {{ vm.program }}</span>
+  </div>
+  <div class="meter" title="PC에서 나오는 소리 크기"><div id="live-meter" style="width:{{ vm.level }}%"></div></div>
+  <div id="live-state" class="muted">{{ vm.state or ('청취 시작을 누르면 PC 소리를 자막으로 바꾸기 시작합니다.' if not vm.active else '') }}</div>
+
+  <form method="post" action="{{ url_for('listen_start') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="row">
+      <div><label>듣는 채널 <span class="hint">고릴라에서 틀어 둔 채널</span></label>
+        <select name="channel">{% for ch in channels %}<option value="{{ ch }}" {{ 'selected' if ch == vm.channel }}>{{ ch }}</option>{% endfor %}</select></div>
+      <div></div>
+    </div>
+    <div class="toggles" style="margin-top:8px">
+      <label class="inline"><input type="checkbox" name="auto_quiz" value="1" {{ 'checked' if options.auto_quiz }}> 퀴즈 정답 자동 전송</label>
+      <label class="inline"><input type="checkbox" name="auto_story" value="1" {{ 'checked' if options.auto_story }}> 사연 자동 전송 <span class="hint">(경고 없는 글만)</span></label>
+      <label class="inline"><input type="checkbox" name="gift" value="1" {{ 'checked' if options.gift }}> 선물 정보 기록</label>
+      <label class="inline"><input type="checkbox" name="captions" value="1" {{ 'checked' if options.captions }}> 자막 창 띄우기</label>
+    </div>
+    <div class="actions">
+      {% if vm.active %}
+        <button class="secondary">설정 바꾸기</button>
+      {% else %}
+        <button class="big" {{ 'disabled' if stopped }}>▶ 청취 시작</button>
+      {% endif %}
+    </div>
+  </form>
+  {% if vm.active %}
+  <form method="post" action="{{ url_for('listen_stop') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="big danger">■ 청취 중지</button>
+    <span class="muted" id="captions-open">{{ '자막 창 열림' if captions_open else '' }}</span>
+  </form>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>실시간 자막 <span class="muted">음성 인식 결과 · 노란색 퀴즈, 파란색 사연, 초록색 선물</span></h2>
+  <div class="captions" id="captions">
+    {% for l in vm.lines %}
+      <div class="line {{ ('kw kw-line-' ~ l.keywords[0]) if l.keywords }}"><span class="at">{{ l.at }}</span>{% for k in l.keywords %}<span class="kw-badge kw-{{ k }}">{{ k }}</span>{% endfor %}{{ l.text }}</div>
+    {% else %}
+      <div class="line muted" id="captions-empty">아직 자막이 없습니다.</div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="grid" style="margin-bottom:16px">
+  <a class="stat" href="{{ url_for('quizzes') }}#pending"><span class="muted">확인 대기 퀴즈</span><b id="pending-quizzes">{{ vm.pending.quizzes }}</b><span class="muted">자동 전송 조건을 못 채운 문제</span></a>
+  <a class="stat" href="{{ url_for('stories') }}"><span class="muted">확인 대기 사연</span><b id="pending-stories">{{ vm.pending.stories }}</b><span class="muted">경고가 있거나 경험이 안 맞는 글</span></a>
+  <a class="stat" href="{{ url_for('gifts') }}"><span class="muted">선물 기록</span><b>→</b><span class="muted">채널·프로그램별 조건</span></a>
+</div>
+
+<div class="panel">
+  <h2>최근 감지·전송</h2>
+  <div id="events">
+    {% for e in vm.events %}<div><span class="muted">{{ e.at }}</span> · {{ e.message }}</div>
+    {% else %}<p class="muted">아직 없음</p>{% endfor %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>준비 상태</h2>
+  <ul class="checklist">
+    {% for i in setup %}
+    <li>{% if i.ok %}<span class="badge ok">OK</span>{% else %}<span class="badge bad">필요</span>{% endif %}
+      <a href="{{ i.url }}">{{ i.name }}</a> <span class="muted">{{ i.detail }}</span></li>
+    {% endfor %}
+  </ul>
+  <details><summary class="muted">'청취 시작'을 누르면 일어나는 일</summary>
+    <ol class="muted">
+      <li>PC 스피커로 나오는 소리(고릴라 방송)를 10초씩 녹음해 이 PC에서 자막으로 바꿉니다. 오디오는 저장하지 않습니다.</li>
+      <li>자막에서 '퀴즈·정답', '사연·보내 주세요', '선물·당첨' 같은 말을 찾습니다.</li>
+      <li>퀴즈: 앞뒤 몇 분 자막을 Claude로 분석해 정답을 찾고, 확신도가 기준 이상이면 고릴라 공감로그로 보냅니다. 한 번 보낸 문제는 다시 보내지 않습니다.</li>
+      <li>사연: 내 '실제 경험' 중 주제에 맞는 것으로 짧은 글을 만들고, 검사 경고가 없으면 보냅니다. 경고가 있으면 '사연'에서 확인을 기다립니다. 없는 일을 지어내지 않습니다.</li>
+      <li>선물: 선물 이름·조건·응모 방법을 채널·프로그램별로 기록만 합니다.</li>
+      <li>고릴라 창을 못 찾으면 듣기·자막은 계속하고, 보낼 글은 고릴라 창을 찾을 때까지 보류합니다.</li>
+    </ol>
+  </details>
+</div>
+
+<script>
+(function () {
+  var wasActive = {{ 'true' if vm.active else 'false' }};
+  var lastLines = '';
+  function el(id) { return document.getElementById(id); }
+  function line(l) {
+    var d = document.createElement('div');
+    d.className = 'line' + (l.keywords.length ? ' kw kw-line-' + l.keywords[0] : '');
+    var at = document.createElement('span'); at.className = 'at'; at.textContent = l.at; d.appendChild(at);
+    l.keywords.forEach(function (k) {
+      var b = document.createElement('span'); b.className = 'kw-badge kw-' + k; b.textContent = k; d.appendChild(b);
+    });
+    d.appendChild(document.createTextNode(l.text));
+    return d;
+  }
+  function poll() {
+    fetch('{{ url_for('live_json') }}', {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (vm) {
+      if (vm.active !== wasActive) { location.reload(); return; }
+      el('live-dot').className = 'live-dot ' + vm.status;
+      el('live-status').textContent = vm.status_text;
+      el('live-program').textContent = vm.channel + ' · ' + vm.program;
+      el('live-meter').style.width = vm.level + '%';
+      el('live-state').textContent = vm.state || '';
+      el('pending-quizzes').textContent = vm.pending.quizzes;
+      el('pending-stories').textContent = vm.pending.stories;
+      if (el('captions-open')) el('captions-open').textContent = vm.captions_open ? '자막 창 열림' : '';
+      var key = JSON.stringify(vm.lines);
+      if (key !== lastLines) {
+        lastLines = key;
+        var box = el('captions'), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
+        box.innerHTML = '';
+        vm.lines.forEach(function (l) { box.appendChild(line(l)); });
+        if (!vm.lines.length) box.innerHTML = '<div class="line muted">아직 자막이 없습니다.</div>';
+        if (atBottom) box.scrollTop = box.scrollHeight;
+      }
+      var ev = el('events'); ev.innerHTML = '';
+      vm.events.forEach(function (e) {
+        var d = document.createElement('div'), m = document.createElement('span');
+        m.className = 'muted'; m.textContent = e.at; d.appendChild(m);
+        d.appendChild(document.createTextNode(' · ' + e.message)); ev.appendChild(d);
+      });
+      var n = vm.pending.quizzes + vm.pending.stories;
+      document.title = (vm.status === 'collecting' ? '● ' : '') + (n ? '(' + n + ') ' : '') + '청취 · 라디오 참여 도우미';
+    }).catch(function () {});
+  }
+  el('captions').scrollTop = el('captions').scrollHeight;
+  setInterval(poll, 2000);
+  poll();
+})();
+</script>
+{% endblock %}

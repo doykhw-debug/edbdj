@@ -5,9 +5,10 @@ from radio_helper import programs, seed
 
 
 def test_all_powerfm_programs_seeded(conn):
-    rows = conn.execute("SELECT * FROM programs WHERE on_air = 1 ORDER BY start_time").fetchall()
+    rows = conn.execute("SELECT * FROM programs WHERE on_air = 1 AND channel = '파워FM' ORDER BY start_time").fetchall()
     assert len(rows) == len(seed.POWERFM_PROGRAMS) == 13
-    assert {r["channel"] for r in rows} == {"파워FM"}
+    love = conn.execute("SELECT * FROM programs WHERE channel = '러브FM'").fetchall()
+    assert [r["title"] for r in love] == [t for _c, t, *_ in seed.LOVEFM_PROGRAMS]
     chul = conn.execute("SELECT * FROM programs WHERE code = '0chulpowerfm'").fetchone()
     assert (chul["title"], chul["start_time"], chul["end_time"]) == ("김영철의 파워FM", "07:00", "09:00")
     assert chul["main_url"] == "https://programs.sbs.co.kr/radio/0chulpowerfm/main"
@@ -21,7 +22,8 @@ def test_seed_is_idempotent(conn):
     from radio_helper import db
 
     db.init_db(conn)
-    assert conn.execute("SELECT COUNT(*) FROM programs").fetchone()[0] == 13
+    assert conn.execute("SELECT COUNT(*) FROM programs").fetchone()[0] == \
+        len(seed.POWERFM_PROGRAMS) + len(seed.LOVEFM_PROGRAMS)
 
 
 def test_parse_time_range():
@@ -80,7 +82,8 @@ def test_refresh_updates_times_boards_and_candidates(conn):
 
     report = programs.refresh(conn, fake_site(pages))
 
-    assert report.checked == 12 and any("애프터클럽" in e for e in report.errors)
+    total = conn.execute("SELECT COUNT(*) FROM programs WHERE code != 'newshow'").fetchone()[0]
+    assert report.checked == total - 1 and any("애프터클럽" in e for e in report.errors)
     ten = conn.execute("SELECT * FROM programs WHERE code = 'ten'").fetchone()
     assert (ten["start_time"], ten["end_time"], ten["days"], ten["source"]) == ("22:00", "00:00", "월~금", "공식 페이지")
     cultwo = conn.execute("SELECT * FROM programs WHERE code = 'cultwoshow'").fetchone()
@@ -96,6 +99,29 @@ def test_refresh_updates_times_boards_and_candidates(conn):
     # 다시 돌려도 게시판·후보가 중복으로 생기지 않는다
     again = programs.refresh(conn, fake_site(pages))
     assert again.new_boards == [] and again.candidates == []
+
+
+def test_detect_channel():
+    assert programs.detect_channel("SBS 러브FM 103.5MHz 매일 오후 2시") == "러브FM"
+    assert programs.detect_channel("POWER FM 107.7 · 파워FM 편성표") == "파워FM"
+    assert programs.detect_channel("파워FM 러브FM 고릴라M") is None      # 메뉴처럼 모두 한 번씩
+    assert programs.detect_channel("시간 정보 없음") is None
+
+
+def test_refresh_adds_programs_of_other_channels(conn):
+    pages = {p: ("", []) for (p,) in conn.execute("SELECT main_url FROM programs")}
+    pages[programs.RADIO_HOME_URL] = ("", [("https://programs.sbs.co.kr/radio/lovenew/main", "러브 새 프로그램"),
+                                            ("https://programs.sbs.co.kr/radio/mystery/main", "모르는 프로그램")])
+    pages["https://programs.sbs.co.kr/radio/lovenew/main"] = ("SBS 러브FM 103.5 · 러브FM 매일 오후 2시 ~ 4시", [])
+    pages["https://programs.sbs.co.kr/radio/mystery/main"] = ("편성 정보 없음", [])
+
+    report = programs.refresh(conn, fake_site(pages))
+
+    new = conn.execute("SELECT * FROM programs WHERE code = 'lovenew'").fetchone()
+    assert (new["channel"], new["start_time"], new["end_time"], new["on_air"]) == ("러브FM", "14:00", "16:00", 1)
+    mystery = conn.execute("SELECT * FROM programs WHERE code = 'mystery'").fetchone()
+    assert (mystery["channel"], mystery["on_air"]) == ("미확인", 0)
+    assert any("러브 새 프로그램" in a for a in report.added) and report.candidates == ["모르는 프로그램"]
 
 
 def test_program_pages_and_refresh_launch(client, conn, monkeypatch):

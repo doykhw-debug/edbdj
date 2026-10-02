@@ -1,14 +1,15 @@
 {% extends "base.html" %}
 {% block title %}프로그램 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>파워FM 프로그램 <span class="muted">107.7MHz</span></h1>
+<h1>프로그램 <span class="muted">SBS 파워FM · 러브FM · 고릴라M</span></h1>
 <div class="panel">
   <p>처음 목록은 2026-10-02 웹 검색으로 확인한 공식 페이지 주소와 방송 시간입니다. 공식 편성표 원문을 직접 연 것은 아니어서,
   <b>공식 페이지에서 새로고침</b>으로 이 PC에서 다시 확인하는 것을 권장합니다. 새로고침은 페이지를 읽기만 하고 로그인·입력은 하지 않습니다.</p>
   <ul class="list">
     <li>각 프로그램 공식 페이지에서 <b>방송 시간·요일</b>을 다시 읽습니다.</li>
     <li>프로그램 페이지의 <b>코너·게시판 링크</b>를 모아 <a href="{{ url_for('corners') }}">코너</a> 목록에 추가합니다 (모집 여부는 '미확인'으로 시작).</li>
-    <li>SBS 라디오 첫 화면에서 목록에 없는 프로그램을 찾으면 아래 <b>후보</b>에 남깁니다. 채널은 직접 확인해 추가하세요.</li>
+    <li>SBS 라디오 첫 화면에서 목록에 없는 프로그램을 찾으면 그 페이지에서 <b>채널·방송 시간</b>을 읽어 편성에 넣습니다. 둘 중 하나라도 못 읽으면 아래 <b>후보</b>에 남깁니다.</li>
+    <li>편성에 없는 시간에 '청취 시작'을 해도 '러브FM 방송'처럼 채널 이름으로 기록하며 퀴즈·사연은 그대로 동작합니다.</li>
   </ul>
   <form method="post" action="{{ url_for('programs_refresh') }}" class="actions">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -21,6 +22,7 @@
 <table>
   <tr><th>시간</th><th>프로그램</th><th>진행</th><th>요일</th><th>게시판</th><th>확인 출처</th></tr>
   {% for p in rows %}
+  {% if loop.first or p.channel != loop.previtem.channel %}<tr><td colspan="6" style="background:var(--bg)"><b>{{ p.channel }}</b></td></tr>{% endif %}
   <tr>
     <td style="white-space:nowrap">{{ p.start_time or '?' }}~{{ p.end_time or '?' }}</td>
     <td><a href="{{ url_for('program_edit', pid=p.id) }}">{{ p.title }}</a><br>
@@ -37,7 +39,7 @@
 {% if candidates %}
 <div class="panel">
   <h2>새로 발견된 프로그램 후보 <span class="muted">채널 미확인</span></h2>
-  <p class="muted">SBS 라디오 첫 화면 링크에서 찾았습니다. 러브FM 등 다른 채널일 수 있으니, 파워FM이 맞으면 열어서 채널·시간을 적고 "편성 중"을 체크하세요.</p>
+  <p class="muted">SBS 라디오 첫 화면 링크에서 찾았지만 채널이나 방송 시간을 읽지 못했습니다. 듣는 프로그램이면 열어서 채널·시간을 적고 "편성 중"을 체크하세요.</p>
   {% for p in candidates %}
     <div><a href="{{ url_for('program_edit', pid=p.id) }}">{{ p.title }}</a> · <a class="muted" href="{{ p.main_url }}" target="_blank" rel="noopener">공식 페이지 ↗</a> <span class="muted">{{ p.channel }}</span></div>
   {% endfor %}

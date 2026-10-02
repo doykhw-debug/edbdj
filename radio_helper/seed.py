@@ -69,3 +69,13 @@ POWERFM_PROGRAMS = [
 
 def program_main_url(code: str) -> str:
     return f"https://programs.sbs.co.kr/radio/{code}/main"
+
+
+# ── 러브FM ─────────────────────────────────────────────────────────
+# 2026-10-02 웹 검색으로 공식 페이지와 방송 시간을 확인한 프로그램만 넣는다. 나머지는 사용자 PC의
+# '공식 페이지에서 새로고침'으로 모은다. 편성에 없는 시간은 '러브FM 방송'로 기록된다.
+CHANNEL_LOVEFM = "러브FM"
+LOVEFM_PROGRAMS = [
+    ("lovefm", "이숙영의 러브FM", "이숙영", "09:05", "11:00", "평일"),
+]
+CHANNELS = [CHANNEL_POWERFM, CHANNEL_LOVEFM, "고릴라M"]

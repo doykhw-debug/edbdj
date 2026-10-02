@@ -2,7 +2,8 @@
 
 - 사용자가 '실제로 있었던 일'로 확인한 경험만 쓴다. 이미 다른 곳에 보낸 경험은 쓰지 않는다.
 - Claude 에 보내기 전 '공개하지 않을 단어'와 경험별 '가릴 내용'을 ○○로 가린다.
-- AI 초안은 항상 사용자가 확인해야 보낸다. 사용자가 직접 쓴 한 줄은 예약에서 허용했을 때만 자동으로 보낸다.
+- 사용자가 직접 쓴 한 줄은 허용했을 때 자동으로 보낸다. AI 초안은 '사연 자동 전송'을 켜고 검사 경고가
+  하나도 없을 때만 바로 보내고, 경고가 있으면 확인 대기로 남긴다.
 """
 
 from __future__ import annotations
@@ -111,8 +112,14 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
     if post["gorilla_accepted"] == "no":
         reasons.append("진행자가 고릴라가 아닌 다른 방법으로 받는다고 함")
     if not post["approved"]:
-        auto_ok = (post["source"] == "user_line" and schedule is not None and schedule["story_auto_user_line"]
-                   and (post["gorilla_accepted"] == "yes" or schedule["gorilla_confirmed"]))
+        def allowed(key):
+            return schedule is not None and key in schedule.keys() and bool(schedule[key])
+
+        gorilla_ok = post["gorilla_accepted"] == "yes" or allowed("gorilla_confirmed")
+        auto_ok = gorilla_ok and (
+            (post["source"] == "user_line" and allowed("story_auto_user_line"))
+            # AI 초안은 검사 경고가 하나도 없을 때만 (재료에 없는 내용·민감 소재·숫자가 있으면 확인 대기)
+            or (post["source"] == "ai" and allowed("story_auto_ai") and not warnings))
         if not auto_ok:
             reasons.append("사연은 확인 후 전송 (화면에서 '이 글로 보내기')")
     since = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")

@@ -5,7 +5,7 @@
 
 <div class="panel">
   <h2>1. 고릴라 창 맞추기</h2>
-  <p class="muted">고릴라 PC 앱을 켜고 <b>파워FM 공감로그(채팅) 화면</b>을 열어 둔 상태에서 순서대로 하세요. 고릴라 창을 최소화하지 마세요.</p>
+  <p class="muted">고릴라 PC 앱을 켜고 <b>듣는 채널의 공감로그(채팅) 화면</b>을 열어 둔 상태에서 순서대로 하세요. 고릴라 창을 최소화하지 마세요.</p>
   <ol>
     <li><b>입력칸 영역 지정</b> — 버튼을 누르면 화면이 어두워집니다. 고릴라의 <b>'공감로그 글쓰기' 칸</b>을 마우스로 끌어 네모로 그리세요. 손을 떼면 저장됩니다.
       네모가 놓인 창을 고릴라 창으로 기억하고, 창 안에서의 위치(비율)로 저장하므로 창을 옮겨도 됩니다.</li>
@@ -39,6 +39,17 @@
       <div><span style="color:#2554c7">■</span> 입력칸 {{ '저장됨' if rects.input else '미지정' }}</div>
       <div><span style="color:#18794e">■</span> 전송 버튼 {{ '저장됨' if rects.send else '미지정 (Enter 키로 전송)' }}</div>
     </div>
+  </div>
+  {% endif %}
+  {% if shots %}
+  <h2 style="margin-top:16px">확인용 화면 사진 <span class="muted">지정·테스트 직후 찍은 고릴라 영역 · 이 PC에만 저장</span></h2>
+  <p class="muted">네모·점이 고릴라의 입력칸과 전송 버튼 위에 있어야 합니다. 엉뚱한 곳(다른 창, 빈 곳)에 있으면 그 단계를 다시 하세요.
+    ③ 입력 테스트 사진에서 빨간 점이 입력칸, 초록 점이 전송 버튼 위에 있으면 설정이 맞습니다.</p>
+  <div class="shots">
+    {% for sh in shots %}
+    <figure><a href="{{ url_for('inspect_image', name=sh.file) }}?v={{ sh.v }}" target="_blank" rel="noopener"><img src="{{ url_for('inspect_image', name=sh.file) }}?v={{ sh.v }}" alt="{{ sh.label }}"></a>
+      <figcaption>{{ sh.label }} · {{ sh.at }}</figcaption></figure>
+    {% endfor %}
   </div>
   {% endif %}
   {% if waiting %}<div class="flash" id="waitbox">실행 중입니다… {{ waiting }}초 뒤 이 화면이 자동으로 새로 고쳐집니다.</div>{% endif %}

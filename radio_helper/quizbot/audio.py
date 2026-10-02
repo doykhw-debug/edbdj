@@ -35,6 +35,16 @@ def rms(samples: np.ndarray) -> float:
     return float(np.sqrt(np.mean(np.square(samples, dtype=np.float64))))
 
 
+def level_of(pcm16: bytes) -> int:
+    """16비트 PCM 조각의 소리 크기 0~100 (-60dB 이하는 0)."""
+    from .live import level_percent
+
+    if not pcm16:
+        return 0
+    samples = np.frombuffer(pcm16[: len(pcm16) - len(pcm16) % 2], dtype=np.int16).astype(np.float32) / 32768.0
+    return level_percent(rms(samples))
+
+
 class LoopbackRecorder:
     """기본 출력 장치의 루프백 녹음 (PyAudioWPatch, 윈도우 전용)."""
 
@@ -46,6 +56,7 @@ class LoopbackRecorder:
         self.device_name = ""
         self.channels = 2
         self.rate = 48_000
+        self.on_level = None  # 녹음 중 약 1초마다 소리 크기(0~100)를 알려 받을 함수
 
     def __enter__(self):
         import pyaudiowpatch as pyaudio
@@ -89,6 +100,7 @@ class LoopbackRecorder:
         need = self.chunk_seconds * self.rate * self.channels * 2
         parts, got = [], 0
         deadline = time.monotonic() + self.chunk_seconds + 2
+        last_report, recent = time.monotonic(), []
         while got < need:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -96,7 +108,13 @@ class LoopbackRecorder:
             try:
                 data = self._q.get(timeout=min(remaining, 1.0))
             except queue.Empty:
-                continue
-            parts.append(data)
-            got += len(data)
+                data = b""
+            if data:
+                parts.append(data)
+                recent.append(data)
+                got += len(data)
+            if self.on_level is not None and time.monotonic() - last_report >= 1.0:
+                last_report = time.monotonic()
+                self.on_level(level_of(b"".join(recent)))
+                recent = []
         return to_mono_16k(b"".join(parts), self.channels, self.rate)
