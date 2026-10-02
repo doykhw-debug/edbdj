@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}{{ p.title }} · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>{{ p.title }}</h1>
+<form method="post" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <p>공식 페이지: <a href="{{ p.main_url }}" target="_blank" rel="noopener">{{ p.main_url }}</a></p>
+  <p class="muted">확인 출처: {{ p.source or '' }}{% if p.checked_at %} · 마지막 확인 {{ p.checked_at }}{% endif %}</p>
+  <div class="row">
+    <div><label>프로그램 이름</label><input type="text" name="title" value="{{ p.title }}"></div>
+    <div><label>진행자</label><input type="text" name="host" value="{{ p.host or '' }}"></div>
+  </div>
+  <div class="row3">
+    <div><label>시작 <span class="hint">HH:MM</span></label><input type="text" name="start_time" value="{{ p.start_time or '' }}" placeholder="07:00"></div>
+    <div><label>끝 <span class="hint">HH:MM</span></label><input type="text" name="end_time" value="{{ p.end_time or '' }}" placeholder="09:00"></div>
+    <div><label>요일</label><input type="text" name="days" value="{{ p.days or '' }}" placeholder="매일 / 월~금"></div>
+  </div>
+  <div class="row">
+    <div><label>채널</label>
+      <select name="channel">{% for ch in ['파워FM', '러브FM', '고릴라M', '미확인'] %}<option value="{{ ch }}" {{ 'selected' if p.channel == ch }}>{{ ch }}</option>{% endfor %}</select></div>
+    <div><label class="inline" style="margin-top:34px"><input type="checkbox" name="on_air" value="1" {{ 'checked' if p.on_air }}> 편성 중 (목록에 표시)</label></div>
+  </div>
+  <div class="actions"><button>저장</button></div>
+</form>
+{% endblock %}

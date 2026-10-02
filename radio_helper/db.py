@@ -122,6 +122,23 @@ CREATE TABLE IF NOT EXISTS quizzes (
     updated_at       TEXT NOT NULL
 );
 
+-- 채널 편성 프로그램. on_air=0 은 공식 페이지에서 발견했지만 채널을 확인하지 못한 후보.
+CREATE TABLE IF NOT EXISTS programs (
+    id         INTEGER PRIMARY KEY,
+    channel    TEXT NOT NULL,
+    code       TEXT NOT NULL UNIQUE,
+    title      TEXT NOT NULL,
+    host       TEXT,
+    start_time TEXT,
+    end_time   TEXT,
+    days       TEXT,
+    main_url   TEXT NOT NULL,
+    on_air     INTEGER NOT NULL DEFAULT 1,
+    source     TEXT,
+    checked_at TEXT,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id      INTEGER PRIMARY KEY,
     at      TEXT NOT NULL,
@@ -186,6 +203,14 @@ def init_db(conn: sqlite3.Connection) -> None:
                (program, kind, title, board_url, write_url, dev_note, is_target, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (seed.PROGRAM, kind, title, board_url, write_url, dev_note, is_target, now()),
+        )
+    for code, title, host, start, end, days in seed.POWERFM_PROGRAMS:
+        conn.execute(
+            """INSERT OR IGNORE INTO programs
+               (channel, code, title, host, start_time, end_time, days, main_url, on_air, source, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+            (seed.CHANNEL_POWERFM, code, title, host or None, start, end, days, seed.program_main_url(code),
+             seed.POWERFM_SEED_SOURCE, now()),
         )
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('global_stop', '0')")
     conn.commit()

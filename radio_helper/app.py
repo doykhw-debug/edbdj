@@ -103,8 +103,54 @@ def create_app(data_dir: str | None = None) -> Flask:
     # ── 코너 ──────────────────────────────────────────────────────
     @app.get("/corners")
     def corners():
-        rows = g.conn.execute("SELECT * FROM corners ORDER BY is_target DESC, id").fetchall()
-        return render_template("corners.html", corners=rows)
+        program = request.args.get("program", "")
+        if program:
+            rows = g.conn.execute("SELECT * FROM corners WHERE program = ? ORDER BY is_target DESC, id",
+                                  (program,)).fetchall()
+        else:
+            rows = g.conn.execute("SELECT * FROM corners ORDER BY is_target DESC, program, id").fetchall()
+        programs_ = [r["program"] for r in g.conn.execute(
+            "SELECT DISTINCT program FROM corners ORDER BY program").fetchall()]
+        return render_template("corners.html", corners=rows, programs=programs_, program=program)
+
+    # ── 파워FM 프로그램 ───────────────────────────────────────────
+    @app.get("/programs")
+    def programs():
+        rows = g.conn.execute(
+            """SELECT p.*, (SELECT COUNT(*) FROM corners c WHERE c.program = p.title) AS boards
+               FROM programs p WHERE p.on_air = 1 ORDER BY p.start_time""").fetchall()
+        candidates = g.conn.execute("SELECT * FROM programs WHERE on_air = 0 ORDER BY id").fetchall()
+        last = g.conn.execute(
+            "SELECT * FROM events WHERE kind = 'programs' ORDER BY id DESC LIMIT 1").fetchone()
+        return render_template("programs.html", rows=rows, candidates=candidates, last=last)
+
+    @app.post("/programs/refresh")
+    def programs_refresh():
+        if db.is_stopped(g.conn):
+            flash("일괄 중지가 켜져 있습니다.", "error")
+            return redirect(url_for("programs"))
+        log_name = launch_programs_refresh()
+        flash("공식 페이지에서 방송 시간과 게시판을 읽는 중입니다. 1~2분 뒤 이 화면을 새로 고치세요. "
+              f"(기록: {log_name})")
+        return redirect(url_for("programs"))
+
+    @app.route("/programs/<int:pid>", methods=["GET", "POST"])
+    def program_edit(pid):
+        prog = one("SELECT * FROM programs WHERE id = ?", pid)
+        if request.method == "POST":
+            title = form("title") or prog["title"]
+            g.conn.execute(
+                """UPDATE programs SET channel = ?, title = ?, host = ?, start_time = ?, end_time = ?, days = ?,
+                       on_air = ?, source = ?, updated_at = ? WHERE id = ?""",
+                (form("channel", prog["channel"]), title, form("host") or None, form("start_time") or None,
+                 form("end_time") or None, form("days") or None, 1 if request.form.get("on_air") else 0,
+                 "사용자 수정", db.now(), pid))
+            if title != prog["title"]:
+                g.conn.execute("UPDATE corners SET program = ? WHERE program = ?", (title, prog["title"]))
+            g.conn.commit()
+            flash("프로그램 정보를 저장했습니다.")
+            return redirect(url_for("programs"))
+        return render_template("program_edit.html", p=prog)
 
     @app.route("/corners/<int:cid>", methods=["GET", "POST"])
     def corner_edit(cid):
@@ -379,8 +425,9 @@ def create_app(data_dir: str | None = None) -> Flask:
     def quizzes():
         rows = g.conn.execute("SELECT * FROM quizzes ORDER BY broadcast_date DESC, id DESC").fetchall()
         stopped = db.is_stopped(g.conn)
+        on_air = g.conn.execute("SELECT title FROM programs WHERE on_air = 1 ORDER BY start_time").fetchall()
         return render_template("quizzes.html", rows=[(q, quiz.hold_reasons(q, stopped)) for q in rows],
-                               today=time.strftime("%Y-%m-%d"))
+                               today=time.strftime("%Y-%m-%d"), programs=[r["title"] for r in on_air])
 
     @app.post("/quizzes/new")
     def quiz_new():
@@ -454,15 +501,23 @@ def create_app(data_dir: str | None = None) -> Flask:
     return app
 
 
-def launch_autofill(args: list[str]) -> str:
-    """입력 도구를 별도 프로세스로 실행한다. 출력은 data/logs 에 남는다."""
+def launch_module(module: str, args: list[str], prefix: str) -> str:
+    """도구를 별도 프로세스로 실행한다. 출력은 data/logs 에 남는다."""
     log_dir = db.data_dir() / "logs"
     log_dir.mkdir(exist_ok=True)
-    name = f"autofill_{time.strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(2)}.log"
+    name = f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(2)}.log"
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUNBUFFERED"] = "1"
     with open(log_dir / name, "w", encoding="utf-8") as out:
-        subprocess.Popen([sys.executable, "-m", "radio_helper.autofill", *args],
+        subprocess.Popen([sys.executable, "-m", module, *args],
                          stdout=out, stderr=subprocess.STDOUT, cwd=str(PROJECT_ROOT), env=env)
     return name
+
+
+def launch_autofill(args: list[str]) -> str:
+    return launch_module("radio_helper.autofill", args, "autofill")
+
+
+def launch_programs_refresh() -> str:
+    return launch_module("radio_helper.programs", ["refresh"], "programs")

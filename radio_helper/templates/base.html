@@ -14,6 +14,7 @@
   <nav>
     <a href="{{ url_for('dashboard') }}" class="{{ 'on' if ep == 'dashboard' }}">홈</a>
     <a href="{{ url_for('profile') }}" class="{{ 'on' if ep == 'profile' }}">기본 정보</a>
+    <a href="{{ url_for('programs') }}" class="{{ 'on' if ep.startswith('program') }}">프로그램</a>
     <a href="{{ url_for('corners') }}" class="{{ 'on' if ep.startswith('corner') }}">코너</a>
     <a href="{{ url_for('experiences') }}" class="{{ 'on' if ep.startswith('experience') }}">실제 경험</a>
     <a href="{{ url_for('drafts') }}" class="{{ 'on' if ep.startswith('draft') }}">원고 검토함</a>

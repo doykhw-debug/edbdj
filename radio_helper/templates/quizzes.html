@@ -10,7 +10,8 @@
   <h2>문제 기록</h2>
   <div class="row3">
     <div><label>채널</label><input type="text" name="channel" value="파워FM"></div>
-    <div><label>프로그램</label><input type="text" name="program" value="김영철의 파워FM"></div>
+    <div><label>프로그램</label><input type="text" name="program" value="김영철의 파워FM" list="onair-programs">
+      <datalist id="onair-programs">{% for t in programs %}<option value="{{ t }}">{% endfor %}</datalist></div>
     <div><label>방송일</label><input type="date" name="broadcast_date" value="{{ today }}"></div>
   </div>
   <div class="row3">
