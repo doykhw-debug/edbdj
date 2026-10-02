@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}퀴즈 자동 참여 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>고릴라 퀴즈 자동 참여</h1>
+<h1>고릴라 자동 참여 <span class="muted">퀴즈 · 사연 · 선물 정보</span></h1>
 
 <div class="panel">
   <h2>실행 상태
@@ -52,6 +52,9 @@
       <label class="inline"><input type="checkbox" name="auto_submit" value="1" {{ 'checked' if s.auto_submit }}> 확인 없이 자동 전송</label>
       <label class="inline">확신도 기준 <input type="number" name="min_confidence" value="{{ s.min_confidence }}" min="0" max="1" step="0.05" style="width:80px"></label>
       <label class="inline"><input type="checkbox" name="gorilla_confirmed" value="1" {{ 'checked' if s.gorilla_confirmed }}> 이 프로그램 퀴즈는 고릴라로 받음(확인함)</label>
+      <label class="inline"><input type="checkbox" name="story_enabled" value="1" {{ 'checked' if s.story_enabled }}> 사연·주제 모집 듣기</label>
+      <label class="inline"><input type="checkbox" name="story_auto_user_line" value="1" {{ 'checked' if s.story_auto_user_line }}> 직접 쓴 한 줄은 확인 없이 전송</label>
+      <label class="inline"><input type="checkbox" name="gift_enabled" value="1" {{ 'checked' if s.gift_enabled }}> 선물 정보 기록</label>
       <button class="secondary">저장</button>
       <button class="secondary" name="action" value="delete" onclick="return confirm('이 예약을 지울까요?')">삭제</button>
     </div>
@@ -76,13 +79,52 @@
       <label class="inline">확신도 기준 <input type="number" name="min_confidence" value="0.8" min="0" max="1" step="0.05" style="width:80px"></label>
       <label class="inline"><input type="checkbox" name="gorilla_confirmed" value="1"> 이 프로그램 퀴즈는 고릴라로 받음(확인함)</label>
     </div>
+    <div class="actions" style="margin-top:0">
+      <label class="inline"><input type="checkbox" name="story_enabled" value="1" checked> 사연·주제 모집 듣기 (내 실제 경험으로 공감로그 초안 → 확인 후 전송)</label>
+      <label class="inline"><input type="checkbox" name="story_auto_user_line" value="1"> 직접 쓴 한 줄은 확인 없이 전송</label>
+      <label class="inline"><input type="checkbox" name="gift_enabled" value="1" checked> 선물 정보 기록</label>
+    </div>
     <p class="muted">자동 전송은 ① 확신도가 기준 이상 ② 진행자가 고릴라로 받는다고 말했거나 위 '고릴라로 받음'을 체크 ③ 시간당 전송 상한 이내일 때만 합니다. 나머지는 아래 '확인 대기'에 남습니다.</p>
     <div class="actions"><button>예약 추가</button></div>
   </form>
 </div>
 
+<div class="panel" id="stories">
+  <h2>사연 확인 대기 <span class="muted">진행자가 주제를 주고 사연·메시지를 받을 때 · 확인 후 전송</span></h2>
+  {% if not confirmed_experiences %}
+    <div class="flash warn">'실제로 있었던 일'로 확인한 경험이 없어 사연 초안을 만들지 않습니다.
+      <a href="{{ url_for('experiences') }}">실제 경험</a>을 적거나 <a href="{{ url_for('import_page') }}">가져오기</a>를 하세요.</div>
+  {% endif %}
+  {% for p, warns in story_pending %}
+  <div style="border-bottom:1px solid var(--line);padding:10px 0">
+    <b>#{{ p.id }} {{ p.program }}</b> <span class="muted">{{ p.created_at }}</span>
+    {% if p.status == 'failed' %}<span class="badge bad">전송 실패</span>{% endif %}
+    <span class="badge {{ 'ok' if p.source == 'user_line' else 'info' }}">{{ {'ai': 'AI 초안', 'user_line': '직접 쓴 한 줄', 'edited': '고친 글', 'manual': '직접 씀'}.get(p.source, p.source) }}</span>
+    <p style="margin:6px 0"><b>주제</b>: {{ p.topic }}{% if p.deadline %} <span class="muted">· 마감 {{ p.deadline }}</span>{% endif %}
+      <span class="muted">· 고릴라 응모 {{ YES_NO.get(p.gorilla_accepted, p.gorilla_accepted) }}</span></p>
+    <p class="muted" style="margin:0">{% if p.experience_id %}사용한 경험: <a href="{{ url_for('experience_edit', eid=p.experience_id) }}">#{{ p.experience_id }} {{ p.exp_label or (p.exp_story or '')[:30] }}</a>{% endif %}
+      {% if p.note %} · {{ p.note }}{% endif %}</p>
+    {% if warns %}<ul class="list {{ 'bad' if warns|selectattr('level', 'equalto', 'block')|list else 'warn' }}">{% for w in warns %}<li>{{ w.message }}</li>{% endfor %}</ul>{% endif %}
+    {% if p.decision %}<p class="muted" style="margin:0">{{ p.decision }}</p>{% endif %}
+    <form method="post" action="{{ url_for('story_approve', pid=p.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <textarea name="message" maxlength="200" oninput="this.nextElementSibling.textContent = this.value.length + '/200자'" placeholder="공감로그에 보낼 글">{{ p.message }}</textarea>
+      <span class="muted">{{ p.message|length }}/200자</span>
+      <div class="actions"><button>이 글로 보내기</button></div>
+    </form>
+    <details><summary class="muted">판단에 쓴 녹취</summary><pre class="box">{{ p.excerpt or '' }}</pre></details>
+    <form method="post" action="{{ url_for('story_skip', pid=p.id) }}" style="margin-top:6px"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">보내지 않음</button></form>
+  </div>
+  {% else %}<p class="muted">없음</p>{% endfor %}
+  {% if story_recent %}
+    <details><summary class="muted">최근 처리한 사연 {{ story_recent|length }}건</summary>
+    {% for p in story_recent %}<div class="muted">#{{ p.id }} {{ p.program }} · {{ p.topic }} → {{ QUIZ_ENTRY.get(p.status, p.status) }} {{ p.sent_at or '' }}</div>{% endfor %}
+    </details>
+  {% endif %}
+</div>
+
 <div class="panel">
-  <h2>확인 대기 <span class="muted">자동 전송 조건을 못 채운 문제</span></h2>
+  <h2>퀴즈 확인 대기 <span class="muted">자동 전송 조건을 못 채운 문제</span></h2>
   {% for q in pending %}
   <div style="border-bottom:1px solid var(--line);padding:10px 0">
     <b>#{{ q.id }} {{ q.program }}</b> <span class="muted">{{ q.created_at }}</span>
@@ -126,7 +168,22 @@
 {% endfor %}</pre>{% else %}<p class="muted">아직 없음</p>{% endif %}
 </div>
 
+<div id="pendingbar" class="flash warn" style="display:none;position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:10;box-shadow:0 4px 12px #0003">
+  새로 확인할 글이 있습니다 — <a href="{{ url_for('quizbot') }}#stories">새로 고침</a></div>
 <script>
+(function () {
+  var base = null;
+  function poll() {
+    fetch('{{ url_for('quizbot_pending') }}').then(function (r) { return r.json(); }).then(function (d) {
+      var n = d.quizzes + d.stories;
+      if (base === null) base = n;
+      document.title = (n ? '(' + n + ') ' : '') + '퀴즈 자동 참여 · 라디오 참여 도우미';
+      if (n > base) document.getElementById('pendingbar').style.display = 'block';
+    }).catch(function () {});
+  }
+  poll();
+  setInterval(poll, 20000);
+})();
 function fillTimes() {
   var o = document.getElementById('prog').selectedOptions[0];
   if (!o) return;

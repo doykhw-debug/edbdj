@@ -22,6 +22,10 @@ DEFAULTS = {
     "quizbot.story_cooldown_seconds": "600",
     "quizbot.max_story_analyses_per_window": "4",
     "quizbot.max_story_sends_per_hour": "2",
+    # 선물 정보
+    "quizbot.gift_settle_seconds": "30",
+    "quizbot.gift_cooldown_seconds": "600",
+    "quizbot.max_gift_analyses_per_window": "4",
     # 분석 (Claude API)
     "quizbot.model": "claude-opus-5-5",
     "quizbot.effort": "medium",
@@ -57,6 +61,9 @@ LABELS = {
     "quizbot.story_cooldown_seconds": "사연 분석 간 최소 간격(초)",
     "quizbot.max_story_analyses_per_window": "예약 1회당 최대 사연 분석 횟수",
     "quizbot.max_story_sends_per_hour": "시간당 최대 사연 전송 수",
+    "quizbot.gift_settle_seconds": "선물 안내 신호 후 대기(초)",
+    "quizbot.gift_cooldown_seconds": "선물 분석 간 최소 간격(초)",
+    "quizbot.max_gift_analyses_per_window": "예약 1회당 최대 선물 분석 횟수",
     "quizbot.model": "Claude 모델",
     "quizbot.effort": "분석 노력 수준 (low/medium/high)",
     "gorilla.process_name": "고릴라 프로그램 이름 (자동 찾기로 채워짐)",

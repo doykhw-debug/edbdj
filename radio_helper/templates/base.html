@@ -19,8 +19,9 @@
     <a href="{{ url_for('experiences') }}" class="{{ 'on' if ep.startswith('experience') }}">실제 경험</a>
     <a href="{{ url_for('drafts') }}" class="{{ 'on' if ep.startswith('draft') }}">원고 검토함</a>
     <a href="{{ url_for('submissions') }}" class="{{ 'on' if ep.startswith('submission') }}">제출 이력</a>
-    <a href="{{ url_for('quizbot') }}" class="{{ 'on' if ep.startswith('quizbot') or ep == 'gorilla' }}">퀴즈 자동</a>
+    <a href="{{ url_for('quizbot') }}" class="{{ 'on' if ep.startswith('quizbot') or ep.startswith('story') or ep == 'gorilla' }}">고릴라 자동</a>
     <a href="{{ url_for('quizzes') }}" class="{{ 'on' if ep in ('quizzes', 'quiz_new', 'quiz_update') }}">퀴즈 기록</a>
+    <a href="{{ url_for('gifts') }}" class="{{ 'on' if ep == 'gifts' }}">선물 기록</a>
     <a href="{{ url_for('settings') }}" class="{{ 'on' if ep == 'settings' }}">설정·일괄 중지</a>
   </nav>
 </header>

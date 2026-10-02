@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}가져오기 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>특징·경험 가져오기</h1>
+<form method="post" enctype="multipart/form-data" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <p>Claude와의 대화에서 받은 <b>가져오기 파일(.json)</b>을 고르거나, 내용을 아래 칸에 그대로 붙여 넣으세요.</p>
+  <label>파일</label>
+  <input type="file" name="file" accept=".json,application/json,text/plain">
+  <label>또는 내용 붙여넣기</label>
+  <textarea name="text" class="mono tall" placeholder='{"profile": {...}, "experiences": [...]}'></textarea>
+  <label class="inline"><input type="checkbox" name="overwrite" value="1"> 이미 적힌 기본 정보도 바꾸기 (체크하지 않으면 비어 있는 칸만 채움)</label>
+  <ul class="list muted">
+    <li>가져온 경험은 <b>'실제로 있었던 일' 확인이 꺼진 상태</b>로 들어갑니다. 실제 경험 화면에서 하나씩 읽고 체크해야 사연·원고에 쓰입니다.</li>
+    <li>같은 내용의 경험은 다시 넣지 않습니다.</li>
+    <li>실명·회사명·연락처는 파일에 넣지 말고, 기본 정보의 '본문에 나오면 안 되는 단어'에 직접 적으세요.</li>
+  </ul>
+  <div class="actions"><button>가져오기</button></div>
+</form>
+<div class="panel">
+  <h2>파일 형식</h2>
+  <p class="muted">필요한 항목만 있으면 됩니다. 경험은 'story'(있었던 일)만 꼭 있으면 됩니다.</p>
+  <pre class="box">{{ template }}</pre>
+</div>
+{% endblock %}

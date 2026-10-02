@@ -68,7 +68,7 @@ def message_checks(conn: sqlite3.Connection, message: str, exp, source: str, add
         found.append({"level": "block", "message": f"{len(message)}자로 공감로그 제한({STORY_LIMIT}자)을 넘습니다."})
     for f in checks.check_personal_info(message, banned_terms(conn, exp)):
         found.append({"level": f.level, "message": f.message})
-    if exp is not None and source != "user_line":
+    if exp is not None and source not in ("user_line", "manual"):
         src = checks.experience_source_text(exp) + "\n" + (exp["gorilla_line"] or "")
         for f in (checks.check_sensitive_additions(message, src) + checks.check_numbers(message, src)
                   + checks.check_quotes(message, exp["quotes"], exp["quote_kind"])):
@@ -76,7 +76,8 @@ def message_checks(conn: sqlite3.Connection, message: str, exp, source: str, add
     if added_facts:
         found.append({"level": "warn", "message": "AI가 경험에 없는 내용을 넣었다고 표시함: " + " / ".join(added_facts)[:200]})
     if exp is None:
-        found.append({"level": "block", "message": "연결된 실제 경험이 없습니다."})
+        if source != "manual":
+            found.append({"level": "block", "message": "연결된 실제 경험이 없습니다. 직접 써서 보낼 수 있습니다."})
     elif not exp["user_confirmed"]:
         found.append({"level": "block", "message": "'실제로 있었던 일'로 확인되지 않은 경험입니다."})
     return found

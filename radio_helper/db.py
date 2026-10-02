@@ -178,6 +178,26 @@ CREATE TABLE IF NOT EXISTS story_posts (
     updated_at       TEXT NOT NULL
 );
 
+-- 방송에서 들은 선물(경품) 정보와 받는 조건. 채널·프로그램별로 모아 본다.
+CREATE TABLE IF NOT EXISTS gift_events (
+    id             INTEGER PRIMARY KEY,
+    channel        TEXT NOT NULL,
+    program        TEXT NOT NULL,
+    broadcast_date TEXT NOT NULL,
+    heard_at       TEXT NOT NULL,
+    gift           TEXT NOT NULL,
+    condition      TEXT,      -- 받는 조건 (예: 퀴즈 정답자 중 추첨, 사연 채택)
+    entry_method   TEXT,      -- 참여 방법 (고릴라 공감로그 / 문자 #1077 / 홈페이지 등)
+    related        TEXT,      -- quiz / story / event / other
+    deadline       TEXT,
+    winners        TEXT,      -- 당첨 인원
+    announce       TEXT,      -- 발표·연락 방법
+    excerpt        TEXT,
+    repeat_count   INTEGER NOT NULL DEFAULT 1,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
 -- 방송 음성 인식 결과 (오디오 자체는 저장하지 않는다)
 CREATE TABLE IF NOT EXISTS transcripts (
     id             INTEGER PRIMARY KEY,
@@ -251,6 +271,7 @@ _ADDED_COLUMNS = {
     "quiz_schedules": [
         ("story_enabled", "INTEGER NOT NULL DEFAULT 1"),         # 사연·주제 모집도 듣기
         ("story_auto_user_line", "INTEGER NOT NULL DEFAULT 0"),  # 직접 쓴 한 줄은 확인 없이 전송
+        ("gift_enabled", "INTEGER NOT NULL DEFAULT 1"),          # 선물 정보도 기록
     ],
     "quizzes": [
         ("source", "TEXT NOT NULL DEFAULT 'manual'"),   # manual / auto

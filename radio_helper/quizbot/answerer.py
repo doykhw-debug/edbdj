@@ -174,6 +174,52 @@ class StoryAnalysis:
         return a
 
 
+# ── 선물(경품) 안내 ───────────────────────────────────────────────────
+GIFT_FIELDS = ["gift", "condition", "entry_method", "related", "deadline", "winners", "announce"]
+GIFT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "gifts": {
+            "type": "array",
+            "description": "녹취에서 진행자가 안내한 선물·경품. 없으면 빈 배열",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "gift": {"type": "string", "description": "선물 이름 (예: 커피 기프티콘, 영화 예매권 2매)"},
+                    "condition": {"type": "string", "description": "받는 조건 (예: 퀴즈 정답자 중 추첨 3명)"},
+                    "entry_method": {"type": "string", "description": "참여 방법 (고릴라 공감로그, 문자 #1077, 홈페이지 등)"},
+                    "related": {"type": "string", "enum": ["quiz", "story", "event", "other"]},
+                    "deadline": {"type": "string"},
+                    "winners": {"type": "string"},
+                    "announce": {"type": "string", "description": "발표·연락 방법"},
+                },
+                "required": GIFT_FIELDS,
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["gifts"],
+    "additionalProperties": False,
+}
+
+GIFT_SYSTEM = """당신은 SBS 라디오 녹취(음성 인식 결과, 오류 있을 수 있음)에서 진행자가 청취자에게 안내한 선물·경품 정보를 정리합니다.
+- 실제로 청취자에게 주는 선물·경품만 적습니다. 노래 가사, 광고 속 상품 소개, 사연 속 '선물' 이야기는 빼세요.
+- 선물마다 받는 조건, 참여 방법, 관련 참여 종류(quiz 퀴즈 / story 사연·주제 / event 기타 이벤트 / other), 마감, 당첨 인원, 발표 방법을 적습니다.
+- 녹취에 없는 내용은 빈 문자열로 둡니다. 지어내지 않습니다."""
+
+
+def parse_gifts(text: str) -> list[dict]:
+    data = json.loads(text)
+    out = []
+    for g in data.get("gifts") or []:
+        item = {k: str(g.get(k) or "").strip() for k in GIFT_FIELDS}
+        if item["related"] not in ("quiz", "story", "event", "other"):
+            item["related"] = "other"
+        if item["gift"]:
+            out.append(item)
+    return out
+
+
 class AnswererError(RuntimeError):
     pass
 
@@ -241,6 +287,13 @@ class ClaudeAnswerer:
         text = self._call(SYSTEM, build_user_message(program, transcript, known), SCHEMA)
         try:
             return QuizAnalysis.from_json(text)
+        except (ValueError, TypeError, AttributeError) as e:
+            raise AnswererError(f"분석 결과를 읽지 못했습니다: {e}")
+
+    def analyze_gifts(self, program: str, transcript: str) -> list[dict]:
+        text = self._call(GIFT_SYSTEM, f"프로그램: {program}\n\n최근 방송 녹취:\n{transcript}", GIFT_SCHEMA)
+        try:
+            return parse_gifts(text)
         except (ValueError, TypeError, AttributeError) as e:
             raise AnswererError(f"분석 결과를 읽지 못했습니다: {e}")
 

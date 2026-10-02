@@ -54,6 +54,8 @@
       <input type="text" name="prior_history" value="{{ e.prior_history or '' }}" placeholder="없으면 비워 두기">
     </div>
   </div>
+  <label>공감로그용 한 줄 <span class="hint">(선택, 직접 쓴 문장 200자 이내) — 방송 주제에 맞으면 이 문장을 그대로 씁니다. 예약에서 허용하면 확인 없이 보낼 수도 있습니다.</span></label>
+  <textarea name="gorilla_line" maxlength="200" style="min-height:60px">{{ e.gorilla_line or '' }}</textarea>
   <label class="inline" style="margin-top:14px"><input type="checkbox" name="user_confirmed" value="1" {{ 'checked' if e.user_confirmed }}>
     <b>위 내용은 실제로 있었던 일입니다.</b> <span class="hint">(체크하지 않으면 원고를 제출 대상으로 쓸 수 없습니다)</span></label>
   <div class="actions"><button>저장</button></div>

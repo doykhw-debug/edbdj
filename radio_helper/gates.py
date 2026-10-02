@@ -137,6 +137,9 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
         result.blockers.append(
             f"같은 경험이 이미 제출 이력 #{s['id']} ({s['corner_title']}, {STATUS_LABELS.get(s['post_status'], s['post_status'])})에 있습니다. "
             "한 경험은 한 곳에만 보내고, 결과 불명이면 다시 보내지 않습니다.")
+    for sp in conn.execute("SELECT id, program FROM story_posts WHERE experience_id = ? "
+                           "AND status IN ('entered','posted','unknown')", (draft["experience_id"],)):
+        result.blockers.append(f"같은 경험을 고릴라 공감로그 사연 #{sp['id']} ({sp['program']})로 이미 보냈습니다.")
     result.blockers += [f.message for f in findings if f.level == checks.BLOCK]
     result.warnings += [f.message for f in findings if f.level == checks.WARN]
     return result

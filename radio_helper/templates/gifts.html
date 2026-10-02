@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}선물 기록 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>선물 기록 <span class="muted">방송에서 들은 선물과 받는 조건 · 채널·프로그램별</span></h1>
+<p class="muted">예약 시간에 '선물·경품·기프티콘·추첨·당첨' 같은 말이 들리면 그 부분을 분석해 선물 이름, 받는 조건, 참여 방법, 마감, 당첨 인원, 발표 방법을 기록합니다.
+같은 날 같은 선물을 다시 안내하면 한 줄로 묶고 빠진 정보만 채웁니다. 예약에서 '선물 정보 기록'을 켜야 합니다.</p>
+<form method="get" class="actions" style="margin-bottom:12px">
+  <select name="channel" style="max-width:200px" onchange="this.form.submit()">
+    <option value="">전체 채널</option>
+    {% for ch in channels %}<option value="{{ ch }}" {{ 'selected' if ch == channel }}>{{ ch }}</option>{% endfor %}
+  </select>
+  <select name="program" style="max-width:320px" onchange="this.form.submit()">
+    <option value="">전체 프로그램</option>
+    {% for p in programs %}<option value="{{ p }}" {{ 'selected' if p == program }}>{{ p }}</option>{% endfor %}
+  </select>
+  <noscript><button class="secondary">보기</button></noscript>
+</form>
+{% for (ch, prog), rows in groups.items() %}
+<div class="panel table-wrap">
+  <h2>{{ ch }} · {{ prog }} <span class="muted">{{ rows|length }}건</span></h2>
+  <table>
+    <tr><th>날짜</th><th>선물</th><th>받는 조건</th><th>참여 방법</th><th>마감·인원·발표</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td style="white-space:nowrap">{{ r.broadcast_date }}<br><span class="muted">{{ r.heard_at[11:16] }}{% if r.repeat_count > 1 %} · {{ r.repeat_count }}회 안내{% endif %}</span></td>
+      <td><b>{{ r.gift }}</b><br><span class="badge">{{ {'quiz': '퀴즈', 'story': '사연', 'event': '이벤트', 'other': '기타'}.get(r.related, r.related) }}</span></td>
+      <td>{{ r.condition or '' }}</td>
+      <td>{{ r.entry_method or '' }}</td>
+      <td class="muted">{% if r.deadline %}마감 {{ r.deadline }}<br>{% endif %}{% if r.winners %}{{ r.winners }}<br>{% endif %}{{ r.announce or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<div class="panel muted">아직 기록된 선물이 없습니다.</div>
+{% endfor %}
+{% endblock %}

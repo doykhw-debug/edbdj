@@ -21,7 +21,7 @@ from .. import db, quiz
 from . import config, story
 from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
 from .audio import rms
-from .detector import Detector, TranscriptBuffer, is_story_signal
+from .detector import Detector, TranscriptBuffer, is_gift_signal, is_story_signal
 from .schedule import Window, active_window, next_window
 
 SILENCE_RMS = 0.002
@@ -40,6 +40,7 @@ class Transcriber(Protocol):
 class Answerer(Protocol):
     def analyze(self, program: str, transcript: str, known: list[tuple[int, str]]) -> QuizAnalysis: ...
     def analyze_story(self, program: str, transcript: str, profile: dict, experiences: list[dict]) -> StoryAnalysis: ...
+    def analyze_gifts(self, program: str, transcript: str) -> list[dict]: ...
 
 
 class Sender(Protocol):
@@ -117,6 +118,7 @@ class Runner:
     deps: Deps
     analyses: int = 0
     story_analyses: int = 0
+    gift_analyses: int = 0
 
     def state(self, text: str) -> None:
         db.set_setting(self.conn, "quizbot.state", text)
@@ -127,7 +129,7 @@ class Runner:
 
     def schedules(self):
         return self.conn.execute(
-            "SELECT s.*, p.title AS program FROM quiz_schedules s JOIN programs p ON p.id = s.program_id").fetchall()
+            "SELECT s.*, p.title AS program, p.channel AS channel FROM quiz_schedules s JOIN programs p ON p.id = s.program_id").fetchall()
 
     def run_forever(self, idle_seconds: int = 20) -> None:
         self.state("시작함")
@@ -153,7 +155,7 @@ class Runner:
 
     def run_window(self, w: Window) -> None:
         schedule = self.conn.execute(
-            "SELECT s.*, p.title AS program FROM quiz_schedules s JOIN programs p ON p.id = s.program_id "
+            "SELECT s.*, p.title AS program, p.channel AS channel FROM quiz_schedules s JOIN programs p ON p.id = s.program_id "
             "WHERE s.id = ?", (w.schedule_id,)).fetchone()
         program = schedule["program"]
         # 고릴라가 켜질 때까지 기다린다
@@ -175,6 +177,11 @@ class Runner:
                                   signal=is_story_signal) if schedule["story_enabled"] else None
         max_story = config.get_int(self.conn, "quizbot.max_story_analyses_per_window")
         self.story_analyses = 0
+        gift_detector = Detector(settle_seconds=config.get_int(self.conn, "quizbot.gift_settle_seconds"),
+                                 cooldown_seconds=config.get_int(self.conn, "quizbot.gift_cooldown_seconds"),
+                                 signal=is_gift_signal) if schedule["gift_enabled"] else None
+        max_gift = config.get_int(self.conn, "quizbot.max_gift_analyses_per_window")
+        self.gift_analyses = 0
         silent = 0
         db.log(self.conn, "quizbot", f"{program} 예약 시작 ({w.start:%H:%M}~{w.end:%H:%M})")
         with self.deps.recorder_factory(chunk_seconds) as recorder:
@@ -197,6 +204,12 @@ class Runner:
                     detector.feed(now, text)
                     if story_detector is not None:
                         story_detector.feed(now, text)
+                    if gift_detector is not None:
+                        gift_detector.feed(now, text)
+                if gift_detector is not None and gift_detector.is_due(now):
+                    gift_detector.mark_analyzed(now)
+                    if self.gift_analyses < max_gift:
+                        self.analyze_gifts(schedule, w, buffer.window(now, config.get_int(self.conn, "quizbot.context_seconds")))
                 if story_detector is not None and story_detector.is_due(now):
                     story_detector.mark_analyzed(now)
                     if self.story_analyses < max_story:
@@ -278,7 +291,7 @@ class Runner:
         if schedule is not None and schedule["id"] == schedule_id:
             return schedule
         return self.conn.execute(
-            "SELECT s.*, p.title AS program FROM quiz_schedules s JOIN programs p ON p.id = s.program_id "
+            "SELECT s.*, p.title AS program, p.channel AS channel FROM quiz_schedules s JOIN programs p ON p.id = s.program_id "
             "WHERE s.id = ?", (schedule_id,)).fetchone()
 
     def process_approved(self, schedule) -> None:
@@ -298,6 +311,49 @@ class Runner:
             self.try_send(r["id"], self._schedule(schedule, r["schedule_id"]))
         for r in stories:
             self.try_send_story(r["id"], self._schedule(schedule, r["schedule_id"]))
+
+    # ── 선물 정보 ────────────────────────────────────────────────
+    def analyze_gifts(self, schedule, w: Window, transcript: str) -> list[int]:
+        program = schedule["program"]
+        self.gift_analyses += 1
+        try:
+            gifts = self.deps.answerer.analyze_gifts(program, transcript)
+        except Exception as e:
+            db.log(self.conn, "quizbot", f"{program} 선물 분석 실패: {str(e)[:120]}")
+            return []
+        ids = []
+        for g in gifts:
+            ids.append(self.record_gift(schedule, w, g, transcript))
+        return ids
+
+    def record_gift(self, schedule, w: Window, g: dict, transcript: str) -> int:
+        existing = self.conn.execute("SELECT * FROM gift_events WHERE program = ? AND broadcast_date = ?",
+                                     (schedule["program"], w.broadcast_date)).fetchall()
+        target = quiz.normalize_question(g["gift"])
+        for r in existing:
+            other = quiz.normalize_question(r["gift"])
+            if other and (target in other or other in target or SequenceMatcher(None, target, other).ratio() >= 0.7):
+                # 같은 선물을 다시 안내 → 빈 칸만 채우고 횟수 올림
+                fills = {k: g[k] for k in ("condition", "entry_method", "deadline", "winners", "announce")
+                         if g.get(k) and not r[k]}
+                sets = ", ".join(f"{k} = ?" for k in fills)
+                self.conn.execute(f"UPDATE gift_events SET repeat_count = repeat_count + 1, "
+                                  f"{sets + ', ' if sets else ''}updated_at = ? WHERE id = ?",
+                                  (*fills.values(), db.now(), r["id"]))
+                self.conn.commit()
+                return r["id"]
+        cur = self.conn.execute(
+            """INSERT INTO gift_events (channel, program, broadcast_date, heard_at, gift, condition, entry_method, related,
+                   deadline, winners, announce, excerpt, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (schedule["channel"] or "파워FM", schedule["program"], w.broadcast_date,
+             self.deps.now().strftime("%Y-%m-%d %H:%M:%S"), g["gift"], g["condition"] or None,
+             g["entry_method"] or None, g["related"], g["deadline"] or None, g["winners"] or None,
+             g["announce"] or None, transcript[-1500:], db.now(), db.now()))
+        self.conn.commit()
+        db.log(self.conn, "quizbot", f"{schedule['program']} 선물 기록 #{cur.lastrowid}: {g['gift'][:30]}"
+                                     + (f" — {g['condition'][:40]}" if g["condition"] else ""))
+        return cur.lastrowid
 
     # ── 사연·주제 모집 ───────────────────────────────────────────
     def analyze_story(self, schedule, w: Window, transcript: str) -> int | None:

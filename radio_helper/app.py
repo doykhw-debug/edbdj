@@ -207,13 +207,15 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     # ── 실제 경험 ─────────────────────────────────────────────────
     EXP_FIELDS = ["label", "when_text", "people", "story", "quotes", "quote_kind", "highlight", "ending",
-                  "fixed_facts", "hide", "song", "prior_history"]
+                  "fixed_facts", "hide", "song", "prior_history", "gorilla_line"]
 
     @app.get("/experiences")
     def experiences():
         rows = g.conn.execute(
             """SELECT e.*, (SELECT COUNT(*) FROM submissions s WHERE s.experience_id = e.id
-                            AND s.post_status IN ('filled','posted','unknown')) AS used
+                            AND s.post_status IN ('filled','posted','unknown'))
+                         + (SELECT COUNT(*) FROM story_posts sp WHERE sp.experience_id = e.id
+                            AND sp.status IN ('entered','posted','unknown')) AS used
                FROM experiences e ORDER BY e.id DESC""").fetchall()
         return render_template("experiences.html", rows=rows)
 
@@ -512,6 +514,12 @@ def create_app(data_dir: str | None = None) -> Flask:
                             "ORDER BY id DESC LIMIT 20").fetchall()
         recent = c.execute("SELECT * FROM quizzes WHERE source = 'auto' AND entry_status NOT IN ('pending', 'failed') "
                            "ORDER BY id DESC LIMIT 20").fetchall()
+        story_pending = c.execute(
+            """SELECT sp.*, e.label AS exp_label, e.story AS exp_story FROM story_posts sp
+               LEFT JOIN experiences e ON e.id = sp.experience_id
+               WHERE sp.status IN ('pending', 'failed') ORDER BY sp.id DESC LIMIT 20""").fetchall()
+        story_recent = c.execute("SELECT * FROM story_posts WHERE status NOT IN ('pending', 'failed') "
+                                 "ORDER BY id DESC LIMIT 10").fetchall()
         lines = c.execute("SELECT * FROM transcripts ORDER BY id DESC LIMIT 30").fetchall()
         programs_ = c.execute("SELECT id, title, start_time, end_time FROM programs WHERE on_air = 1 "
                               "ORDER BY start_time").fetchall()
@@ -520,6 +528,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             alive=qconfig.runner_alive(c), state=db.get_setting(c, "quizbot.state"),
             heartbeat=db.get_setting(c, "quizbot.heartbeat"), check=check, has_key=bool(get_api_key()),
             pending=pending, recent=recent, lines=list(reversed(lines)), programs=programs_,
+            story_pending=[(p, json.loads(p["warnings"] or "[]")) for p in story_pending], story_recent=story_recent,
+            confirmed_experiences=c.execute("SELECT COUNT(*) FROM experiences WHERE user_confirmed = 1").fetchone()[0],
             days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
             autostart=qconfig.get(c, "quizbot.autostart") == "1")
 
@@ -574,9 +584,12 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("quizbot"))
         g.conn.execute(
             """INSERT INTO quiz_schedules (program_id, days, start_time, end_time, auto_submit, min_confidence,
-                   gorilla_confirmed, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                   gorilla_confirmed, story_enabled, story_auto_user_line, gift_enabled, enabled, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
             (prog["id"], days, start, end, 1 if request.form.get("auto_submit") else 0,
-             _confidence(form("min_confidence")), 1 if request.form.get("gorilla_confirmed") else 0, db.now(), db.now()))
+             _confidence(form("min_confidence")), 1 if request.form.get("gorilla_confirmed") else 0,
+             1 if request.form.get("story_enabled") else 0, 1 if request.form.get("story_auto_user_line") else 0,
+             1 if request.form.get("gift_enabled") else 0, db.now(), db.now()))
         g.conn.commit()
         db.log(g.conn, "quizbot", f"예약 추가: {prog['title']} {qschedule.days_label(days)} {start}~{end}")
         flash(f"{prog['title']} 예약을 추가했습니다.")
@@ -592,10 +605,12 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("quizbot"))
         g.conn.execute(
             """UPDATE quiz_schedules SET enabled = ?, auto_submit = ?, min_confidence = ?, gorilla_confirmed = ?,
-                   updated_at = ? WHERE id = ?""",
+                   story_enabled = ?, story_auto_user_line = ?, gift_enabled = ?, updated_at = ? WHERE id = ?""",
             (1 if request.form.get("enabled") else 0, 1 if request.form.get("auto_submit") else 0,
              _confidence(form("min_confidence"), sch["min_confidence"]),
-             1 if request.form.get("gorilla_confirmed") else 0, db.now(), sid))
+             1 if request.form.get("gorilla_confirmed") else 0, 1 if request.form.get("story_enabled") else 0,
+             1 if request.form.get("story_auto_user_line") else 0, 1 if request.form.get("gift_enabled") else 0,
+             db.now(), sid))
         g.conn.commit()
         flash("예약을 저장했습니다.")
         return redirect(url_for("quizbot"))
@@ -630,6 +645,106 @@ def create_app(data_dir: str | None = None) -> Flask:
         g.conn.commit()
         flash(f"퀴즈 #{qid}은(는) 보내지 않습니다.")
         return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/stories/<int:pid>/approve")
+    def story_approve(pid):
+        from .quizbot import story
+
+        post = one("SELECT * FROM story_posts WHERE id = ?", pid)
+        if post["status"] not in ("pending", "failed"):
+            flash("이미 보냈거나 결과 불명인 글은 다시 보내지 않습니다.", "error")
+            return redirect(url_for("quizbot"))
+        message = (request.form.get("message") or "").strip()
+        exp = g.conn.execute("SELECT * FROM experiences WHERE id = ?", (post["experience_id"],)).fetchone() \
+            if post["experience_id"] else None
+        if exp is None:
+            source = "manual"          # 맞는 경험이 없어 사용자가 직접 쓴 글
+        elif message == (exp["gorilla_line"] or "").strip():
+            source = "user_line"
+        else:
+            source = "ai" if message == post["message"] else "edited"
+        warnings = story.message_checks(g.conn, message, exp, source)
+        g.conn.execute("UPDATE story_posts SET message = ?, source = ?, warnings = ?, updated_at = ? WHERE id = ?",
+                       (message, source, json.dumps(warnings, ensure_ascii=False), db.now(), pid))
+        if story.has_block(warnings):
+            g.conn.commit()
+            for w in warnings:
+                if w["level"] == "block":
+                    flash(w["message"], "error")
+            flash("위 문제를 고친 뒤 다시 보내기를 누르세요.", "error")
+            return redirect(url_for("quizbot"))
+        g.conn.execute("UPDATE story_posts SET approved = 1, status = 'pending', decision = ?, updated_at = ? "
+                       "WHERE id = ?", ("승인됨 — 실행기가 곧 보냄", db.now(), pid))
+        g.conn.commit()
+        db.log(g.conn, "quizbot", f"사연 #{pid} 보내기 승인 (사용자)")
+        flash("승인했습니다. 실행기가 고릴라로 보냅니다." if qconfig.runner_alive(g.conn)
+              else "승인했습니다. 퀴즈 자동 참여가 꺼져 있어 '시작'을 눌러야 보내집니다.",
+              "message" if qconfig.runner_alive(g.conn) else "warn")
+        return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/stories/<int:pid>/skip")
+    def story_skip(pid):
+        one("SELECT id FROM story_posts WHERE id = ?", pid)
+        g.conn.execute("UPDATE story_posts SET status = 'skipped', approved = 0, updated_at = ? "
+                       "WHERE id = ? AND status IN ('pending', 'failed')", (db.now(), pid))
+        g.conn.commit()
+        flash(f"사연 #{pid}은(는) 보내지 않습니다.")
+        return redirect(url_for("quizbot"))
+
+    @app.get("/quizbot/pending.json")
+    def quizbot_pending():
+        c = g.conn
+        quizzes_n = c.execute("SELECT COUNT(*) FROM quizzes WHERE source = 'auto' AND entry_status = 'pending' "
+                              "AND approved = 0").fetchone()[0]
+        stories_n = c.execute("SELECT COUNT(*) FROM story_posts WHERE status = 'pending' AND approved = 0").fetchone()[0]
+        return {"quizzes": quizzes_n, "stories": stories_n, "state": db.get_setting(c, "quizbot.state")}
+
+    @app.get("/gifts")
+    def gifts():
+        channel, program = request.args.get("channel", ""), request.args.get("program", "")
+        where, params = [], []
+        if channel:
+            where.append("channel = ?")
+            params.append(channel)
+        if program:
+            where.append("program = ?")
+            params.append(program)
+        rows = g.conn.execute(
+            "SELECT * FROM gift_events" + (" WHERE " + " AND ".join(where) if where else "")
+            + " ORDER BY channel, program, broadcast_date DESC, id DESC LIMIT 300", params).fetchall()
+        groups: dict[tuple[str, str], list] = {}
+        for r in rows:
+            groups.setdefault((r["channel"], r["program"]), []).append(r)
+        channels = [r[0] for r in g.conn.execute("SELECT DISTINCT channel FROM gift_events ORDER BY channel")]
+        programs_ = [r[0] for r in g.conn.execute("SELECT DISTINCT program FROM gift_events ORDER BY program")]
+        return render_template("gifts.html", groups=groups, channels=channels, programs=programs_,
+                               channel=channel, program=program, total=len(rows))
+
+    @app.route("/import", methods=["GET", "POST"])
+    def import_page():
+        from . import importer
+
+        if request.method == "POST":
+            upload = request.files.get("file")
+            text = upload.read().decode("utf-8", errors="replace") if upload and upload.filename else \
+                request.form.get("text", "")
+            if not text.strip():
+                flash("가져올 파일을 고르거나 내용을 붙여 넣으세요.", "error")
+                return redirect(url_for("import_page"))
+            try:
+                report = importer.import_data(g.conn, importer.parse(text),
+                                              overwrite_profile=bool(request.form.get("overwrite")))
+            except importer.ImportError_ as e:
+                flash(str(e), "error")
+                return redirect(url_for("import_page"))
+            flash("가져왔습니다: " + report.summary())
+            for note in report.notes:
+                flash(note, "warn")
+            if report.added:
+                flash("가져온 경험은 '실제로 있었던 일' 확인이 꺼져 있습니다. 실제 경험 화면에서 하나씩 읽고 체크해 주세요.", "warn")
+            return redirect(url_for("experiences"))
+        return render_template("import.html",
+                               template=json.dumps(importer.TEMPLATE, ensure_ascii=False, indent=2))
 
     @app.post("/quizbot/tool")
     def quizbot_tool():

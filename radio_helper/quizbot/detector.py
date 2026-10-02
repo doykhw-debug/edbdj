@@ -75,3 +75,12 @@ class Detector:
     def mark_analyzed(self, now: datetime) -> None:
         self.last_analysis = now
         self.due_at = None
+
+
+# 선물·경품 안내. 노래 가사의 '선물' 등은 분석 단계에서 걸러진다.
+GIFT_SIGNALS = [r"선물", r"경품", r"기프티콘", r"쿠폰", r"상품권", r"추첨", r"증정", r"당첨"]
+_GIFT_SIGNALS = [re.compile(p) for p in GIFT_SIGNALS]
+
+
+def is_gift_signal(text: str) -> bool:
+    return any(p.search(text) for p in _GIFT_SIGNALS)
