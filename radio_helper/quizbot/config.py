@@ -12,6 +12,7 @@ DEFAULTS = {
     # 녹음·인식
     "quizbot.chunk_seconds": "10",
     "quizbot.whisper_model": "small",
+    "quizbot.whisper_device": "cpu",      # cpu 권장. 그래픽카드(cuda)는 CUDA 라이브러리가 없으면 실행기가 말없이 꺼진다
     "quizbot.context_seconds": "180",     # 분석에 넘기는 최근 녹취 길이
     "quizbot.settle_seconds": "40",       # 퀴즈 신호 뒤 문제를 끝까지 듣고 분석하기까지 기다리는 시간
     "quizbot.cooldown_seconds": "60",
@@ -55,11 +56,13 @@ DEFAULTS = {
     "gorilla.send_x": "",
     "gorilla.send_y": "",
     "gorilla.message_template": "{answer}",
+    "gorilla.test_message": "파워 FM 화이팅",   # '전송 테스트'로 실제로 보내 보는 글
 }
 
 LABELS = {
     "quizbot.chunk_seconds": "녹음 단위(초)",
     "quizbot.whisper_model": "음성 인식 모델 (tiny/base/small/medium)",
+    "quizbot.whisper_device": "음성 인식 장치 (cpu 권장 / cuda)",
     "quizbot.context_seconds": "분석에 쓰는 최근 녹취(초)",
     "quizbot.settle_seconds": "퀴즈 신호 후 대기(초)",
     "quizbot.cooldown_seconds": "분석 간 최소 간격(초)",
@@ -82,6 +85,7 @@ LABELS = {
     "gorilla.send_mode": "전송 방법 (auto/button/enter/coords)",
     "gorilla.send_button_name": "전송 버튼 이름(정규식)",
     "gorilla.message_template": "보낼 문구 ({answer} 자리에 정답)",
+    "gorilla.test_message": "전송 테스트로 실제로 보낼 글",
 }
 
 

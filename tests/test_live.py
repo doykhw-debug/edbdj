@@ -1,5 +1,6 @@
 """'청취 시작' 한 번으로 듣기 · 자막 · 관리 화면."""
 
+import json
 from datetime import datetime, timedelta
 
 from conftest import csrf, make_experience
@@ -49,7 +50,11 @@ def test_view_model_status(conn):
     stamp = now.strftime("%Y-%m-%d %H:%M:%S")
     assert live.view_model(conn, now)["status"] == "off"
     db.set_setting(conn, "live.active", "1")
+    assert live.view_model(conn, now)["status"] == "stalled"      # 켜 두었는데 실행기를 띄운 적 없음
+    db.set_setting(conn, "quizbot.launched_at", stamp)
     assert live.view_model(conn, now)["status"] == "launching"
+    # 띄운 지 한참 지났는데 신호가 없으면 응답 없음
+    assert live.view_model(conn, now + timedelta(seconds=120))["status_text"] == "응답 없음"
     db.set_setting(conn, "quizbot.state", "음성 인식 준비 중")
     db.set_setting(conn, "quizbot.heartbeat", stamp)
     assert live.view_model(conn, now)["status"] == "starting"
@@ -63,6 +68,16 @@ def test_view_model_status(conn):
     assert vm["lines"][-1]["keywords"] == ["퀴즈"] and vm["program"]
     # 소리 신호가 끊긴 지 오래면 수집 중이 아니다
     assert live.view_model(conn, now + timedelta(seconds=30))["status"] != "collecting"
+
+
+def test_chunk_text_and_stt_test_stuck(conn):
+    assert live.chunk_text(None) == ""
+    assert live.chunk_text({"at": "00:22:10", "level": 41, "seconds": 2.3, "text": ""}) == \
+        "마지막 녹음 00:22:10 · 소리 41/100 · 받아쓰기 2.3초 → 말소리 없음"
+    assert live.chunk_text({"at": "00:22:20", "level": 41, "seconds": 2.0, "text": "안녕하세요"}).endswith("'안녕하세요'")
+    old = (datetime.now() - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    db.set_setting(conn, "quizbot.stt_test", json.dumps({"at": old, "running": True, "phase": "받아쓰는 중", "steps": []}))
+    assert live.view_model(conn)["stt_test"]["stuck"] is True
 
 
 def test_caption_lines():
@@ -124,8 +139,13 @@ def test_live_listens_any_channel_and_sends_quiz(conn):
     assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 12
     assert recorders[0].on_level == r.report_level  # 녹음 중 소리 크기를 화면에 알린다
     assert db.get_setting(conn, "quizbot.level_at")
+    chunk = json.loads(db.get_setting(conn, "quizbot.last_chunk"))   # '마지막 녹음' 줄 (말소리가 없어도 갱신)
+    assert chunk["text"] == "음악이 흐릅니다" and chunk["level"] > 0
+    r.report_level(50)
+    assert db.get_setting(conn, "quizbot.heartbeat") == db.get_setting(conn, "quizbot.level_at")
     messages = [e["message"] for e in conn.execute("SELECT message FROM events")]
     assert "청취 시작 — 러브FM" in messages and "청취 멈춤" in messages
+    assert any(m.startswith("첫 받아쓰기") for m in messages)
 
 
 def test_reannouncement_across_the_hour_is_not_sent_again(conn):
@@ -288,3 +308,107 @@ def test_quiz_result_only_touches_result_fields(client, conn):
     q = conn.execute("SELECT * FROM quizzes WHERE id = 1").fetchone()
     assert (q["answer_accepted"], q["won"], q["question"], q["answer"]) == ("yes", "no", "문제", "사과")
     assert client.post("/quizzes/1/result", data={"csrf_token": token, "won": "maybe"}).status_code == 400
+
+
+# ── 받아쓰기 테스트 · 전송 테스트 · 응답 없음 ────────────────────────
+class FakeLoopback:
+    def __init__(self, seconds, fail=False):
+        self.device_name = "스피커 (테스트)"
+        self.fail = fail
+
+    def __enter__(self):
+        if self.fail:
+            raise RuntimeError("기본 스피커의 루프백 장치를 찾지 못했습니다.")
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read_chunk(self):
+        import numpy as np
+        return np.full(160_000, 0.05, dtype=np.float32)
+
+
+class FakeWhisper:
+    def __init__(self, model, program, device):
+        self.label, self.load_seconds = f"{device.upper()} · {model}", 0.1
+
+    def transcribe(self, audio):
+        return "네 오늘의 퀴즈 나갑니다"
+
+
+def test_stt_test_command_records_each_step(conn, monkeypatch):
+    from radio_helper.quizbot import __main__ as cli
+    from radio_helper.quizbot import audio, stt
+
+    monkeypatch.setattr(audio, "LoopbackRecorder", lambda s: FakeLoopback(s))
+    monkeypatch.setattr(stt, "WhisperTranscriber", FakeWhisper)
+    assert cli.cmd_stt_test(conn) == 0
+    t = json.loads(db.get_setting(conn, "quizbot.stt_test"))
+    assert t["ok"] and not t["running"] and t["text"] == "네 오늘의 퀴즈 나갑니다"
+    assert [s["name"] for s in t["steps"]] == ["녹음 장치", "10초 녹음", "음성 인식 모델", "받아쓰기"]
+    assert "CPU · small" in t["steps"][2]["detail"]   # 기본은 CPU (그래픽카드 라이브러리 문제로 꺼지는 것 방지)
+
+    monkeypatch.setattr(audio, "LoopbackRecorder", lambda s: FakeLoopback(s, fail=True))
+    assert cli.cmd_stt_test(conn) == 1
+    t = json.loads(db.get_setting(conn, "quizbot.stt_test"))
+    assert not t["ok"] and t["steps"][-1]["name"] == "녹음 장치 여는 중" and "루프백" in t["steps"][-1]["detail"]
+
+
+def test_send_test_command_uses_test_message(conn, monkeypatch):
+    from radio_helper.quizbot import __main__ as cli
+    from radio_helper.quizbot import gorilla
+
+    sent = []
+
+    class FakeG:
+        def __init__(self, cfg):
+            pass
+
+        def send_test(self, text):
+            sent.append(text)
+            return gorilla.SendResult("entered", "입력칸 비워짐"), "보냄"
+
+    monkeypatch.setattr(gorilla, "Gorilla", FakeG)
+    assert cli.cmd_send_test(conn) == 0 and sent == ["파워 FM 화이팅"]
+    db.set_setting(conn, "gorilla.test_message", "러브FM 화이팅")
+    cli.cmd_send_test(conn)
+    assert sent[-1] == "러브FM 화이팅"
+    assert any("전송 테스트" in e["message"] for e in conn.execute("SELECT message FROM events"))
+
+
+def test_stt_and_send_test_routes(client, conn, monkeypatch):
+    launched = []
+    monkeypatch.setattr(app_module, "launch_quizbot", lambda args: launched.append(args) or "q.log")
+    token = csrf(client, "/")
+    client.post("/listen/stt-test", data={"csrf_token": token})
+    assert launched == [["stt-test"]] and json.loads(db.get_setting(conn, "quizbot.stt_test"))["running"]
+    client.post("/listen/stt-test", data={"csrf_token": token})   # 진행 중이면 또 띄우지 않음
+    assert launched == [["stt-test"]]
+    assert "받아쓰기 테스트" in client.get("/").get_data(as_text=True)
+
+    client.post("/quizbot/tool", data={"csrf_token": token, "tool": "send-test"})
+    assert launched[-1] == ["send-test"]
+    assert client.post("/quizbot/tool", data={"csrf_token": token, "tool": "type-test"}).status_code == 400
+    assert "파워 FM 화이팅" in client.get("/gorilla").get_data(as_text=True)
+
+
+def test_stalled_listener_shows_log_and_restarts(client, conn, data_dir, monkeypatch):
+    launched = []
+    monkeypatch.setattr(app_module, "launch_quizbot", lambda args: launched.append(args) or "quizbot_new.log")
+    (data_dir / "logs").mkdir(exist_ok=True)
+    (data_dir / "logs" / "quizbot_20261003_002000_ab12.log").write_text(
+        "퀴즈 자동 참여를 시작합니다.\nCould not load library cudnn_ops_infer64_8.dll\n", encoding="utf-8")
+    old = (datetime.now() - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    for k, v in {"live.active": "1", "quizbot.state": "딘딘의 뮤직하이 듣는 중", "quizbot.heartbeat": old,
+                 "quizbot.launched_at": old, "quizbot.run_log": "quizbot_20261003_002000_ab12.log"}.items():
+        db.set_setting(conn, k, v)
+    page = client.get("/").get_data(as_text=True)
+    assert "응답 없음" in page and "cudnn_ops_infer64_8.dll" in page and "다시 시작" in page
+    assert client.get("/live.json").get_json()["status"] == "stalled"
+    db.set_setting(conn, "quizbot.run_log", "../../secret.log")   # 기록 파일 이름은 정해진 형식만
+    assert client.get("/live.json").get_json()["log_tail"] == ""
+
+    token = csrf(client, "/")
+    client.post("/listen/start", data={"csrf_token": token, "channel": "파워FM"})
+    assert launched[0] == ["run"] and db.get_setting(conn, "quizbot.run_log") == "quizbot_new.log"

@@ -679,21 +679,33 @@ class Gorilla:
             points.append((fraction_to_point(ref, self.cfg.send_x, self.cfg.send_y), "#22c55e"))
         return points
 
-    def type_only(self, text: str) -> str:
-        """입력칸에 글자만 넣고 보내지 않는다 (설정 확인용). 끝나면 고릴라 창을 찍어 누른 곳을 표시한다."""
+    def send_test(self, text: str) -> tuple[SendResult, str]:
+        """설정 확인용으로 실제로 한 번 보낸다. 누르기 직전·보낸 직후 고릴라 창을 찍어 둔다."""
         def run(w):
-            self._put_text(w, text)
+            edit = self._put_text(w, text)
             time.sleep(0.5)
-            msg = (f"'{w.window_text() or '(제목 없음)'}' 창 입력칸에 '{text}'를 넣었습니다. "
-                   "보내지 않았으니 고릴라에서 직접 지워 주세요.")
+            notes = []
             try:
-                shot = capture(self._ref_rect(w), "gorilla_test", points=self.click_points(w))
-                if shot:
-                    msg += f" 결과 화면: {shot} (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼 위치)"
+                if capture(self._ref_rect(w), "gorilla_test", points=self.click_points(w)):
+                    notes.append("누르기 직전 사진 gorilla_test.png (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼)")
             except Exception as e:
-                msg += f" (화면 사진 실패: {type(e).__name__})"
-            return msg
-        return self._with_focus(run)
+                notes.append(f"사진 실패: {type(e).__name__}")
+            self._press_send(w)
+            time.sleep(1.5)
+            after = self._value(edit) if edit is not None else None
+            result = judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
+            try:
+                if capture(self._ref_rect(w), "gorilla_test_sent"):
+                    notes.append("보낸 뒤 사진 gorilla_test_sent.png")
+            except Exception as e:
+                notes.append(f"사진 실패: {type(e).__name__}")
+            msg = (f"'{w.window_text() or '(제목 없음)'}' 창에 '{text}'를 입력하고 전송을 눌렀습니다 → {result.detail}. "
+                   + " / ".join(notes))
+            return result, msg
+        try:
+            return self._with_focus(run)
+        except GorillaError as e:
+            return SendResult("failed", str(e)), f"전송 테스트 실패: {e}"
 
     def send(self, text: str) -> SendResult:
         def run(w):

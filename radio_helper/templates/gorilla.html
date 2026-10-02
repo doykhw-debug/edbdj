@@ -10,15 +10,17 @@
     <li><b>입력칸 영역 지정</b> — 버튼을 누르면 화면이 어두워집니다. 고릴라의 <b>'공감로그 글쓰기' 칸</b>을 마우스로 끌어 네모로 그리세요. 손을 떼면 저장됩니다.
       네모가 놓인 창을 고릴라 창으로 기억하고, 창 안에서의 위치(비율)로 저장하므로 창을 옮겨도 됩니다.</li>
     <li><b>전송 버튼 영역 지정</b> — 같은 방법으로 파란 <b>'전송' 버튼</b>을 네모로 그리세요.</li>
-    <li><b>입력 테스트</b> — 입력칸에 '입력 테스트'를 넣기만 하고 보내지 않습니다. 들어갔는지 확인하고 직접 지우세요.</li>
+    <li><b>전송 테스트</b> — 입력칸에 <b>'{{ values['gorilla.test_message'] }}'</b>를 넣고 <b>전송까지 실제로 누릅니다</b>. 고릴라 채팅에 올라오면 설정 완료입니다.
+      (보낼 글은 아래 설정값 '전송 테스트로 실제로 보낼 글'에서 바꿀 수 있습니다)</li>
   </ol>
   <div class="actions">
-    {% for tool, label, primary in [('select-input', '① 입력칸 영역 지정', True), ('select-send', '② 전송 버튼 영역 지정', True), ('type-test', '③ 입력 테스트', False)] %}
-    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="{{ tool }}"><button class="{{ '' if primary else 'secondary' }}" {{ 'disabled' if stopped }}>{{ label }}</button></form>
+    {% for tool, label in [('select-input', '① 입력칸 영역 지정'), ('select-send', '② 전송 버튼 영역 지정')] %}
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="{{ tool }}"><button {{ 'disabled' if stopped }}>{{ label }}</button></form>
     {% endfor %}
+    <form method="post" action="{{ url_for('quizbot_tool') }}" data-msg="{{ values['gorilla.test_message'] }}" onsubmit="return confirm('고릴라 공감로그에 [' + this.dataset.msg + '] 를 실제로 보냅니다. 계속할까요?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="send-test"><button class="secondary" {{ 'disabled' if stopped }}>③ 전송 테스트 ('{{ values['gorilla.test_message'] }}' 보내기)</button></form>
   </div>
   <details style="margin-top:10px"><summary class="muted">창 인식이 안 될 때 / 다른 방법</summary>
-    <p class="muted">입력 테스트가 엉뚱한 곳에 글자를 넣으면, <b>고릴라 창 영역 지정</b>으로 고릴라 창 전체를 네모로 감싼 뒤 ①②를 다시 하세요.
+    <p class="muted">전송 테스트가 엉뚱한 곳에 글자를 넣으면, <b>고릴라 창 영역 지정</b>으로 고릴라 창 전체를 네모로 감싼 뒤 ①②를 다시 하세요.
     이 방식은 창 대신 화면의 그 영역을 기준으로 하므로, 고릴라 창을 옮기면 다시 지정해야 합니다.</p>
     <div class="actions">
       {% for tool, label in [('select-window', '고릴라 창 영역 지정'), ('auto-setup', '자동 찾기'), ('inspect', '창 점검(상세)')] %}
@@ -44,7 +46,7 @@
   {% if shots %}
   <h2 style="margin-top:16px">확인용 화면 사진 <span class="muted">지정·테스트 직후 찍은 고릴라 영역 · 이 PC에만 저장</span></h2>
   <p class="muted">네모·점이 고릴라의 입력칸과 전송 버튼 위에 있어야 합니다. 엉뚱한 곳(다른 창, 빈 곳)에 있으면 그 단계를 다시 하세요.
-    ③ 입력 테스트 사진에서 빨간 점이 입력칸, 초록 점이 전송 버튼 위에 있으면 설정이 맞습니다.</p>
+    ③ '누르기 직전' 사진에서 빨간 점이 입력칸, 초록 점이 전송 버튼 위에 있고, '보낸 뒤' 사진의 채팅에 글이 보이면 설정이 맞습니다.</p>
   <div class="shots">
     {% for sh in shots %}
     <figure><a href="{{ url_for('inspect_image', name=sh.file) }}?v={{ sh.v }}" target="_blank" rel="noopener"><img src="{{ url_for('inspect_image', name=sh.file) }}?v={{ sh.v }}" alt="{{ sh.label }}"></a>

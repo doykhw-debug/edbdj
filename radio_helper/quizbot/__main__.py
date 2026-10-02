@@ -10,12 +10,14 @@
   select send      화면에 네모를 그려 전송 버튼 영역 저장
   calibrate input  7초 뒤 마우스 위치를 채팅 입력칸 위치로 저장
   calibrate send   7초 뒤 마우스 위치를 전송 버튼 위치로 저장
-  type-test        고릴라 입력칸에 '입력 테스트'를 넣기만 함 (보내지 않음)
+  send-test        고릴라 공감로그에 시험 글('파워 FM 화이팅')을 실제로 입력하고 전송까지 누름
+  stt-test         PC 소리 10초를 녹음해 받아쓰기 시험 (단계별 결과를 관리 화면에 표시)
 """
 
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import sys
 import time
@@ -142,21 +144,86 @@ def cmd_select(conn, target: str) -> int:
     return 0
 
 
-def cmd_type_test(conn) -> int:
+def cmd_send_test(conn) -> int:
+    from .. import quiz
     from .gorilla import Gorilla
+    from .runner import shared_input_lock
 
-    msg = Gorilla(config.GorillaConfig.load(conn)).type_only("입력 테스트")
-    db.log(conn, "gorilla", "입력 테스트: " + msg)
+    text = config.get(conn, "gorilla.test_message").strip() or config.DEFAULTS["gorilla.test_message"]
+    with shared_input_lock():
+        result, msg = Gorilla(config.GorillaConfig.load(conn)).send_test(text)
+    db.log(conn, "gorilla", f"전송 테스트 → {quiz.ENTRY_LABELS.get(result.status, result.status)}: {msg}")
     say(msg)
-    return 0
+    return 0 if result.status in ("entered", "posted") else 1
+
+
+def cmd_stt_test(conn) -> int:
+    """받아쓰기 테스트: 녹음 장치 → 10초 녹음 → 모델 불러오기 → 받아쓰기. 단계마다 화면에 남긴다.
+
+    프로그램이 도중에 꺼져도(예: 그래픽카드 라이브러리 문제) 어느 단계에서 멈췄는지 화면에 남도록
+    단계를 시작할 때마다 저장한다.
+    """
+    from . import live
+
+    result = {"at": db.now(), "running": True, "ok": False, "phase": "녹음 장치 여는 중", "steps": [],
+              "text": "", "level": None}
+
+    def save():
+        db.set_setting(conn, "quizbot.stt_test", json.dumps(result, ensure_ascii=False))
+
+    def phase(text):
+        result["phase"] = text
+        save()
+        say(f"… {text}")
+
+    def step(name, ok, detail=""):
+        result["steps"].append({"name": name, "ok": bool(ok), "detail": detail})
+        save()
+        say(f"[{'OK' if ok else '확인 필요'}] {name} {detail}")
+
+    save()
+    try:
+        from .audio import LoopbackRecorder, rms
+
+        with LoopbackRecorder(10) as rec:
+            step("녹음 장치", True, rec.device_name)
+            phase("PC 소리 10초 녹음 중")
+            audio = rec.read_chunk()
+        level = live.level_percent(rms(audio))
+        result["level"] = level
+        step("10초 녹음", level > 0, f"소리 크기 {level}/100" + (
+            "" if level > 0 else " — 소리가 들리지 않습니다. 고릴라 재생·음소거·기본 스피커(이어폰)를 확인하세요"))
+        from .stt import WhisperTranscriber
+
+        model, device = config.get(conn, "quizbot.whisper_model"), config.get(conn, "quizbot.whisper_device")
+        phase(f"음성 인식 모델 불러오는 중 ({device} · {model}, 처음 한 번은 내려받기로 몇 분)")
+        tr = WhisperTranscriber(model, "", device)
+        step("음성 인식 모델", True, f"{tr.label} · {tr.load_seconds:.1f}초")
+        phase("받아쓰는 중")
+        started = time.monotonic()
+        text = tr.transcribe(audio)
+        took = time.monotonic() - started
+        result["text"] = text
+        step("받아쓰기", bool(text), f"{took:.1f}초 · " + (
+            f"'{text[:150]}'" if text else "말소리를 찾지 못함 (음악만 나왔거나 소리가 너무 작음 — 진행자가 말할 때 다시 해 보세요)"))
+        result["ok"] = bool(text)
+    except Exception as e:
+        step(result["phase"] or "실행", False, f"{type(e).__name__}: {str(e).strip()[:200]}")
+    finally:
+        result["running"], result["phase"] = False, ""
+        save()
+    db.log(conn, "quizbot", "받아쓰기 테스트: " + (f"성공 — '{result['text'][:60]}'" if result["ok"]
+                                             else "실패 — " + (result["steps"][-1]["detail"] if result["steps"] else "")))
+    return 0 if result["ok"] else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
-    ap.add_argument("command", choices=["run", "captions", "check", "auto-setup", "inspect-gorilla", "select",
-                                        "calibrate", "type-test"])
+    ap.add_argument("command", choices=["run", "captions", "check", "stt-test", "auto-setup", "inspect-gorilla",
+                                        "select", "calibrate", "send-test"])
     ap.add_argument("target", nargs="?", choices=["window", "input", "send"])
     args = ap.parse_args(argv)
+    faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
     conn = db.connect()
     db.init_db(conn)
     try:
@@ -173,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "check":
             return cmd_check(conn)
+        if args.command == "stt-test":
+            return cmd_stt_test(conn)
         if db.is_stopped(conn):
             say("[중단] 일괄 중지가 켜져 있습니다.")
             return 2
@@ -188,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.target not in ("input", "send"):
                 ap.error("calibrate 에는 input 또는 send 가 필요합니다.")
             return cmd_calibrate(conn, args.target)
-        return cmd_type_test(conn)
+        return cmd_send_test(conn)
     except Exception as e:
         first = (str(e).strip().splitlines() or [type(e).__name__])[0][:200]
         say(f"[오류] {type(e).__name__}: {first}")

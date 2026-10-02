@@ -102,7 +102,11 @@ def create_app(data_dir: str | None = None) -> Flask:
         failed = [i["name"] for i in (check or {}).get("items", []) if not i.get("ok")]
         confirmed = c.execute("SELECT COUNT(*) FROM experiences WHERE user_confirmed = 1").fetchone()[0]
         input_set = bool(qconfig.get(c, "gorilla.input_rect") or qconfig.get(c, "gorilla.input_x"))
+        stt = live.view_model(c)["stt_test"] or {}
         return [
+            {"name": "받아쓰기 테스트", "ok": bool(stt.get("ok")), "url": url_for("home") + "#stt",
+             "detail": "PC 소리 10초를 받아써 보기" if not stt else
+             ("성공 " + stt.get("at", "")[5:16] if stt.get("ok") else "진행 중" if stt.get("running") else "실패 — 결과 확인")},
             {"name": "Claude API 키", "ok": bool(get_api_key()), "url": url_for("quizbot"),
              "detail": "퀴즈·사연 분석에 필요"},
             {"name": "고릴라 입력칸 지정", "ok": input_set, "url": url_for("gorilla"),
@@ -113,19 +117,37 @@ def create_app(data_dir: str | None = None) -> Flask:
              "detail": f"확인한 경험 {confirmed}건" if confirmed else "없으면 사연은 보내지 않음 (퀴즈는 됨)"},
         ]
 
+    def home_vm() -> dict:
+        vm = live.view_model(g.conn, lines=12)
+        vm["captions_open"] = _fresh(db.get_setting(g.conn, "captions.heartbeat"), 15)
+        vm["chunk_text"] = live.chunk_text(vm["last_chunk"])
+        vm["log_tail"] = runner_log_tail(g.conn) if vm["status"] in ("stalled", "launching") else ""
+        return vm
+
     @app.get("/")
     def home():
         c = g.conn
         return render_template(
-            "home.html", vm=live.view_model(c, lines=12), setup=setup_items(), channels=channel_list(),
-            options={name: live.flag(c, key) for key, name in LIVE_OPTIONS},
-            captions_open=_fresh(db.get_setting(c, "captions.heartbeat"), 15))
+            "home.html", vm=home_vm(), setup=setup_items(), channels=channel_list(),
+            options={name: live.flag(c, key) for key, name in LIVE_OPTIONS})
 
     @app.get("/live.json")
     def live_json():
-        vm = live.view_model(g.conn, lines=12)
-        vm["captions_open"] = _fresh(db.get_setting(g.conn, "captions.heartbeat"), 15)
-        return vm
+        return home_vm()
+
+    @app.post("/listen/stt-test")
+    def stt_test():
+        c = g.conn
+        current = live.view_model(c)["stt_test"]
+        if current and current.get("running") and not current.get("stuck"):
+            flash("받아쓰기 테스트가 이미 진행 중입니다.", "warn")
+            return redirect(url_for("home") + "#stt")
+        db.set_setting(c, "quizbot.stt_test", json.dumps(
+            {"at": db.now(), "running": True, "ok": False, "phase": "시작하는 중", "steps": [], "text": ""},
+            ensure_ascii=False))
+        launch_quizbot(["stt-test"])
+        flash("받아쓰기 테스트를 시작합니다. 고릴라에서 진행자 목소리가 나올 때 해 보세요. 결과는 아래에 단계별로 나옵니다.")
+        return redirect(url_for("home") + "#stt")
 
     @app.post("/listen/start")
     def listen_start():
@@ -142,11 +164,9 @@ def create_app(data_dir: str | None = None) -> Flask:
         was_active = live.is_active(c)
         db.set_setting(c, "live.active", "1")
         db.set_setting(c, "quizbot.stop", "0")
-        if not qconfig.runner_alive(c) and not _fresh(db.get_setting(c, "quizbot.launched_at"), 60):
-            # 실행기는 하나만 뜬다 (두 번째는 잠금을 못 얻고 바로 끝남)
-            db.set_setting(c, "quizbot.state", "시작 중")
-            db.set_setting(c, "quizbot.launched_at", db.now())
-            launch_quizbot(["run"])
+        if not qconfig.runner_alive(c) and not _fresh(db.get_setting(c, "quizbot.launched_at"),
+                                                      live.LAUNCH_GRACE_SECONDS):
+            start_runner(c)  # 실행기는 하나만 뜬다 (두 번째는 잠금을 못 얻고 바로 끝남)
         if live.flag(c, "live.captions") and not _fresh(db.get_setting(c, "captions.heartbeat"), 15):
             launch_quizbot(["captions"])
         if was_active:
@@ -642,8 +662,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             flash("이미 실행 중입니다.", "warn")
         else:
             db.set_setting(g.conn, "quizbot.stop", "0")
-            db.set_setting(g.conn, "quizbot.state", "시작 중")
-            log_name = launch_quizbot(["run"])
+            log_name = start_runner(g.conn)
             flash(f"예약 듣기 실행기를 시작합니다. 예약 시간에만 듣습니다. 바로 들으려면 첫 화면의 '청취 시작'을 누르세요. (기록: {log_name})")
         return redirect(url_for("quizbot"))
 
@@ -886,7 +905,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                 "select-window": ["select", "window"], "select-input": ["select", "input"],
                 "select-send": ["select", "send"],
                 "calibrate-input": ["calibrate", "input"],
-                "calibrate-send": ["calibrate", "send"], "type-test": ["type-test"]}.get(tool)
+                "calibrate-send": ["calibrate", "send"], "send-test": ["send-test"]}.get(tool)
         if args is None:
             abort(400)
         if tool != "check" and db.is_stopped(g.conn):
@@ -902,7 +921,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             "select-send": "화면이 어두워지면 고릴라의 파란 '전송' 버튼을 마우스로 끌어 네모로 그리세요.",
             "calibrate-input": "지금 7초 안에 마우스를 고릴라의 '공감로그 글쓰기' 칸 위에 올려 두고 움직이지 마세요.",
             "calibrate-send": "지금 7초 안에 마우스를 고릴라의 파란 '전송' 버튼 위에 올려 두고 움직이지 마세요.",
-            "type-test": "고릴라 입력칸에 '입력 테스트'를 넣습니다. 보내지 않으니 확인 후 직접 지우세요.",
+            "send-test": f"고릴라 공감로그에 '{qconfig.get(g.conn, 'gorilla.test_message')}'를 입력하고 전송을 누릅니다. "
+                         "끝나면 누르기 직전·보낸 뒤 사진이 아래에 나옵니다.",
         }
         flash(f"{messages[tool]} (기록: {log_name})")
         wait = 25 if tool.startswith(("select", "calibrate")) else 12
@@ -949,7 +969,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             last_tool = (f.name, text[-1500:] or "(아직 진행 중이거나 출력 없음)")
             break
         shots = []
-        for name, label in (("gorilla_test", "③ 입력 테스트 — 빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치"),
+        for name, label in (("gorilla_test", "③ 전송 테스트 — 누르기 직전 (빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치)"),
+                            ("gorilla_test_sent", "③ 전송 테스트 — 보낸 뒤 (채팅에 글이 올라왔는지 확인)"),
                             ("gorilla_select_input", "① 입력칸으로 지정한 영역"),
                             ("gorilla_select_send", "② 전송 버튼으로 지정한 영역"),
                             ("gorilla_select_window", "고릴라 창으로 지정한 영역")):
@@ -1005,6 +1026,26 @@ def launch_programs_refresh() -> str:
 
 def launch_quizbot(args: list[str]) -> str:
     return launch_module("radio_helper.quizbot", args, "quizbot")
+
+
+def start_runner(conn) -> str:
+    """듣기 실행기를 띄우고, 화면이 상태·기록을 찾을 수 있게 남긴다."""
+    db.set_setting(conn, "quizbot.state", "시작 중")
+    db.set_setting(conn, "quizbot.launched_at", db.now())
+    log_name = launch_quizbot(["run"])
+    db.set_setting(conn, "quizbot.run_log", log_name)
+    return log_name
+
+
+def runner_log_tail(conn, chars: int = 2500) -> str:
+    """듣기 실행기 기록 파일의 끝부분 (꺼졌을 때 원인 확인용)."""
+    name = db.get_setting(conn, "quizbot.run_log") or ""
+    if not re.fullmatch(r"quizbot_[0-9_a-f]+\.log", name):
+        return ""
+    path = db.data_dir() / "logs" / name
+    if not path.exists():
+        return ""
+    return f"[{name}]\n" + path.read_text(encoding="utf-8", errors="replace")[-chars:]
 
 
 def pending_counts(conn) -> dict:

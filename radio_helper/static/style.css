@@ -108,3 +108,6 @@ button.big { font-size: 20px; padding: 14px 28px; border-radius: 12px; }
 .shots figure { margin: 0; }
 .shots img { max-width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .shots figcaption { font-size: 13px; color: var(--muted); }
+.live-dot.stalled { background: #a855f7; }
+.last-chunk { font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-variant-numeric: tabular-nums; }
+.last-chunk:empty { display: none; }

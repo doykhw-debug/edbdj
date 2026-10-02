@@ -5,7 +5,7 @@ import sys
 import webbrowser
 
 from . import db
-from .app import create_app, launch_quizbot
+from .app import create_app, start_runner
 from .quizbot import config as qconfig
 
 
@@ -39,10 +39,12 @@ def main() -> None:
     print("아래 빨간 WARNING 문구는 Flask 기본 안내라 무시해도 됩니다.")
     conn = db.connect()
     try:
-        if (qconfig.get(conn, "quizbot.autostart") == "1" and not db.is_stopped(conn)
+        listening = qconfig.get(conn, "live.active") == "1"
+        if ((qconfig.get(conn, "quizbot.autostart") == "1" or listening) and not db.is_stopped(conn)
                 and not qconfig.runner_alive(conn)):
             db.set_setting(conn, "quizbot.stop", "0")
-            print(f"퀴즈 자동 참여도 함께 시작합니다. (기록: {launch_quizbot(['run'])})")
+            print(("청취를 이어서 시작합니다." if listening else "퀴즈 자동 참여도 함께 시작합니다.")
+                  + f" (기록: {start_runner(conn)})")
     finally:
         conn.close()
     if not args.no_browser:

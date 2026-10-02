@@ -123,8 +123,15 @@ class Runner:
     gift_analyses: int = 0
 
     def state(self, text: str) -> None:
+        if text != getattr(self, "_last_state", None):  # 실행 기록 파일에도 남긴다 (바뀔 때만)
+            self._last_state = text
+            self.deps.log(f"[{self.deps.now():%H:%M:%S}] {text}")
         db.set_setting(self.conn, "quizbot.state", text)
         db.set_setting(self.conn, "quizbot.heartbeat", self.deps.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    def event(self, message: str) -> None:
+        db.log(self.conn, "quizbot", message)
+        self.deps.log(f"[{self.deps.now():%H:%M:%S}] {message}")
 
     def should_stop(self) -> bool:
         return db.get_setting(self.conn, "quizbot.stop", "0") == "1"
@@ -134,8 +141,11 @@ class Runner:
             "SELECT s.*, p.title AS program, p.channel AS channel FROM quiz_schedules s JOIN programs p ON p.id = s.program_id").fetchall()
 
     def report_level(self, level: int) -> None:
+        """녹음 중 약 1초마다 불린다. 소리 크기와 함께 '살아 있음' 신호도 갱신한다."""
+        stamp = self.deps.now().strftime("%Y-%m-%d %H:%M:%S")
         db.set_setting(self.conn, "quizbot.level", str(level))
-        db.set_setting(self.conn, "quizbot.level_at", self.deps.now().strftime("%Y-%m-%d %H:%M:%S"))
+        db.set_setting(self.conn, "quizbot.level_at", stamp)
+        db.set_setting(self.conn, "quizbot.heartbeat", stamp)
 
     def run_forever(self, idle_seconds: int = 5) -> None:
         self.state("시작함")
@@ -199,8 +209,12 @@ class Runner:
         if not gorilla_ok:
             db.log(self.conn, "quizbot", "고릴라 창을 찾지 못했습니다 — 듣기·자막은 계속하고, 보낼 글은 고릴라 창을 찾으면 보냅니다.")
 
-        self.state("음성 인식 준비 중 (처음 한 번은 모델 내려받기로 몇 분 걸릴 수 있음)")
-        transcriber = self.deps.transcriber_factory(config.get(self.conn, "quizbot.whisper_model"), session["program"])
+        model = config.get(self.conn, "quizbot.whisper_model")
+        self.state(f"음성 인식 모델 불러오는 중 ({config.get(self.conn, 'quizbot.whisper_device')} · {model}, "
+                   "처음 한 번은 내려받기로 몇 분 걸릴 수 있음)")
+        transcriber = self.deps.transcriber_factory(model, session["program"])
+        if getattr(transcriber, "label", None):
+            self.event(f"음성 인식 준비 완료 ({transcriber.label}, {transcriber.load_seconds:.1f}초)")
         chunk_seconds = config.get_int(self.conn, "quizbot.chunk_seconds")
         context = config.get_int(self.conn, "quizbot.context_seconds")
         buffer = TranscriptBuffer()
@@ -215,10 +229,13 @@ class Runner:
         max_analyses = config.get_int(self.conn, "quizbot.max_analyses_per_window")
         max_story = config.get_int(self.conn, "quizbot.max_story_analyses_per_window")
         max_gift = config.get_int(self.conn, "quizbot.max_gift_analyses_per_window")
-        current, silent = None, 0
+        current, silent, chunks, slow = None, 0, 0, 0
+        self.state("녹음 장치 여는 중")
         with self.deps.recorder_factory(chunk_seconds) as recorder:
             if hasattr(recorder, "on_level"):
                 recorder.on_level = self.report_level  # 녹음 중 1초마다 소리 크기를 화면에 알린다
+            if getattr(recorder, "device_name", ""):
+                self.event(f"녹음 시작 — {recorder.device_name}")
             while keep_going(self.deps.now()) and not self.should_stop():
                 session, w = get_session(self.deps.now())
                 program = session["program"]
@@ -242,7 +259,15 @@ class Runner:
                         db.log(self.conn, "quizbot", "소리가 들리지 않습니다. 고릴라 재생·음소거·기본 스피커를 확인하세요.")
                 else:
                     silent = 0
+                started = time.monotonic()
                 text = transcriber.transcribe(audio)
+                took = time.monotonic() - started
+                chunks += 1
+                self.record_chunk(now, live.level_percent(level), took, text, first=chunks == 1)
+                slow = slow + 1 if took > chunk_seconds * 1.5 else 0
+                if slow == 3:
+                    self.event(f"받아쓰기가 녹음보다 느립니다 ({took:.0f}초/{chunk_seconds}초). "
+                               "고릴라·인식 설정에서 음성 인식 모델을 base 로 바꾸면 빨라집니다.")
                 if text:
                     buffer.add(now, text)
                     self.conn.execute(
@@ -275,6 +300,15 @@ class Runner:
                 if gorilla_ok:
                     self.retry_held(session)
         db.log(self.conn, "quizbot", f"{current or session['program']} 듣기 끝 · 분석 {min(self.analyses, max_analyses)}회")
+
+    def record_chunk(self, now: datetime, level: int, took: float, text: str, first: bool = False) -> None:
+        """화면의 '마지막 10초' 줄: 말소리가 없어도 녹음·받아쓰기가 돌고 있다는 것을 보여 준다."""
+        db.set_setting(self.conn, "quizbot.last_chunk", json.dumps(
+            {"at": now.strftime("%H:%M:%S"), "level": level, "seconds": round(took, 1), "text": text[:120]},
+            ensure_ascii=False))
+        if first:
+            self.event(f"첫 받아쓰기 ({took:.1f}초): '{text[:60]}'" if text
+                       else f"첫 받아쓰기 ({took:.1f}초): 말소리 없음 (소리 크기 {level}/100)")
 
     def known_quizzes(self, program: str, date: str):
         return self.conn.execute(
@@ -575,7 +609,8 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
     return Deps(
         notify=notify,
         recorder_factory=lambda chunk: LoopbackRecorder(chunk),
-        transcriber_factory=lambda model, program: WhisperTranscriber(model, program),
+        transcriber_factory=lambda model, program: WhisperTranscriber(
+            model, program, config.get(conn, "quizbot.whisper_device")),
         answerer=ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort")),
         sender=Gorilla(config.GorillaConfig.load(conn)),
         lock=shared_input_lock,

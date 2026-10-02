@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import sqlite3
@@ -115,12 +116,26 @@ def _age_seconds(stamp: str, now: datetime) -> float | None:
         return None
 
 
+LAUNCH_GRACE_SECONDS = 90  # '청취 시작'을 누른 뒤 실행기가 첫 신호를 보내기까지 기다리는 시간
+
+STATUS_TEXT = {"collecting": "수집 중", "starting": "준비 중", "launching": "시작하는 중", "stalled": "응답 없음",
+               "off": "꺼짐"}
+
+
+def _json_setting(conn: sqlite3.Connection, key: str):
+    try:
+        return json.loads(db.get_setting(conn, key) or "null")
+    except ValueError:
+        return None
+
+
 def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int = 20) -> dict:
     """관리 화면과 자막 창이 함께 쓰는 지금 상태."""
     now = now or datetime.now()
     alive = config.runner_alive(conn, now)
     active = is_active(conn)
     level_age = _age_seconds(db.get_setting(conn, "quizbot.level_at"), now)
+    launched_age = _age_seconds(db.get_setting(conn, "quizbot.launched_at"), now)
     collecting = alive and active and level_age is not None and level_age < 20
     rows = conn.execute("SELECT * FROM transcripts ORDER BY id DESC LIMIT ?", (lines,)).fetchall()
     events = conn.execute("SELECT at, message FROM events WHERE kind IN ('quizbot', 'gorilla') "
@@ -130,18 +145,23 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
     pending_story = conn.execute("SELECT COUNT(*) FROM story_posts WHERE status = 'pending' AND approved = 0"
                                  ).fetchone()[0]
     channel = config.get(conn, "live.channel")
-    if collecting:
+    if not active:
+        status = "off"
+    elif collecting:
         status = "collecting"
-    elif active and alive:
+    elif alive:
         status = "starting"
-    elif active:
+    elif launched_age is not None and launched_age < LAUNCH_GRACE_SECONDS:
         status = "launching"
     else:
-        status = "off"
+        status = "stalled"  # 켜 두었는데 실행기 신호가 없다 → 꺼졌거나 멈춤
+    stt_test = _json_setting(conn, "quizbot.stt_test")
+    if stt_test and stt_test.get("running"):
+        age = _age_seconds(stt_test.get("at"), now)
+        stt_test["stuck"] = age is not None and age > 600  # 10분 넘게 진행 중이면 도중에 꺼진 것
     return {
         "status": status,
-        "status_text": {"collecting": "수집 중", "starting": "준비 중", "launching": "시작하는 중",
-                        "off": "꺼짐"}[status],
+        "status_text": STATUS_TEXT[status],
         "active": active, "alive": alive, "channel": channel,
         "program": program_label(conn, channel, now),
         "state": db.get_setting(conn, "quizbot.state"),
@@ -149,4 +169,14 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
         "lines": [{"at": r["at"][11:19], "text": r["text"], "keywords": keywords(r["text"])} for r in reversed(rows)],
         "events": [{"at": e["at"][11:16], "message": e["message"]} for e in events],
         "pending": {"quizzes": pending_quiz, "stories": pending_story},
+        "last_chunk": _json_setting(conn, "quizbot.last_chunk") if active else None,
+        "stt_test": stt_test,
     }
+
+
+def chunk_text(chunk: dict | None) -> str:
+    """'마지막 10초' 한 줄."""
+    if not chunk:
+        return ""
+    said = f"'{chunk['text']}'" if chunk.get("text") else "말소리 없음"
+    return f"마지막 녹음 {chunk['at']} · 소리 {chunk['level']}/100 · 받아쓰기 {chunk['seconds']}초 → {said}"
