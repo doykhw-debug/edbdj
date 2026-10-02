@@ -139,6 +139,30 @@ CREATE TABLE IF NOT EXISTS programs (
     updated_at TEXT NOT NULL
 );
 
+-- 퀴즈 자동 참여 예약. days 는 월=0 … 일=6 숫자 문자열 (예: "01234" = 평일).
+CREATE TABLE IF NOT EXISTS quiz_schedules (
+    id                INTEGER PRIMARY KEY,
+    program_id        INTEGER NOT NULL REFERENCES programs(id),
+    days              TEXT NOT NULL DEFAULT '0123456',
+    start_time        TEXT NOT NULL,
+    end_time          TEXT NOT NULL,
+    auto_submit       INTEGER NOT NULL DEFAULT 0,
+    min_confidence    REAL NOT NULL DEFAULT 0.8,
+    gorilla_confirmed INTEGER NOT NULL DEFAULT 0,  -- 이 프로그램 퀴즈는 고릴라로 받는다고 사용자가 확인함
+    enabled           INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+
+-- 방송 음성 인식 결과 (오디오 자체는 저장하지 않는다)
+CREATE TABLE IF NOT EXISTS transcripts (
+    id             INTEGER PRIMARY KEY,
+    schedule_id    INTEGER,
+    broadcast_date TEXT NOT NULL,
+    at             TEXT NOT NULL,
+    text           TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     id      INTEGER PRIMARY KEY,
     at      TEXT NOT NULL,
@@ -195,8 +219,32 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
     return conn
 
 
+# 기존 데이터베이스에 나중에 추가된 칼럼
+_ADDED_COLUMNS = {
+    "quizzes": [
+        ("source", "TEXT NOT NULL DEFAULT 'manual'"),   # manual / auto
+        ("schedule_id", "INTEGER"),
+        ("confidence", "REAL"),
+        ("excerpt", "TEXT"),                            # 판단에 쓴 방송 녹취 일부
+        ("send_text", "TEXT"),
+        ("sent_at", "TEXT"),
+        ("approved", "INTEGER NOT NULL DEFAULT 0"),     # 사용자가 화면에서 보내기를 승인함
+        ("decision", "TEXT"),                           # 자동 전송/보류 판단 이유
+    ],
+}
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    for table, cols in _ADDED_COLUMNS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in cols:
+            if name not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _ensure_columns(conn)
     for kind, title, board_url, write_url, dev_note, is_target in seed.CORNERS:
         conn.execute(
             """INSERT OR IGNORE INTO corners

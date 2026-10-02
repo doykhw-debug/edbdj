@@ -43,7 +43,7 @@ th { font-size: 13px; color: var(--muted); font-weight: 600; }
 label { display: block; font-weight: 600; margin: 12px 0 4px; }
 label.inline { display: inline-flex; gap: 6px; align-items: center; font-weight: 400; margin: 6px 12px 6px 0; }
 .hint { font-weight: 400; color: var(--muted); font-size: 13px; }
-input[type=text], input[type=date], input[type=number], input[type=url], select, textarea {
+input[type=text], input[type=password], input[type=date], input[type=number], input[type=url], select, textarea {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
   font: inherit; background: #fff; color: var(--text);
 }

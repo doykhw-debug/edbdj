@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}퀴즈 자동 참여 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>고릴라 퀴즈 자동 참여</h1>
+
+<div class="panel">
+  <h2>실행 상태
+    {% if alive %}<span class="badge ok">실행 중</span>{% else %}<span class="badge">꺼짐</span>{% endif %}
+    {% if active %}<span class="badge info">지금 예약 구간: {{ by_id[active.schedule_id].program }}</span>{% endif %}
+  </h2>
+  <p>{{ state or '아직 실행한 적 없음' }} {% if heartbeat %}<span class="muted">· 마지막 신호 {{ heartbeat }}</span>{% endif %}</p>
+  {% if nxt and not active %}<p class="muted">다음 예약: {{ by_id[nxt.schedule_id].program }} {{ nxt.start.strftime('%m/%d %H:%M') }}~{{ nxt.end.strftime('%H:%M') }}</p>{% endif %}
+  <div class="actions">
+    {% if alive %}
+      <form method="post" action="{{ url_for('quizbot_stop') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger">멈춤</button></form>
+    {% else %}
+      <form method="post" action="{{ url_for('quizbot_start') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button {{ 'disabled' if stopped or not schedules }}>시작</button></form>
+    {% endif %}
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="check"><button class="secondary">환경 점검</button></form>
+    <a class="btn secondary" href="{{ url_for('gorilla') }}">고릴라·인식 설정</a>
+  </div>
+  {% if check %}
+    <p class="muted" style="margin-top:12px">환경 점검 {{ check.at }}</p>
+    <ul class="list">{% for i in check["items"] %}<li>{% if i.ok %}<span class="badge ok">OK</span>{% else %}<span class="badge bad">확인 필요</span>{% endif %} {{ i.name }} <span class="muted">{{ i.detail }}</span></li>{% endfor %}</ul>
+  {% endif %}
+  <p class="muted">동작 순서: 예약 시간에 고릴라가 켜져 있으면 PC 소리를 녹음 → 이 PC에서 음성 인식 → '퀴즈·정답' 같은 말이 나오면 최근 몇 분 녹취를 Claude로 분석 → 조건을 모두 만족하면 고릴라 채팅창에 정답을 입력·전송.
+  오디오는 저장하지 않고, 한 번 보낸(또는 보냈는지 모르는) 문제는 다시 보내지 않습니다.</p>
+</div>
+
+<form method="post" action="{{ url_for('quizbot_settings') }}" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>Claude API 키 {% if has_key %}<span class="badge ok">설정됨</span>{% else %}<span class="badge bad">없음</span>{% endif %}</h2>
+  <p class="muted">문제·정답 분석에 Claude API(유료)를 씁니다. 퀴즈 신호가 들릴 때만 호출하며, 예약 1회당 분석 횟수 상한을 둡니다.
+  키는 이 PC의 윈도우 자격 증명 관리자에 저장되고 화면·기록·GitHub에는 남지 않습니다.</p>
+  <div class="row">
+    <div><label>API 키 {% if has_key %}<span class="hint">(바꿀 때만 입력)</span>{% endif %}</label>
+      <input type="password" name="api_key" autocomplete="off" placeholder="sk-ant-..."></div>
+    <div><label class="inline" style="margin-top:34px"><input type="checkbox" name="autostart" value="1" {{ 'checked' if autostart }}> 관리 화면을 켜면 퀴즈 자동 참여도 함께 시작</label></div>
+  </div>
+  <div class="actions"><button class="secondary">저장</button></div>
+</form>
+
+<div class="panel">
+  <h2>예약</h2>
+  {% for s in schedules %}
+  <form method="post" action="{{ url_for('quizbot_schedule_update', sid=s.id) }}" style="border-bottom:1px solid var(--line);padding:8px 0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <b>{{ s.program }}</b> · {{ days_label(s.days) }} {{ s.start_time }}~{{ s.end_time }}
+    {% if s.auto_submit %}<span class="badge warn">자동 전송</span>{% else %}<span class="badge">확인 후 전송</span>{% endif %}
+    <div class="actions" style="margin-top:6px">
+      <label class="inline"><input type="checkbox" name="enabled" value="1" {{ 'checked' if s.enabled }}> 사용</label>
+      <label class="inline"><input type="checkbox" name="auto_submit" value="1" {{ 'checked' if s.auto_submit }}> 확인 없이 자동 전송</label>
+      <label class="inline">확신도 기준 <input type="number" name="min_confidence" value="{{ s.min_confidence }}" min="0" max="1" step="0.05" style="width:80px"></label>
+      <label class="inline"><input type="checkbox" name="gorilla_confirmed" value="1" {{ 'checked' if s.gorilla_confirmed }}> 이 프로그램 퀴즈는 고릴라로 받음(확인함)</label>
+      <button class="secondary">저장</button>
+      <button class="secondary" name="action" value="delete" onclick="return confirm('이 예약을 지울까요?')">삭제</button>
+    </div>
+  </form>
+  {% else %}<p class="muted">예약이 없습니다.</p>{% endfor %}
+
+  <form method="post" action="{{ url_for('quizbot_schedule_new') }}" style="margin-top:12px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <h2 style="margin-top:8px">예약 추가</h2>
+    <div class="row3">
+      <div><label>프로그램</label>
+        <select name="program_id" id="prog" onchange="fillTimes()">
+          {% for p in programs %}<option value="{{ p.id }}" data-start="{{ p.start_time or '' }}" data-end="{{ p.end_time or '' }}">{{ p.start_time }} {{ p.title }}</option>{% endfor %}
+        </select></div>
+      <div><label>시작 <span class="hint">비우면 방송 시작</span></label><input type="text" name="start_time" id="st" placeholder="07:00"></div>
+      <div><label>끝</label><input type="text" name="end_time" id="et" placeholder="09:00"></div>
+    </div>
+    <label>요일</label>
+    {% for d in range(7) %}<label class="inline"><input type="checkbox" name="days" value="{{ d }}" {{ 'checked' if d < 5 }}> {{ day_names[d] }}</label>{% endfor %}
+    <div class="actions">
+      <label class="inline"><input type="checkbox" name="auto_submit" value="1"> 확인 없이 자동 전송</label>
+      <label class="inline">확신도 기준 <input type="number" name="min_confidence" value="0.8" min="0" max="1" step="0.05" style="width:80px"></label>
+      <label class="inline"><input type="checkbox" name="gorilla_confirmed" value="1"> 이 프로그램 퀴즈는 고릴라로 받음(확인함)</label>
+    </div>
+    <p class="muted">자동 전송은 ① 확신도가 기준 이상 ② 진행자가 고릴라로 받는다고 말했거나 위 '고릴라로 받음'을 체크 ③ 시간당 전송 상한 이내일 때만 합니다. 나머지는 아래 '확인 대기'에 남습니다.</p>
+    <div class="actions"><button>예약 추가</button></div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>확인 대기 <span class="muted">자동 전송 조건을 못 채운 문제</span></h2>
+  {% for q in pending %}
+  <div style="border-bottom:1px solid var(--line);padding:10px 0">
+    <b>#{{ q.id }} {{ q.program }}</b> <span class="muted">{{ q.created_at }}</span>
+    {% if q.entry_status == 'failed' %}<span class="badge bad">전송 실패</span>{% endif %}
+    <p style="margin:6px 0">{{ q.question }}{% if q.options %} <span class="muted">(보기: {{ q.options }})</span>{% endif %}</p>
+    <p class="muted" style="margin:0">확신도 {{ '%.2f'|format(q.confidence or 0) }} · 고릴라 응모 {{ YES_NO.get(q.gorilla_accepted, q.gorilla_accepted) }}{% if q.deadline %} · 마감 {{ q.deadline }}{% endif %}</p>
+    {% if q.decision %}<p class="muted" style="margin:0">{{ q.decision }}</p>{% endif %}
+    {% if q.note %}<p class="muted" style="margin:0">{{ q.note }}</p>{% endif %}
+    <details><summary class="muted">판단에 쓴 녹취</summary><pre class="box">{{ q.excerpt or '' }}</pre></details>
+    <div class="actions">
+      <form method="post" action="{{ url_for('quizbot_approve', qid=q.id) }}" class="actions">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="text" name="answer" value="{{ q.answer or '' }}" placeholder="정답" style="width:180px">
+        <input type="text" name="send_text" value="{{ q.send_text or '' }}" placeholder="보낼 문구(비우면 기본 형식)" style="width:220px">
+        <button>이 답으로 보내기</button>
+      </form>
+      <form method="post" action="{{ url_for('quizbot_skip', qid=q.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">보내지 않음</button></form>
+    </div>
+  </div>
+  {% else %}<p class="muted">없음</p>{% endfor %}
+</div>
+
+<div class="panel table-wrap">
+  <h2>최근 처리</h2>
+  <table>
+    <tr><th>#</th><th>프로그램</th><th>문제</th><th>보낸 문구</th><th>상태</th></tr>
+    {% for q in recent %}
+    <tr><td>{{ q.id }}</td><td>{{ q.program }}<br><span class="muted">{{ q.sent_at or q.updated_at }}</span></td>
+      <td>{{ q.question }}<br><span class="muted">{{ q.decision or '' }}</span></td>
+      <td>{{ q.send_text or '' }}</td>
+      <td><span class="badge {{ 'ok' if q.entry_status == 'posted' else ('warn' if q.entry_status in ('entered', 'unknown') else '') }}">{{ QUIZ_ENTRY.get(q.entry_status, q.entry_status) }}</span>
+        <br><span class="muted">{{ q.note or '' }}</span></td></tr>
+    {% else %}<tr><td colspan="5" class="muted">없음</td></tr>{% endfor %}
+  </table>
+  <p class="muted">정답 인정·당첨·상품 수령은 <a href="{{ url_for('quizzes') }}">퀴즈 기록</a>에서 따로 기록합니다.</p>
+</div>
+
+<div class="panel">
+  <h2>최근 녹취 <span class="muted">음성 인식 결과 · 이 PC에만 저장</span></h2>
+  {% if lines %}<pre class="box">{% for l in lines %}[{{ l.at[11:] }}] {{ l.text }}
+{% endfor %}</pre>{% else %}<p class="muted">아직 없음</p>{% endif %}
+</div>
+
+<script>
+function fillTimes() {
+  var o = document.getElementById('prog').selectedOptions[0];
+  if (!o) return;
+  document.getElementById('st').placeholder = o.dataset.start || 'HH:MM';
+  document.getElementById('et').placeholder = o.dataset.end || 'HH:MM';
+}
+fillTimes();
+</script>
+{% endblock %}

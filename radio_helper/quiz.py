@@ -19,6 +19,7 @@ ENTRY_LABELS = {
     "posted": "게시 확인",
     "unknown": "결과 불명",
     "failed": "실패",
+    "skipped": "보내지 않음",
 }
 
 

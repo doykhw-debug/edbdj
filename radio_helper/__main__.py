@@ -3,7 +3,9 @@
 import argparse
 import webbrowser
 
-from .app import create_app
+from . import db
+from .app import create_app, launch_quizbot
+from .quizbot import config as qconfig
 
 
 def main() -> None:
@@ -14,6 +16,14 @@ def main() -> None:
     app = create_app()
     url = f"http://127.0.0.1:{args.port}/"
     print(f"관리 화면: {url}  (끝내려면 이 창에서 Ctrl+C)")
+    conn = db.connect()
+    try:
+        if (qconfig.get(conn, "quizbot.autostart") == "1" and not db.is_stopped(conn)
+                and not qconfig.runner_alive(conn)):
+            db.set_setting(conn, "quizbot.stop", "0")
+            print(f"퀴즈 자동 참여도 함께 시작합니다. (기록: {launch_quizbot(['run'])})")
+    finally:
+        conn.close()
     if not args.no_browser:
         webbrowser.open(url)
     # 이 PC에서만 접속 가능하도록 127.0.0.1 에만 연다.

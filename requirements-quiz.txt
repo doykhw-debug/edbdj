@@ -1,0 +1,7 @@
+# 고릴라 퀴즈 자동 참여용 (start_windows.bat 이 함께 설치)
+anthropic>=1.11
+faster-whisper>=1.2
+numpy>=1.26
+keyring>=25
+PyAudioWPatch>=0.2.12; sys_platform == "win32"
+pywinauto>=0.6.9; sys_platform == "win32"

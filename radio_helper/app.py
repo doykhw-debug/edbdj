@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
 
 from . import db, gates, generator, quiz
 from .gates import STATUS_LABELS
+from .quizbot import config as qconfig
+from .quizbot import schedule as qschedule
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 YES_NO = {"unknown": "미확인", "yes": "예", "no": "아니오"}
@@ -472,15 +476,203 @@ def create_app(data_dir: str | None = None) -> Flask:
         if request.method == "POST":
             stop = "1" if form("global_stop") == "1" else "0"
             db.set_setting(g.conn, "global_stop", stop)
+            if stop == "1":
+                db.set_setting(g.conn, "quizbot.stop", "1")  # 퀴즈 자동 참여도 멈춘다
             db.log(g.conn, "stop", "일괄 중지 켬" if stop == "1" else "일괄 중지 해제")
             flash("일괄 중지를 켰습니다. 모든 입력 작업이 멈춥니다." if stop == "1" else "일괄 중지를 해제했습니다.")
             return redirect(url_for("settings"))
         events = g.conn.execute("SELECT * FROM events ORDER BY id DESC LIMIT 100").fetchall()
         log_dir = db.data_dir() / "logs"
-        logs = sorted(log_dir.glob("autofill_*.log"), reverse=True)[:5] if log_dir.exists() else []
+        logs = sorted(log_dir.glob("*.log"), key=lambda f: f.stat().st_mtime, reverse=True)[:6] if log_dir.exists() else []
         return render_template("settings.html", events=events,
                                logs=[(p.name, p.read_text(encoding="utf-8", errors="replace")[-4000:]) for p in logs],
                                data_dir=db.data_dir())
+
+    # ── 퀴즈 자동 참여 ────────────────────────────────────────────
+    def schedule_rows():
+        return g.conn.execute(
+            """SELECT s.*, p.title AS program FROM quiz_schedules s JOIN programs p ON p.id = s.program_id
+               ORDER BY s.start_time""").fetchall()
+
+    @app.get("/quizbot")
+    def quizbot():
+        from .quizbot.answerer import get_api_key
+
+        c = g.conn
+        schedules = schedule_rows()
+        now = datetime.now()
+        active = qschedule.active_window(schedules, now)
+        nxt = qschedule.next_window(schedules, now)
+        by_id = {s["id"]: s for s in schedules}
+        try:
+            check = json.loads(db.get_setting(c, "quizbot.check") or "null")
+        except ValueError:
+            check = None
+        pending = c.execute("SELECT * FROM quizzes WHERE source = 'auto' AND entry_status IN ('pending', 'failed') "
+                            "ORDER BY id DESC LIMIT 20").fetchall()
+        recent = c.execute("SELECT * FROM quizzes WHERE source = 'auto' AND entry_status NOT IN ('pending', 'failed') "
+                           "ORDER BY id DESC LIMIT 20").fetchall()
+        lines = c.execute("SELECT * FROM transcripts ORDER BY id DESC LIMIT 30").fetchall()
+        programs_ = c.execute("SELECT id, title, start_time, end_time FROM programs WHERE on_air = 1 "
+                              "ORDER BY start_time").fetchall()
+        return render_template(
+            "quizbot.html", schedules=schedules, active=active, nxt=nxt, by_id=by_id,
+            alive=qconfig.runner_alive(c), state=db.get_setting(c, "quizbot.state"),
+            heartbeat=db.get_setting(c, "quizbot.heartbeat"), check=check, has_key=bool(get_api_key()),
+            pending=pending, recent=recent, lines=list(reversed(lines)), programs=programs_,
+            days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
+            autostart=qconfig.get(c, "quizbot.autostart") == "1")
+
+    @app.post("/quizbot/start")
+    def quizbot_start():
+        if db.is_stopped(g.conn):
+            flash("일괄 중지가 켜져 있습니다. 설정에서 해제한 뒤 시작하세요.", "error")
+        elif qconfig.runner_alive(g.conn):
+            flash("이미 실행 중입니다.", "warn")
+        else:
+            db.set_setting(g.conn, "quizbot.stop", "0")
+            db.set_setting(g.conn, "quizbot.state", "시작 중")
+            log_name = launch_quizbot(["run"])
+            flash(f"퀴즈 자동 참여를 시작합니다. 이 PC가 켜져 있고 관리 화면 창이 열려 있는 동안 동작합니다. (기록: {log_name})")
+        return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/stop")
+    def quizbot_stop():
+        db.set_setting(g.conn, "quizbot.stop", "1")
+        db.log(g.conn, "quizbot", "멈춤 요청 (사용자)")
+        flash("멈춤을 요청했습니다. 지금 듣고 있는 구간이 끝나면 멈춥니다 (최대 30초 정도).")
+        return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/settings")
+    def quizbot_settings():
+        db.set_setting(g.conn, "quizbot.autostart", "1" if request.form.get("autostart") else "0")
+        key = (request.form.get("api_key") or "").strip()
+        if key:
+            from .quizbot.answerer import save_api_key
+
+            try:
+                save_api_key(key)
+                db.log(g.conn, "quizbot", "Claude API 키를 윈도우 자격 증명 관리자에 저장함")
+                flash("API 키를 저장했습니다. (이 PC의 자격 증명 관리자에만 저장되며 화면·기록에 남지 않습니다)")
+            except Exception as e:
+                flash(f"API 키를 저장하지 못했습니다: {type(e).__name__}. 환경 변수 ANTHROPIC_API_KEY 로 설정할 수도 있습니다.",
+                      "error")
+        else:
+            flash("설정을 저장했습니다.")
+        return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/schedules")
+    def quizbot_schedule_new():
+        prog = one("SELECT * FROM programs WHERE id = ?", int(form("program_id") or 0))
+        start, end = form("start_time") or prog["start_time"], form("end_time") or prog["end_time"]
+        days = "".join(sorted(d for d in request.form.getlist("days") if d in "0123456"))
+        if not (start and end and days):
+            flash("시작·끝 시간과 요일을 정하세요.", "error")
+            return redirect(url_for("quizbot"))
+        if not (qschedule.valid_hm(start) and qschedule.valid_hm(end)) or start == end:
+            flash("시간은 HH:MM 형식(00:00~23:59)으로, 시작과 끝을 다르게 적어 주세요.", "error")
+            return redirect(url_for("quizbot"))
+        g.conn.execute(
+            """INSERT INTO quiz_schedules (program_id, days, start_time, end_time, auto_submit, min_confidence,
+                   gorilla_confirmed, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+            (prog["id"], days, start, end, 1 if request.form.get("auto_submit") else 0,
+             _confidence(form("min_confidence")), 1 if request.form.get("gorilla_confirmed") else 0, db.now(), db.now()))
+        g.conn.commit()
+        db.log(g.conn, "quizbot", f"예약 추가: {prog['title']} {qschedule.days_label(days)} {start}~{end}")
+        flash(f"{prog['title']} 예약을 추가했습니다.")
+        return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/schedules/<int:sid>")
+    def quizbot_schedule_update(sid):
+        sch = one("SELECT * FROM quiz_schedules WHERE id = ?", sid)
+        if form("action") == "delete":
+            g.conn.execute("DELETE FROM quiz_schedules WHERE id = ?", (sid,))
+            g.conn.commit()
+            flash("예약을 지웠습니다.")
+            return redirect(url_for("quizbot"))
+        g.conn.execute(
+            """UPDATE quiz_schedules SET enabled = ?, auto_submit = ?, min_confidence = ?, gorilla_confirmed = ?,
+                   updated_at = ? WHERE id = ?""",
+            (1 if request.form.get("enabled") else 0, 1 if request.form.get("auto_submit") else 0,
+             _confidence(form("min_confidence"), sch["min_confidence"]),
+             1 if request.form.get("gorilla_confirmed") else 0, db.now(), sid))
+        g.conn.commit()
+        flash("예약을 저장했습니다.")
+        return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/quizzes/<int:qid>/approve")
+    def quizbot_approve(qid):
+        q = one("SELECT * FROM quizzes WHERE id = ?", qid)
+        answer = form("answer") or (q["answer"] or "")
+        if q["entry_status"] not in ("pending", "failed"):
+            flash("이미 보냈거나 결과 불명인 문제는 다시 보내지 않습니다.", "error")
+            return redirect(url_for("quizbot"))
+        if not answer:
+            flash("정답을 적어 주세요.", "error")
+            return redirect(url_for("quizbot"))
+        send_text = form("send_text") or None
+        g.conn.execute(
+            "UPDATE quizzes SET answer = ?, send_text = ?, approved = 1, kind = 'new', entry_status = 'pending', "
+            "decision = '승인됨 — 실행기가 곧 보냄', updated_at = ? WHERE id = ?", (answer, send_text, db.now(), qid))
+        g.conn.commit()
+        db.log(g.conn, "quizbot", f"퀴즈 #{qid} 보내기 승인 (사용자): {answer}")
+        if qconfig.runner_alive(g.conn):
+            flash("승인했습니다. 실행기가 고릴라로 보냅니다.")
+        else:
+            flash("승인했습니다. 퀴즈 자동 참여가 꺼져 있어 '시작'을 눌러야 보내집니다.", "warn")
+        return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/quizzes/<int:qid>/skip")
+    def quizbot_skip(qid):
+        one("SELECT id FROM quizzes WHERE id = ?", qid)
+        g.conn.execute("UPDATE quizzes SET entry_status = 'skipped', approved = 0, updated_at = ? "
+                       "WHERE id = ? AND entry_status IN ('pending', 'failed')", (db.now(), qid))
+        g.conn.commit()
+        flash(f"퀴즈 #{qid}은(는) 보내지 않습니다.")
+        return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/tool")
+    def quizbot_tool():
+        tool = form("tool")
+        args = {"check": ["check"], "inspect": ["inspect-gorilla"], "calibrate-input": ["calibrate", "input"],
+                "calibrate-send": ["calibrate", "send"], "type-test": ["type-test"]}.get(tool)
+        if args is None:
+            abort(400)
+        if tool != "check" and db.is_stopped(g.conn):
+            flash("일괄 중지가 켜져 있습니다.", "error")
+            return redirect(url_for("gorilla"))
+        log_name = launch_quizbot(args)
+        messages = {
+            "check": "환경을 점검합니다. 10~30초 뒤 이 화면을 새로 고치세요.",
+            "inspect": "고릴라 창의 화면 요소를 읽습니다 (아무것도 누르지 않음).",
+            "calibrate-input": "5초 안에 마우스를 고릴라 채팅 입력칸 위에 올려 두세요.",
+            "calibrate-send": "5초 안에 마우스를 고릴라 전송 버튼 위에 올려 두세요.",
+            "type-test": "고릴라 입력칸에 '입력 테스트'를 넣습니다. 보내지 않으니 확인 후 직접 지우세요.",
+        }
+        flash(f"{messages[tool]} (기록: {log_name})")
+        return redirect(url_for("quizbot" if tool == "check" else "gorilla"))
+
+    @app.route("/gorilla", methods=["GET", "POST"])
+    def gorilla():
+        keys = [k for k in qconfig.DEFAULTS if k.startswith("gorilla.") and not k.endswith(("_x", "_y"))] + \
+               [k for k in qconfig.DEFAULTS if k.startswith("quizbot.") and k != "quizbot.autostart"]
+        if request.method == "POST":
+            for k in keys:
+                if k in request.form:
+                    db.set_setting(g.conn, k, request.form[k].strip())
+            flash("고릴라·인식 설정을 저장했습니다. 실행 중이면 '멈춤' 후 다시 '시작'하면 적용됩니다.")
+            return redirect(url_for("gorilla"))
+        reports = sorted((db.data_dir() / "inspect").glob("gorilla_*.json"), reverse=True)[:1]
+        report = None
+        if reports:
+            try:
+                report = json.loads(reports[0].read_text(encoding="utf-8"))
+                report["file"] = reports[0].name
+            except ValueError:
+                report = None
+        coords = {k: qconfig.get(g.conn, f"gorilla.{k}") for k in ("input_x", "input_y", "send_x", "send_y")}
+        return render_template("gorilla.html", keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
+                               labels=qconfig.LABELS, report=report, coords=coords)
 
     # ── 로컬 모의 글쓰기 화면 ─────────────────────────────────────
     @app.route("/mock/write", methods=["GET", "POST"])
@@ -521,3 +713,14 @@ def launch_autofill(args: list[str]) -> str:
 
 def launch_programs_refresh() -> str:
     return launch_module("radio_helper.programs", ["refresh"], "programs")
+
+
+def launch_quizbot(args: list[str]) -> str:
+    return launch_module("radio_helper.quizbot", args, "quizbot")
+
+
+def _confidence(text: str, default: float = 0.8) -> float:
+    try:
+        return min(1.0, max(0.0, float(text)))
+    except (TypeError, ValueError):
+        return default
