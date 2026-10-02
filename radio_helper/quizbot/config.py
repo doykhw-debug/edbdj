@@ -22,11 +22,12 @@ DEFAULTS = {
     "quizbot.effort": "medium",
     "quizbot.autostart": "0",
     # 고릴라 화면
+    "gorilla.process_name": "",           # '자동 찾기'로 저장되는 고릴라 프로그램(실행 파일) 이름
     "gorilla.window_title": "고릴라|gorealra",
     "gorilla.input_mode": "uia",          # uia: 화면 요소로 입력칸 찾기 / coords: 지정한 위치 클릭
     "gorilla.input_auto_id": "",
-    "gorilla.input_name": "",
-    "gorilla.send_mode": "enter",         # enter / button / coords
+    "gorilla.input_name": "공감로그|글쓰기",
+    "gorilla.send_mode": "auto",          # auto(전송 버튼, 없으면 Enter) / button / enter / coords
     "gorilla.send_button_name": "전송|보내기|등록",
     "gorilla.input_x": "",
     "gorilla.input_y": "",
@@ -45,11 +46,12 @@ LABELS = {
     "quizbot.max_sends_per_hour": "시간당 최대 전송 수",
     "quizbot.model": "Claude 모델",
     "quizbot.effort": "분석 노력 수준 (low/medium/high)",
-    "gorilla.window_title": "고릴라 창 제목(정규식)",
+    "gorilla.process_name": "고릴라 프로그램 이름 (자동 찾기로 채워짐)",
+    "gorilla.window_title": "고릴라 창 제목(정규식, 프로그램 이름이 없을 때)",
     "gorilla.input_mode": "입력칸 찾기 (uia/coords)",
     "gorilla.input_auto_id": "입력칸 AutomationId (uia)",
     "gorilla.input_name": "입력칸 이름 (uia)",
-    "gorilla.send_mode": "전송 방법 (enter/button/coords)",
+    "gorilla.send_mode": "전송 방법 (auto/button/enter/coords)",
     "gorilla.send_button_name": "전송 버튼 이름(정규식)",
     "gorilla.message_template": "보낼 문구 ({answer} 자리에 정답)",
 }
@@ -76,11 +78,12 @@ def get_float(conn: sqlite3.Connection, key: str) -> float | None:
 
 @dataclass
 class GorillaConfig:
+    process_name: str = ""
     window_title: str = DEFAULTS["gorilla.window_title"]
     input_mode: str = "uia"
     input_auto_id: str = ""
-    input_name: str = ""
-    send_mode: str = "enter"
+    input_name: str = DEFAULTS["gorilla.input_name"]
+    send_mode: str = "auto"
     send_button_name: str = DEFAULTS["gorilla.send_button_name"]
     input_x: float | None = None
     input_y: float | None = None

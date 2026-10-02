@@ -634,7 +634,8 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.post("/quizbot/tool")
     def quizbot_tool():
         tool = form("tool")
-        args = {"check": ["check"], "inspect": ["inspect-gorilla"], "calibrate-input": ["calibrate", "input"],
+        args = {"check": ["check"], "auto-setup": ["auto-setup"], "inspect": ["inspect-gorilla"],
+                "calibrate-input": ["calibrate", "input"],
                 "calibrate-send": ["calibrate", "send"], "type-test": ["type-test"]}.get(tool)
         if args is None:
             abort(400)
@@ -644,6 +645,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         log_name = launch_quizbot(args)
         messages = {
             "check": "환경을 점검합니다. 10~30초 뒤 이 화면을 새로 고치세요.",
+            "auto-setup": "열린 창 중에서 고릴라 채팅창을 찾습니다 (읽기만 함). 10~30초 뒤 이 화면을 새로 고치세요.",
             "inspect": "고릴라 창의 화면 요소를 읽습니다 (아무것도 누르지 않음).",
             "calibrate-input": "5초 안에 마우스를 고릴라 채팅 입력칸 위에 올려 두세요.",
             "calibrate-send": "5초 안에 마우스를 고릴라 전송 버튼 위에 올려 두세요.",
@@ -662,17 +664,24 @@ def create_app(data_dir: str | None = None) -> Flask:
                     db.set_setting(g.conn, k, request.form[k].strip())
             flash("고릴라·인식 설정을 저장했습니다. 실행 중이면 '멈춤' 후 다시 '시작'하면 적용됩니다.")
             return redirect(url_for("gorilla"))
-        reports = sorted((db.data_dir() / "inspect").glob("gorilla_*.json"), reverse=True)[:1]
-        report = None
-        if reports:
+        def latest(pattern):
+            files = sorted((db.data_dir() / "inspect").glob(pattern), reverse=True)[:1]
+            if not files:
+                return None
             try:
-                report = json.loads(reports[0].read_text(encoding="utf-8"))
-                report["file"] = reports[0].name
+                data = json.loads(files[0].read_text(encoding="utf-8"))
             except ValueError:
-                report = None
+                return None
+            data["file"] = files[0].name
+            return data
+
+        report = latest("gorilla_2*.json")       # 창 점검
+        auto = latest("gorilla_auto_*.json")     # 자동 찾기
+        if report and auto and report["file"][len("gorilla_"):] < auto["file"][len("gorilla_auto_"):]:
+            report = None  # 자동 찾기 이전의 점검 결과는 다른 창을 봤을 수 있다
         coords = {k: qconfig.get(g.conn, f"gorilla.{k}") for k in ("input_x", "input_y", "send_x", "send_y")}
         return render_template("gorilla.html", keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
-                               labels=qconfig.LABELS, report=report, coords=coords)
+                               labels=qconfig.LABELS, report=report, auto=auto, coords=coords)
 
     # ── 로컬 모의 글쓰기 화면 ─────────────────────────────────────
     @app.route("/mock/write", methods=["GET", "POST"])

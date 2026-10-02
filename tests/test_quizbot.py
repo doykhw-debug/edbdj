@@ -518,3 +518,62 @@ def test_idle_outside_window(conn):
     rr.state = lambda text, _orig=rr.state: (calls.append(text), _orig(text))[1]
     rr.run_forever()
     assert any(isinstance(c, str) and "다음 예약 10/06 07:00" in c for c in calls)
+
+
+# ── 고릴라 창 자동 찾기 ──────────────────────────────────────────────
+class FakeWin:
+    def __init__(self, title):
+        self.title = title
+
+    def window_text(self):
+        return self.title
+
+
+def fake_desktop(monkeypatch, windows):
+    """windows: [(title, process, edit_names, button_names)]"""
+    wins = [(FakeWin(t), t, p) for t, p, _e, _b in windows]
+    controls = {t: {"Edit": e, "Button": b} for t, _p, e, b in windows}
+    monkeypatch.setattr(gorilla, "_top_windows", lambda: wins)
+    monkeypatch.setattr(gorilla, "_control_names", lambda w, ct, limit=300: controls[w.title][ct])
+
+
+BROWSER = ("고릴라·인식 설정 · 라디오 참여 도우미 - Aside", "aside.exe", ["주소창"], ["뒤로", "새로고침"])
+BROWSER2 = ("SBS 고릴라 - Chrome", "chrome.exe", [], [])
+PLAYER = ("고릴라", "gorealra.exe", [], ["재생", "최소화"])
+CHAT = ("공감로그", "gorealra.exe", ["공감로그 글쓰기(200자 내외)"], ["전송", "닫기"])
+
+
+def test_score_excludes_browsers_and_own_pages():
+    assert gorilla.score_window(*BROWSER) < 0
+    assert gorilla.score_window(*BROWSER2) < 0
+    assert gorilla.score_window(*CHAT) > gorilla.score_window(*PLAYER) > 0
+
+
+def test_auto_setup_picks_chat_window(monkeypatch):
+    fake_desktop(monkeypatch, [BROWSER, BROWSER2, PLAYER, CHAT])
+    report = gorilla.Gorilla(config.GorillaConfig()).auto_setup()
+    assert report["chosen"]["title"] == "공감로그"
+    st = report["settings"]
+    assert st["gorilla.process_name"] == "gorealra.exe" and st["gorilla.input_mode"] == "uia"
+    assert st["gorilla.send_mode"] == "auto" and st["gorilla.input_x"] == ""
+
+
+def test_auto_setup_falls_back_to_coords_and_reports_failure(monkeypatch):
+    fake_desktop(monkeypatch, [BROWSER, ("고릴라", "gorealra.exe", [], [])])
+    report = gorilla.Gorilla(config.GorillaConfig()).auto_setup()
+    assert report["settings"]["gorilla.input_mode"] == "coords"  # 프로그램·제목은 맞지만 입력칸이 안 보임
+
+    fake_desktop(monkeypatch, [BROWSER, BROWSER2, ("메모장", "notepad.exe", ["본문"], [])])
+    report = gorilla.Gorilla(config.GorillaConfig()).auto_setup()
+    assert report["settings"] == {} and "찾지 못했습니다" in report["message"]
+
+
+def test_find_window_ignores_browser_and_prefers_chat(monkeypatch):
+    fake_desktop(monkeypatch, [BROWSER, PLAYER, CHAT])
+    g = gorilla.Gorilla(config.GorillaConfig())  # 기본 제목 패턴 '고릴라|gorealra'
+    # 제목은 플레이어 창만 맞지만, 같은 프로그램의 공감로그 창을 함께 보고 입력칸이 있는 쪽을 고른다
+    assert g.find_window().title == "공감로그"
+    g = gorilla.Gorilla(config.GorillaConfig(process_name="gorealra.exe"))
+    assert g.find_window().title == "공감로그" and g.is_running()
+    fake_desktop(monkeypatch, [BROWSER])
+    assert not g.is_running()

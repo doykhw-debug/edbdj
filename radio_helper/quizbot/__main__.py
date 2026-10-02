@@ -2,6 +2,7 @@
 
   run              예약에 따라 퀴즈 자동 참여 (관리 화면의 '시작' 버튼과 같음)
   check            필요한 구성 요소·API 키·고릴라 창·스피커 점검
+  auto-setup       열린 창 중 고릴라 채팅창을 찾아 설정 저장 (읽기만 함)
   inspect-gorilla  고릴라 창의 화면 요소 목록 저장 (읽기만 함)
   calibrate input  5초 뒤 마우스 위치를 채팅 입력칸 위치로 저장
   calibrate send   5초 뒤 마우스 위치를 전송 버튼 위치로 저장
@@ -78,6 +79,21 @@ def cmd_check(conn) -> int:
     return 0 if all(r["ok"] for r in results) else 1
 
 
+def cmd_auto_setup(conn) -> int:
+    from .gorilla import Gorilla, dump
+
+    report = Gorilla(config.GorillaConfig.load(conn)).auto_setup()
+    for key, value in report["settings"].items():
+        db.set_setting(conn, key, value)
+    out_dir = db.data_dir() / "inspect"
+    out_dir.mkdir(exist_ok=True)
+    out = out_dir / f"gorilla_auto_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    out.write_text(dump(report), encoding="utf-8")
+    db.log(conn, "gorilla", "자동 찾기: " + report["message"])
+    say(report["message"])
+    return 0 if report["settings"] else 1
+
+
 def cmd_inspect(conn) -> int:
     from .gorilla import Gorilla, dump
 
@@ -119,7 +135,7 @@ def cmd_type_test(conn) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
-    ap.add_argument("command", choices=["run", "check", "inspect-gorilla", "calibrate", "type-test"])
+    ap.add_argument("command", choices=["run", "check", "auto-setup", "inspect-gorilla", "calibrate", "type-test"])
     ap.add_argument("target", nargs="?", choices=["input", "send"])
     args = ap.parse_args(argv)
     conn = db.connect()
@@ -132,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
         if db.is_stopped(conn):
             say("[중단] 일괄 중지가 켜져 있습니다.")
             return 2
+        if args.command == "auto-setup":
+            return cmd_auto_setup(conn)
         if args.command == "inspect-gorilla":
             return cmd_inspect(conn)
         if args.command == "calibrate":
