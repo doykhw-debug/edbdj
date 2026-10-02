@@ -21,12 +21,24 @@
     <b>#{{ p.id }} {{ p.program }}</b> <span class="muted">{{ p.created_at }}</span>
     {% if p.status == 'failed' %}<span class="badge bad">전송 실패</span>{% endif %}
     <span class="badge {{ 'ok' if p.source == 'user_line' else 'info' }}">{{ STORY_SOURCE.get(p.source, p.source) }}</span>
+    {% if p.target == 'board' %}<span class="badge warn">게시판에만</span>{% endif %}
+    {% if p.song %}<span class="badge">신청곡 {{ p.song }}</span>{% endif %}
+    {% if p.chat_shots %}<span class="muted">채팅창 {{ p.chat_shots }}장 함께 분석</span>{% endif %}
     <p style="margin:6px 0"><b>주제</b>: {{ p.topic }}{% if p.deadline %} <span class="muted">· 마감 {{ p.deadline }}</span>{% endif %}
       <span class="muted">· 고릴라 응모 {{ YES_NO.get(p.gorilla_accepted, p.gorilla_accepted) }}</span></p>
     <p class="muted" style="margin:0">{% if p.experience_id %}사용한 경험: <a href="{{ url_for('experience_edit', eid=p.experience_id) }}">#{{ p.experience_id }} {{ p.exp_label or (p.exp_story or '')[:30] }}</a>{% endif %}
       {% if p.note %} · {{ p.note }}{% endif %}</p>
     {% if warns %}<ul class="list {{ 'bad' if warns|selectattr('level', 'equalto', 'block')|list else 'warn' }}">{% for w in warns %}<li>{{ w.message }}</li>{% endfor %}</ul>{% endif %}
     {% if p.decision %}<p class="muted" style="margin:0">{{ p.decision }}</p>{% endif %}
+    {% if p.target == 'board' %}
+    <p style="margin:6px 0"><b>{{ p.board_title or '(제목 없음)' }}</b></p>
+    <pre class="box">{{ p.message }}</pre>
+    <div class="actions">
+      {% if p.draft_id %}<a class="btn" href="{{ url_for('draft_edit', did=p.draft_id) }}">원고 검토함에서 열기 (#{{ p.draft_id }}{{ ' · ' ~ p.board_name if p.board_name }})</a>
+      {% else %}<a class="btn secondary" href="{{ url_for('corners') }}">코너에서 이 프로그램 게시판 추가</a>{% endif %}
+      <span class="muted">진행자가 '게시판에만' 받는다고 해서 채팅으로 보내지 않습니다. 원고를 확인·승인한 뒤 게시판에 입력하고, 등록 버튼은 직접 누릅니다.</span>
+    </div>
+    {% else %}
     <form method="post" action="{{ url_for('story_approve', pid=p.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <textarea name="message" maxlength="200" oninput="this.nextElementSibling.textContent = this.value.length + '/200자'" placeholder="공감로그에 보낼 글">{{ p.message }}</textarea>
@@ -34,6 +46,7 @@
       <div class="actions"><button name="route" value="app">앱 채팅으로 보내기</button>
         <button name="route" value="sms" class="secondary" onclick="return confirm('휴대폰 문자로 보냅니다 (요금 약 50원, 긴 글은 더). 계속할까요?')">문자로 보내기</button></div>
     </form>
+    {% endif %}
     <details><summary class="muted">판단에 쓴 자막</summary><pre class="box">{{ p.excerpt or '' }}</pre></details>
     <form method="post" action="{{ url_for('story_skip', pid=p.id) }}" style="margin-top:6px"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">보내지 않음</button></form>
   </div>

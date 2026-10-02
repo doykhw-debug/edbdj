@@ -20,7 +20,7 @@ def caption_lines(vm: dict, count: int = 4) -> list[tuple[str, str]]:
     """(문장, 색) 목록. 키워드가 들어간 줄은 눈에 띄는 색."""
     out = []
     for line in vm["lines"][-count:]:
-        color = KEYWORD_COLOR.get(line["keywords"][0], "#ffffff") if line["keywords"] else "#e5e7eb"
+        color = KEYWORD_COLOR.get(live.KEYWORD_KIND.get(line["keywords"][0], ""), "#ffffff") if line["keywords"] else "#e5e7eb"
         tag = f"[{'·'.join(line['keywords'])}] " if line["keywords"] else ""
         out.append((f"{line['at'][:5]}  {tag}{line['text']}", color))
     return out

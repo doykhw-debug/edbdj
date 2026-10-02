@@ -18,6 +18,10 @@ DEFAULTS = {
     "quizbot.cooldown_seconds": "60",
     "quizbot.max_analyses_per_window": "15",
     "quizbot.max_sends_per_hour": "4",
+    # 기발한 오답: 정답 대신 '웃긴 포인트'가 있는 오답을 섞어 보낸다
+    "quizbot.witty_ratio": "0.3",         # 정답이 확실해도 이 비율만큼은 기발한 오답으로 (0~1)
+    "quizbot.min_wit_score": "0.7",       # 이 정도 이상 웃기거나 기발할 때만 오답을 씀
+    "quizbot.chat_shots": "3",            # 분석 한 번에 함께 보내는 채팅창 사진 수 (0이면 녹취만)
     # 사연·주제 모집
     "quizbot.story_settle_seconds": "30",
     "quizbot.story_cooldown_seconds": "600",
@@ -34,6 +38,7 @@ DEFAULTS = {
     "live.min_confidence": "0.8",
     "live.auto_story": "1",               # 사연: 검사를 모두 통과한 초안은 자동 전송
     "live.gift": "1",                     # 선물 정보 기록
+    "live.witty": "1",                    # 퀴즈에 기발한 오답 섞기
     "live.captions": "1",                 # 자막 창 띄우기
     # 분석 (Claude API)
     "quizbot.model": "claude-opus-5-5",
@@ -45,6 +50,7 @@ DEFAULTS = {
     "gorilla.screen_region": "",          # 고릴라 창 영역을 네모로 지정했을 때 화면 좌표 "왼,위,오른,아래"
     "gorilla.input_rect": "",             # 입력칸 네모 (기준 대비 비율 "x1,y1,x2,y2")
     "gorilla.send_rect": "",              # 전송 버튼 네모
+    "gorilla.chat_rect": "",              # 채팅 목록 네모 (키워드가 들리면 읽어서 녹취와 함께 분석)
     "gorilla.window_title": "고릴라|gorealra",
     "gorilla.input_mode": "uia",          # uia: 화면 요소로 입력칸 찾기 / coords: 지정한 위치 클릭
     "gorilla.input_auto_id": "",
@@ -85,6 +91,9 @@ LABELS = {
     "quizbot.gift_settle_seconds": "선물 안내 신호 후 대기(초)",
     "quizbot.gift_cooldown_seconds": "선물 분석 간 최소 간격(초)",
     "quizbot.max_gift_analyses_per_window": "예약 1회당 최대 선물 분석 횟수",
+    "quizbot.witty_ratio": "기발한 오답 비율 (0~1, 정답이 확실할 때도)",
+    "quizbot.min_wit_score": "기발한 오답 최소 점수 (0~1)",
+    "quizbot.chat_shots": "분석 때 함께 보는 채팅창 사진 수 (0=녹취만)",
     "quizbot.model": "Claude 모델",
     "quizbot.effort": "분석 노력 수준 (low/medium/high)",
     "gorilla.process_name": "고릴라 프로그램 이름 (자동 찾기로 채워짐)",
@@ -116,7 +125,7 @@ CHAT_APPS = {
 }
 APP_ALIASES = {"고릴라": "gorilla", "gorilla": "gorilla", "mini": "mini", "미니": "mini", "콩": "kong", "kong": "kong"}
 _APP_FIELDS = {  # 앱마다 따로 저장하는 화면 설정 (고릴라는 기존 'gorilla.*' 키를 그대로 쓴다)
-    "process_name": "", "window_size": "", "screen_region": "", "input_rect": "", "send_rect": "",
+    "process_name": "", "window_size": "", "screen_region": "", "input_rect": "", "send_rect": "", "chat_rect": "",
     "input_mode": "uia", "input_auto_id": "", "send_mode": "auto", "send_button_name": "전송|보내기|등록",
     "input_x": "", "input_y": "", "send_x": "", "send_y": "",
 }
@@ -210,6 +219,7 @@ class GorillaConfig:
     screen_region: str = ""
     input_rect: str = ""
     send_rect: str = ""
+    chat_rect: str = ""
     window_title: str = DEFAULTS["gorilla.window_title"]
     input_mode: str = "uia"
     input_auto_id: str = ""

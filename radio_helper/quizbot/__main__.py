@@ -8,6 +8,8 @@
   select window    화면에 네모를 그려 고릴라 창 전체 영역 저장 (창 인식이 안 될 때)
   select input     화면에 네모를 그려 채팅 입력칸 영역 저장
   select send      화면에 네모를 그려 전송 버튼 영역 저장
+  select chat      화면에 네모를 그려 채팅 목록 영역 저장 (키워드가 들리면 읽어서 녹취와 함께 분석)
+  chat-test        채팅 목록 영역을 지금 찍어 보기 (읽기만 함)
   calibrate input  7초 뒤 마우스 위치를 채팅 입력칸 위치로 저장
   calibrate send   7초 뒤 마우스 위치를 전송 버튼 위치로 저장
   send-test        채팅 앱에 시험 글('파워 FM 화이팅' 등)을 실제로 입력하고 전송까지 누름
@@ -167,6 +169,19 @@ def cmd_send_test(conn, app: str = "gorilla") -> int:
     return 0 if result.status in ("entered", "posted") else 1
 
 
+def cmd_chat_test(conn, app: str = "gorilla") -> int:
+    """채팅창 영역을 지금 찍어 본다 (읽기만 함). 키워드가 들리면 이렇게 찍은 화면을 녹취와 함께 분석한다."""
+    from .gorilla import Gorilla
+
+    if not config.get(conn, f"{app}.chat_rect"):
+        _save(conn, app, {}, "채팅창 영역이 없습니다. '④ 채팅창 영역 지정'을 먼저 하세요.")
+        return 1
+    data = Gorilla(config.GorillaConfig.load(conn, app)).chat_image(save_as=f"{app}_chat")
+    _save(conn, app, {}, f"채팅창 읽기 테스트: {len(data) // 1024 if data else 0}KB 사진 → {app}_chat.png "
+                         "(글자가 읽히는지 관리 화면에서 확인하세요)")
+    return 0 if data else 1
+
+
 def cmd_sms_check(conn) -> int:
     from .sms import AdbSms
 
@@ -278,8 +293,8 @@ def cmd_stt_test(conn) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
     ap.add_argument("command", choices=["run", "captions", "check", "stt-test", "auto-setup", "inspect-gorilla",
-                                        "select", "calibrate", "send-test", "sms-check", "sms-test"])
-    ap.add_argument("target", nargs="?", choices=["window", "input", "send"])
+                                        "select", "calibrate", "send-test", "chat-test", "sms-check", "sms-test"])
+    ap.add_argument("target", nargs="?", choices=["window", "input", "send", "chat"])
     ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
     args = ap.parse_args(argv)
@@ -321,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.target not in ("input", "send"):
                 ap.error("calibrate 에는 input 또는 send 가 필요합니다.")
             return cmd_calibrate(conn, args.target, args.app)
+        if args.command == "chat-test":
+            return cmd_chat_test(conn, args.app)
         return cmd_send_test(conn, args.app)
     except Exception as e:
         first = config.localize(args.app, (str(e).strip().splitlines() or [type(e).__name__])[0][:200])

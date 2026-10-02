@@ -28,7 +28,7 @@ DRAFT_STATUS = {"draft": "작성 중", "approved": "승인됨", "archived": "보
 SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "manual": "직접 작성"}
 STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀"}
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
-                ("live.captions", "captions"))
+                ("live.captions", "captions"), ("live.witty", "witty"))
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
 
@@ -819,9 +819,11 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for(back_to("quizzes")) + "#pending")
         send_text = form("send_text") or None
         route = form("route") if form("route") in qconfig.ROUTES else None
+        kind = "witty" if send_text and q["witty_answer"] and q["witty_answer"] in send_text else "correct"
         g.conn.execute(
-            "UPDATE quizzes SET answer = ?, send_text = ?, route = ?, approved = 1, kind = 'new', entry_status = 'pending', "
-            "decision = '승인됨 — 실행기가 곧 보냄', updated_at = ? WHERE id = ?", (answer, send_text, route, db.now(), qid))
+            "UPDATE quizzes SET answer = ?, send_text = ?, route = ?, answer_kind = ?, approved = 1, kind = 'new', "
+            "entry_status = 'pending', decision = '승인됨 — 실행기가 곧 보냄', updated_at = ? WHERE id = ?",
+            (answer, send_text, route, kind, db.now(), qid))
         g.conn.commit()
         db.log(g.conn, "quizbot", f"퀴즈 #{qid} 보내기 승인 (사용자): {answer}")
         if qconfig.runner_alive(g.conn):
@@ -893,8 +895,9 @@ def create_app(data_dir: str | None = None) -> Flask:
     def stories():
         c = g.conn
         pending = c.execute(
-            """SELECT sp.*, e.label AS exp_label, e.story AS exp_story FROM story_posts sp
+            """SELECT sp.*, e.label AS exp_label, e.story AS exp_story, c.title AS board_name FROM story_posts sp
                LEFT JOIN experiences e ON e.id = sp.experience_id
+               LEFT JOIN drafts d ON d.id = sp.draft_id LEFT JOIN corners c ON c.id = d.corner_id
                WHERE sp.status IN ('pending', 'failed') ORDER BY sp.id DESC LIMIT 30""").fetchall()
         recent = c.execute(
             """SELECT sp.*, e.label AS exp_label FROM story_posts sp LEFT JOIN experiences e ON e.id = sp.experience_id
@@ -978,7 +981,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("sms_page", wait=10 if tool == "sms-check" else 20))
         args = {"check": ["check"], "auto-setup": ["auto-setup"], "inspect": ["inspect-gorilla"],
                 "select-window": ["select", "window"], "select-input": ["select", "input"],
-                "select-send": ["select", "send"],
+                "select-send": ["select", "send"], "select-chat": ["select", "chat"], "chat-test": ["chat-test"],
                 "calibrate-input": ["calibrate", "input"],
                 "calibrate-send": ["calibrate", "send"], "send-test": ["send-test"]}.get(tool)
         if args is None:
@@ -996,6 +999,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             "select-window": "화면이 어두워지면 고릴라 창 전체를 마우스로 끌어 네모로 감싸세요. 손을 떼면 저장됩니다.",
             "select-input": "화면이 어두워지면 고릴라의 '공감로그 글쓰기' 칸을 마우스로 끌어 네모로 그리세요.",
             "select-send": "화면이 어두워지면 고릴라의 파란 '전송' 버튼을 마우스로 끌어 네모로 그리세요.",
+            "select-chat": "화면이 어두워지면 고릴라의 채팅 목록(다른 청취자 글이 올라오는 곳)을 크게 네모로 감싸세요.",
+            "chat-test": "고릴라 채팅 목록 영역을 지금 찍어 봅니다 (읽기만 함).",
             "calibrate-input": "지금 7초 안에 마우스를 고릴라의 '공감로그 글쓰기' 칸 위에 올려 두고 움직이지 마세요.",
             "calibrate-send": "지금 7초 안에 마우스를 고릴라의 파란 '전송' 버튼 위에 올려 두고 움직이지 마세요.",
             "send-test": f"고릴라 채팅에 '{qconfig.get(g.conn, app_ + '.test_message')}'를 입력하고 전송을 누릅니다. "
@@ -1053,7 +1058,9 @@ def create_app(data_dir: str | None = None) -> Flask:
             last_tool = (f.name, text[-1500:] or "(아직 진행 중이거나 출력 없음)")
             break
         label = qconfig.app_label(app_)
-        shots = image_list([(f"{app_}_test", "③ 전송 테스트 — 누르기 직전 (빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치)"),
+        shots = image_list([(f"{app_}_chat", "④ 채팅창 읽기 — 키워드가 들리면 이 영역을 녹취와 함께 분석 (글자가 읽혀야 함)"),
+                            (f"{app_}_select_chat", "④ 채팅 목록으로 지정한 영역"),
+                            (f"{app_}_test", "③ 전송 테스트 — 누르기 직전 (빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치)"),
                             (f"{app_}_test_sent", "③ 전송 테스트 — 보낸 뒤 (채팅에 글이 올라왔는지 확인)"),
                             (f"{app_}_select_input", "① 입력칸으로 지정한 영역"),
                             (f"{app_}_select_send", "② 전송 버튼으로 지정한 영역"),

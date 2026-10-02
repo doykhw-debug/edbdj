@@ -10,7 +10,9 @@
     <b>#{{ q.id }} {{ q.channel }} · {{ q.program }}</b> <span class="muted">{{ q.created_at }}</span>
     {% if q.entry_status == 'failed' %}<span class="badge bad">전송 실패</span>{% endif %}
     <p style="margin:6px 0">{{ q.question }}{% if q.options %} <span class="muted">(보기: {{ q.options }})</span>{% endif %}</p>
-    <p class="muted" style="margin:0">확신도 {{ '%.2f'|format(q.confidence or 0) }} · 고릴라 응모 {{ YES_NO.get(q.gorilla_accepted, q.gorilla_accepted) }}{% if q.deadline %} · 마감 {{ q.deadline }}{% endif %}</p>
+    <p class="muted" style="margin:0">정답 후보 <b>{{ q.answer or '?' }}</b> · 확신도 {{ '%.2f'|format(q.confidence or 0) }} · 앱 응모 {{ YES_NO.get(q.gorilla_accepted, q.gorilla_accepted) }}{% if q.deadline %} · 마감 {{ q.deadline }}{% endif %}{% if q.chat_shots %} · 채팅창 {{ q.chat_shots }}장 함께 분석{% endif %}</p>
+    {% if q.witty_answer %}<p style="margin:2px 0"><span class="badge {{ 'warn' if q.answer_kind == 'witty' else '' }}">기발한 오답{{ ' (보낼 답)' if q.answer_kind == 'witty' }}</span>
+      <b>{{ q.witty_answer }}</b> <span class="muted">— {{ q.witty_point }} · 기발함 {{ '%.2f'|format(q.wit_score or 0) }}{% if q.fun_welcome %} · 진행자가 재밌는 오답 환영{% endif %}</span></p>{% endif %}
     {% if q.decision %}<p class="muted" style="margin:0">{{ q.decision }}</p>{% endif %}
     {% if q.note %}<p class="muted" style="margin:0">{{ q.note }}</p>{% endif %}
     <details><summary class="muted">판단에 쓴 자막</summary><pre class="box">{{ q.excerpt or '' }}</pre></details>
@@ -18,7 +20,7 @@
       <form method="post" action="{{ url_for('quizbot_approve', qid=q.id) }}" class="actions">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="text" name="answer" value="{{ q.answer or '' }}" placeholder="정답" style="width:180px">
-        <input type="text" name="send_text" value="{{ q.send_text or '' }}" placeholder="보낼 문구(비우면 기본 형식)" style="width:220px">
+        <input type="text" name="send_text" value="{{ q.send_text or (q.witty_answer if q.answer_kind == 'witty' else '') or '' }}" placeholder="보낼 문구(비우면 정답을 기본 형식으로)" style="width:240px">
         <button name="route" value="app">앱 채팅으로 보내기</button>
         <button name="route" value="sms" class="secondary" onclick="return confirm('휴대폰 문자로 보냅니다 (요금 약 50원). 계속할까요?')">문자로 보내기</button>
       </form>
@@ -34,7 +36,7 @@
     <tr><th>#</th><th>채널 · 프로그램</th><th>문제</th><th>보낸 문구</th><th>상태</th><th>결과</th></tr>
     {% for q in auto %}
     <tr><td>{{ q.id }}</td><td>{{ q.channel }}<br>{{ q.program }}<br><span class="muted">{{ q.sent_at or q.updated_at }}</span></td>
-      <td>{{ q.question }}<br><span class="muted">{{ q.decision or '' }}</span></td>
+      <td>{{ q.question }}<br><span class="muted">정답 {{ q.answer or '?' }}{% if q.answer_kind == 'witty' %} · <span class="badge warn">기발한 오답</span> {{ q.witty_point or '' }}{% endif %} · {{ q.decision or '' }}</span></td>
       <td>{{ q.send_text or '' }}{% if q.sent_via %}<br><span class="badge info">{{ VIA.get(q.sent_via, q.sent_via) }}</span>{% endif %}</td>
       <td><span class="badge {{ 'ok' if q.entry_status == 'posted' else ('warn' if q.entry_status in ('entered', 'unknown') else '') }}">{{ QUIZ_ENTRY.get(q.entry_status, q.entry_status) }}</span>
         <br><span class="muted">{{ q.note or '' }}</span></td>

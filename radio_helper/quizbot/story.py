@@ -18,7 +18,7 @@ from .answerer import STORY_LIMIT
 
 ACTIVE = ("pending", "entered", "posted", "unknown")
 EXP_FIELDS = ["label", "when_text", "people", "story", "quotes", "quote_kind", "highlight", "ending",
-              "fixed_facts", "gorilla_line"]
+              "fixed_facts", "gorilla_line", "song"]
 SIMILAR_TOPIC = 0.7
 
 
@@ -60,13 +60,15 @@ def masked_profile(conn: sqlite3.Connection) -> dict:
     return {k: generator.mask_terms(p.get(k) or "", terms) for k in ("tone", "family_aliases", "avoid_topics")}
 
 
-def message_checks(conn: sqlite3.Connection, message: str, exp, source: str, added_facts=()) -> list[dict]:
-    """공감로그 글 검사. level 'block' 이 있으면 보낼 수 없다."""
+def message_checks(conn: sqlite3.Connection, message: str, exp, source: str, added_facts=(),
+                   limit: int | None = None) -> list[dict]:
+    """공감로그·게시판 글 검사. level 'block' 이 있으면 보낼 수 없다. limit: 글자 수 제한 (기본 채팅 200자)."""
     found: list[dict] = []
+    limit = limit or STORY_LIMIT
     if not message.strip():
         found.append({"level": "block", "message": "보낼 글이 비어 있습니다."})
-    if len(message) > STORY_LIMIT:
-        found.append({"level": "block", "message": f"{len(message)}자로 공감로그 제한({STORY_LIMIT}자)을 넘습니다."})
+    if len(message) > limit:
+        found.append({"level": "block", "message": f"{len(message)}자로 제한({limit}자)을 넘습니다."})
     for f in checks.check_personal_info(message, banned_terms(conn, exp)):
         found.append({"level": f.level, "message": f.message})
     if exp is not None and source not in ("user_line", "manual"):
@@ -105,6 +107,8 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
     reasons = []
     if db.is_stopped(conn):
         reasons.append("일괄 중지가 켜져 있음")
+    if "target" in post.keys() and post["target"] == "board":
+        reasons.append("게시판용 글 — 원고 검토함에서 게시판에 입력")
     if post["status"] != "pending":
         reasons.append(f"이미 처리됨({quiz.ENTRY_LABELS.get(post['status'], post['status'])})")
     warnings = json.loads(post["warnings"] or "[]")

@@ -288,12 +288,23 @@ _ADDED_COLUMNS = {
         ("approved", "INTEGER NOT NULL DEFAULT 0"),     # 사용자가 화면에서 보내기를 승인함
         ("decision", "TEXT"),                           # 자동 전송/보류 판단 이유
         ("route", "TEXT"),                              # 사용자가 고른 보내는 방법 (비면 기본 설정)
-        ("sent_via", "TEXT"),                           # 실제로 보낸 방법: gorilla / sms
+        ("sent_via", "TEXT"),                           # 실제로 보낸 방법: gorilla / mini / kong / sms
+        ("answer_kind", "TEXT NOT NULL DEFAULT 'correct'"),  # 보낼 답: correct 정답 / witty 기발한 오답
+        ("witty_answer", "TEXT"),
+        ("witty_point", "TEXT"),                        # 왜 웃기거나 기발한지
+        ("wit_score", "REAL"),
+        ("fun_welcome", "INTEGER NOT NULL DEFAULT 0"),  # 진행자가 재밌는 오답도 환영한다고 함
+        ("chat_shots", "INTEGER NOT NULL DEFAULT 0"),   # 분석에 함께 쓴 채팅창 사진 수
     ],
     "story_posts": [
         ("channel", "TEXT"),
         ("route", "TEXT"),
         ("sent_via", "TEXT"),
+        ("target", "TEXT NOT NULL DEFAULT 'chat'"),    # chat 채팅창 / board 게시판 (진행자가 '게시판에만'이라고 할 때)
+        ("board_title", "TEXT"),
+        ("draft_id", "INTEGER"),                        # 게시판용이면 원고 검토함의 원고
+        ("song", "TEXT"),
+        ("chat_shots", "INTEGER NOT NULL DEFAULT 0"),
     ],
 }
 

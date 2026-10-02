@@ -247,6 +247,62 @@ def capture(rect: tuple[int, int, int, int], name: str, boxes=(), points=()) -> 
     return path.name
 
 
+def window_image(hwnd: int):
+    """창 하나를 찍는다 (다른 창에 가려져 있어도 됨, 최소화는 안 됨). 실패하면 None. Windows 전용."""
+    import ctypes
+    from ctypes import wintypes
+
+    from PIL import Image
+
+    user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+    if user32.IsIconic(hwnd):
+        return None
+    r = wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(r))
+    w, h = r.right - r.left, r.bottom - r.top
+    if w <= 0 or h <= 0:
+        return None
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                    ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD), ("biCompression", wintypes.DWORD),
+                    ("biSizeImage", wintypes.DWORD), ("biXPelsPerMeter", wintypes.LONG),
+                    ("biYPelsPerMeter", wintypes.LONG), ("biClrUsed", wintypes.DWORD),
+                    ("biClrImportant", wintypes.DWORD)]
+
+    win_dc = user32.GetWindowDC(hwnd)
+    mem_dc = gdi32.CreateCompatibleDC(win_dc)
+    bmp = gdi32.CreateCompatibleBitmap(win_dc, w, h)
+    old = gdi32.SelectObject(mem_dc, bmp)
+    try:
+        if not user32.PrintWindow(hwnd, mem_dc, 2):  # PW_RENDERFULLCONTENT: 크롬 기반 앱도 그려 준다
+            return None
+        header = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
+        buf = ctypes.create_string_buffer(w * h * 4)
+        gdi32.GetDIBits(mem_dc, bmp, 0, h, buf, ctypes.byref(header), 0)
+        img = Image.frombuffer("RGB", (w, h), buf.raw, "raw", "BGRX", 0, 1)
+    finally:
+        gdi32.SelectObject(mem_dc, old)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mem_dc)
+        user32.ReleaseDC(hwnd, win_dc)
+    lo, hi = img.convert("L").getextrema()
+    return None if hi - lo < 8 else img   # 새까맣거나 한 색이면 못 찍은 것
+
+
+def to_jpeg(img, max_side: int = 900) -> bytes:
+    """분석용으로 줄여서 JPEG 로 (이미지 토큰 ≈ 가로×세로/750)."""
+    import io
+
+    img = img.convert("RGB")
+    scale = min(1.0, max_side / max(img.size))
+    if scale < 1.0:
+        img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=80)
+    return out.getvalue()
+
+
 def parse_rect(text: str | None) -> tuple[float, ...] | None:
     try:
         parts = tuple(float(v) for v in (text or "").split(","))
@@ -265,7 +321,7 @@ def rect_fraction(ref: tuple[int, int, int, int], rect: tuple[int, int, int, int
 def region_settings(target: str, rect: tuple[int, int, int, int], info: dict,
                     screen_region: tuple[int, ...] | None) -> tuple[dict, str]:
     """끌어서 그린 네모 → 저장할 설정 (순수 계산).
-    target: window(고릴라 창 전체 영역) / input(입력칸) / send(전송 버튼)
+    target: window(고릴라 창 전체 영역) / input(입력칸) / send(전송 버튼) / chat(채팅 목록, 읽기 전용)
     info: 네모 가운데에 있는 창 정보"""
     l, t, r, b = rect
     if r - l < 4 or b - t < 4:
@@ -302,6 +358,11 @@ def region_settings(target: str, rect: tuple[int, int, int, int], info: dict,
     cx, cy, _, _ = rect_fraction(ref, ((l + r) / 2, (t + b) / 2, r, b))
     if not (0 <= cx <= 1 and 0 <= cy <= 1):
         raise GorillaError("네모가 고릴라 창(영역) 밖에 있습니다.")
+    if target == "chat":
+        # 읽기만 하는 영역: 누를 위치나 입력 방식은 바꾸지 않는다
+        settings["gorilla.chat_rect"] = f"{fx1},{fy1},{fx2},{fy2}"
+        return settings, (f"채팅창 영역을 저장했습니다: {basis}의 {fx2 - fx1:.0%}×{fy2 - fy1:.0%}. "
+                          "퀴즈·사연 키워드가 들리면 이 부분에 올라오는 글도 함께 읽어 분석합니다.")
     settings.update({
         f"gorilla.{target}_rect": f"{fx1},{fy1},{fx2},{fy2}",
         f"gorilla.{target}_x": str(cx), f"gorilla.{target}_y": str(cy),
@@ -512,7 +573,8 @@ class Gorilla:
     def select(self, target: str) -> tuple[dict, str] | None:
         prompts = {"window": "고릴라 창 전체를 네모로 감싸 주세요",
                    "input": "고릴라의 채팅 입력칸('공감로그 글쓰기' 등)을 네모로 그려 주세요",
-                   "send": "고릴라의 '전송' 버튼을 네모로 그려 주세요"}
+                   "send": "고릴라의 '전송' 버튼을 네모로 그려 주세요",
+                   "chat": "고릴라의 채팅 목록(다른 청취자 글이 올라오는 곳)을 네모로 크게 감싸 주세요"}
         rect = select_rectangle(localize(self.cfg.app, prompts[target]))
         if rect is None:
             return None
@@ -522,7 +584,7 @@ class Gorilla:
         ref = self._region() if target != "window" and self._region() else info["rect"]
         if target == "window":
             ref = rect
-        color = {"input": "#2554c7", "send": "#18794e", "window": "#f59e0b"}[target]
+        color = {"input": "#2554c7", "send": "#18794e", "window": "#f59e0b", "chat": "#a855f7"}[target]
         try:
             shot = capture(ref, f"{self.cfg.app}_select_{target}", boxes=[(rect, color)])
             if shot:
@@ -678,6 +740,37 @@ class Gorilla:
         if self.cfg.send_mode == "coords" and self.cfg.send_x is not None and self.cfg.send_y is not None:
             points.append((fraction_to_point(ref, self.cfg.send_x, self.cfg.send_y), "#22c55e"))
         return points
+
+    def chat_image(self, max_side: int = 900, save_as: str | None = None) -> bytes | None:
+        """채팅 목록 영역을 찍어 JPEG 로 돌려준다 (읽기만 함, 창을 앞으로 가져오지 않음).
+        영역을 지정하지 않았거나 창을 찾지 못하면 None."""
+        frac = parse_rect(self.cfg.chat_rect)
+        if not frac:
+            return None
+        w = self._window()
+        ref = self._ref_rect(w)
+        rl, rt, rr, rb = ref
+        rw, rh = rr - rl, rb - rt
+        box = (int(rw * frac[0]), int(rh * frac[1]), int(rw * frac[2]), int(rh * frac[3]))
+        img = None
+        if self._region() is None:
+            try:
+                full = window_image(w.handle)
+                if full is not None:
+                    img = full.crop(box)
+            except Exception:
+                img = None
+        if img is None:  # 창 사진을 못 찍는 앱이면 화면에서 그 부분을 찍는다 (가려져 있으면 가린 창이 찍힘)
+            from PIL import ImageGrab
+
+            img = ImageGrab.grab(bbox=(rl + box[0], rt + box[1], rl + box[2], rt + box[3]), all_screens=True)
+        if save_as:
+            from .. import db
+
+            out_dir = db.data_dir() / "inspect"
+            out_dir.mkdir(exist_ok=True)
+            img.convert("RGB").save(out_dir / f"{save_as}.png")
+        return to_jpeg(img, max_side)
 
     def send_test(self, text: str) -> tuple[SendResult, str]:
         """설정 확인용으로 실제로 한 번 보낸다. 누르기 직전·보낸 직후 고릴라 창을 찍어 둔다."""

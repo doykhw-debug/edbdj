@@ -20,6 +20,7 @@ from typing import Callable, Protocol
 from .. import db, quiz
 from . import config, live, story
 from . import sms as sms_mod
+from . import answerer as answerer_mod
 from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
 from .audio import rms
 from .detector import Detector, TranscriptBuffer, is_gift_signal, is_story_signal
@@ -49,6 +50,7 @@ class Transcriber(Protocol):
 class Answerer(Protocol):
     def analyze(self, program: str, transcript: str, known: list[tuple[int, str]]) -> QuizAnalysis: ...
     def analyze_story(self, program: str, transcript: str, profile: dict, experiences: list[dict]) -> StoryAnalysis: ...
+    # 채팅창 사진이 있으면 analyze(..., images=[(시각, JPEG)]) / analyze_story(..., images=...) 로 함께 넘긴다
     def analyze_gifts(self, program: str, transcript: str) -> list[dict]: ...
 
 
@@ -84,12 +86,17 @@ def decide(conn: sqlite3.Connection, q: sqlite3.Row, schedule: sqlite3.Row | Non
         reasons.append(f"이미 처리됨({quiz.ENTRY_LABELS.get(q['entry_status'], q['entry_status'])})")
     if q["kind"] != "new":
         reasons.append("새 문제가 아님")
-    if not (q["answer"] or "").strip():
-        reasons.append("정답 후보 없음")
+    witty = q["answer_kind"] == "witty"
+    if not (q["send_text"] or (q["witty_answer"] if witty else q["answer"]) or "").strip():
+        reasons.append("보낼 답이 없음" if witty else "정답 후보 없음")
     approved = bool(q["approved"])
     if not approved:
         if schedule is None or not schedule["auto_submit"]:
             reasons.append("이 예약은 자동 전송이 꺼져 있음 (확인 후 전송)")
+        elif witty:
+            min_wit = config.get_float(conn, "quizbot.min_wit_score") or 0.7
+            if (q["wit_score"] or 0) < min_wit:
+                reasons.append(f"기발한 정도 {q['wit_score'] or 0:.2f} < 기준 {min_wit:.2f}")
         elif (q["confidence"] or 0) < schedule["min_confidence"]:
             reasons.append(f"확신도 {q['confidence']:.2f} < 기준 {schedule['min_confidence']:.2f}")
         if route == "sms":
@@ -123,6 +130,20 @@ def find_duplicate(known: list[sqlite3.Row], analysis: QuizAnalysis) -> int | No
         if SequenceMatcher(None, target, other).ratio() >= SIMILAR_QUESTION:
             return r["id"]
     return None
+
+
+def choose_answer(res: QuizAnalysis, min_confidence: float, ratio: float, min_wit: float, roll: float) -> str:
+    """정답(correct)과 기발한 오답(witty) 중 무엇을 보낼지.
+
+    - 웃긴 포인트가 있고 기준 이상으로 기발한 오답이 있을 때만 오답을 고려한다.
+    - 진행자가 재밌는 오답을 환영하거나, 정답이 확실하지 않으면 오답을 보낸다.
+    - 정답이 확실하면 ratio 비율(roll < ratio)만큼만 오답을 섞는다. ratio 0 이면 항상 정답.
+    """
+    if not (res.witty_answer and res.witty_point) or res.wit_score < min_wit or ratio <= 0:
+        return "correct"
+    if res.fun_welcome or not res.answer or res.confidence < min_confidence:
+        return "witty"
+    return "witty" if roll < ratio else "correct"
 
 
 # ── 실행기 ──────────────────────────────────────────────────────────
@@ -244,6 +265,8 @@ class Runner:
         max_story = config.get_int(self.conn, "quizbot.max_story_analyses_per_window")
         max_gift = config.get_int(self.conn, "quizbot.max_gift_analyses_per_window")
         current, silent, chunks, slow = None, 0, 0, 0
+        self.shots: list[tuple[str, bytes]] = []   # 키워드가 들린 뒤 찍은 채팅창 사진 (녹취와 교차 분석)
+        self._shot_error = False
         self.state("녹음 장치 여는 중")
         with self.deps.recorder_factory(chunk_seconds) as recorder:
             if hasattr(recorder, "on_level"):
@@ -298,6 +321,8 @@ class Runner:
                         story_detector.feed(now, text)
                     if session["gift_enabled"]:
                         gift_detector.feed(now, text)
+                if detector.armed or story_detector.armed:
+                    self.collect_chat(session["channel"], now)
                 if session["gift_enabled"] and gift_detector.is_due(now):
                     gift_detector.mark_analyzed(now)
                     if self.gift_analyses < max_gift:
@@ -305,14 +330,16 @@ class Runner:
                 if session["story_enabled"] and story_detector.is_due(now):
                     story_detector.mark_analyzed(now)
                     if self.story_analyses < max_story:
-                        self.analyze_story(session, w, buffer.window(now, context))
+                        self.analyze_story(session, w, buffer.window(now, context), self.shots_for_analysis())
                 if detector.is_due(now):
                     detector.mark_analyzed(now)
                     if self.analyses < max_analyses:
-                        self.analyze(session, w, buffer.window(now, context))
+                        self.analyze(session, w, buffer.window(now, context), self.shots_for_analysis())
                     elif self.analyses == max_analyses:
                         db.log(self.conn, "quizbot", f"{program}: 분석 횟수 상한({max_analyses}) 도달 — 이 프로그램에서는 더 분석하지 않음")
                         self.analyses += 1
+                if not (detector.armed or story_detector.armed):
+                    self.shots = []   # 다음 키워드가 들리면 새로 모은다
                 self.process_approved(session)
                 self.retry_held(session, gorilla_ok)
         db.log(self.conn, "quizbot", f"{current or session['program']} 듣기 끝 · 분석 {min(self.analyses, max_analyses)}회")
@@ -326,17 +353,43 @@ class Runner:
             self.event(f"첫 받아쓰기 ({took:.1f}초): '{text[:60]}'" if text
                        else f"첫 받아쓰기 ({took:.1f}초): 말소리 없음 (소리 크기 {level}/100)")
 
+    def collect_chat(self, channel: str | None, now: datetime) -> None:
+        """채팅창 영역을 지정했으면 지금 화면을 찍어 모은다 (처음 1장 + 최근 몇 장)."""
+        keep = config.get_int(self.conn, "quizbot.chat_shots")
+        app = config.chat_app(self.conn, channel)
+        sender = self.chat_sender(app) if app else None
+        if keep <= 0 or sender is None or not hasattr(sender, "chat_image"):
+            return
+        if not config.get(self.conn, f"{app}.chat_rect"):
+            return
+        try:
+            data = sender.chat_image(save_as=f"{app}_chat")
+        except Exception as e:
+            if not self._shot_error:
+                self._shot_error = True
+                self.event(f"{config.app_label(app)} 채팅창을 읽지 못했습니다 (녹취만으로 분석): {type(e).__name__}: {str(e)[:80]}")
+            return
+        if data:
+            self.shots.append((now.strftime("%H:%M:%S"), data))
+            if len(self.shots) > keep:
+                self.shots = self.shots[:1] + self.shots[-(keep - 1):] if keep > 1 else self.shots[-1:]
+
+    def shots_for_analysis(self) -> list[tuple[str, bytes]]:
+        return list(getattr(self, "shots", []))
+
     def known_quizzes(self, program: str, date: str):
         return self.conn.execute(
             "SELECT * FROM quizzes WHERE program = ? AND broadcast_date = ? AND source = 'auto' ORDER BY id",
             (program, date)).fetchall()
 
-    def analyze(self, schedule, w: Window, transcript: str) -> int | None:
+    def analyze(self, schedule, w: Window, transcript: str, images=()) -> int | None:
         program = schedule["program"]
         known = self.known_quizzes(program, w.broadcast_date)
         self.analyses += 1
+        self._images_used = len(images)
         try:
-            res = self.deps.answerer.analyze(program, transcript, [(r["id"], r["question"] or "") for r in known])
+            extra = {"images": list(images)} if images else {}
+            res = self.deps.answerer.analyze(program, transcript, [(r["id"], r["question"] or "") for r in known], **extra)
         except AnswererError as e:
             db.log(self.conn, "quizbot", f"{program} 분석 실패: {e}")
             return None
@@ -357,14 +410,32 @@ class Runner:
             self.conn.execute("UPDATE quizzes SET repeat_count = repeat_count + 1, updated_at = ? WHERE id = ?",
                               (db.now(), dup))
             row = self.conn.execute("SELECT * FROM quizzes WHERE id = ?", (dup,)).fetchone()
-            if not (row["answer"] or "") and res.answer:
-                self.conn.execute("UPDATE quizzes SET answer = ?, confidence = ? WHERE id = ?",
-                                  (res.answer, res.confidence, dup))
+            if row["entry_status"] == "pending" and not row["approved"] and res.answer and \
+                    (not (row["answer"] or "") or res.confidence > (row["confidence"] or 0)):
+                # 재안내·힌트로 답이 더 확실해졌으면 새 답으로 다시 판단한다
+                kind = self.pick_kind(schedule, res)
+                self.conn.execute(
+                    "UPDATE quizzes SET answer = ?, confidence = ?, witty_answer = ?, witty_point = ?, wit_score = ?, "
+                    "fun_welcome = ?, answer_kind = ? WHERE id = ?",
+                    (res.answer, res.confidence, res.witty_answer or row["witty_answer"],
+                     res.witty_point or row["witty_point"], res.wit_score or row["wit_score"],
+                     1 if (res.fun_welcome or row["fun_welcome"]) else 0, kind, dup))
             self.conn.commit()
             if row["entry_status"] == "pending":
                 self.try_send(dup, schedule)
             return dup
         return self.record_new(schedule, w, res, transcript)
+
+    def pick_kind(self, schedule, res: QuizAnalysis) -> str:
+        import random
+
+        ratio = config.get_float(self.conn, "quizbot.witty_ratio")
+        if config.get(self.conn, "live.witty") != "1" and live.is_active(self.conn):
+            ratio = 0.0   # 청취 화면에서 '기발한 오답 섞기'를 끔
+        roll = random.Random(f"{schedule['program']}|{quiz.normalize_question(res.question)}").random()
+        return choose_answer(res, schedule["min_confidence"] if schedule is not None else 0.8,
+                             ratio if ratio is not None else 0.3,
+                             config.get_float(self.conn, "quizbot.min_wit_score") or 0.7, roll)
 
     def record_new(self, schedule, w: Window, res: QuizAnalysis, transcript: str) -> int:
         account = db.get_setting(self.conn, "profile.account_label") or "기본"
@@ -381,11 +452,21 @@ class Runner:
              db.now(), db.now()))
         self.conn.commit()
         qid = cur.lastrowid
+        kind = self.pick_kind(schedule, res)
+        self.conn.execute(
+            "UPDATE quizzes SET answer_kind = ?, witty_answer = ?, witty_point = ?, wit_score = ?, fun_welcome = ?, "
+            "chat_shots = ? WHERE id = ?",
+            (kind, res.witty_answer or None, res.witty_point or None, res.wit_score, 1 if res.fun_welcome else 0,
+             getattr(self, "_images_used", 0), qid))
         if res.formatted_message and res.answer and res.answer in res.formatted_message:
-            self.conn.execute("UPDATE quizzes SET send_text = ? WHERE id = ?", (res.formatted_message[:100], qid))
-            self.conn.commit()
+            # 진행자가 정한 형식 (기발한 오답을 보낼 때도 같은 형식으로)
+            text = res.formatted_message.replace(res.answer, res.witty_answer) if kind == "witty" else res.formatted_message
+            self.conn.execute("UPDATE quizzes SET send_text = ? WHERE id = ?", (text[:100], qid))
+        self.conn.commit()
+        chosen = f" · 기발한 오답 '{res.witty_answer}'으로 보냄 ({res.witty_point[:40]})" if kind == "witty" else ""
+        shots = f" · 채팅창 {self._images_used}장 함께 분석" if getattr(self, "_images_used", 0) else ""
         db.log(self.conn, "quizbot", f"{schedule['program']} 퀴즈 감지 #{qid}: {res.question[:40]} → {res.answer or '?'} "
-                                     f"(확신도 {res.confidence:.2f})")
+                                     f"(확신도 {res.confidence:.2f}){chosen}{shots}")
         self.try_send(qid, schedule)
         return qid
 
@@ -462,14 +543,15 @@ class Runner:
         return cur.lastrowid
 
     # ── 사연·주제 모집 ───────────────────────────────────────────
-    def analyze_story(self, schedule, w: Window, transcript: str) -> int | None:
+    def analyze_story(self, schedule, w: Window, transcript: str, images=()) -> int | None:
         program = schedule["program"]
         exps = story.candidate_experiences(self.conn)
         if not exps:
             return None  # 쓸 수 있는 실제 경험이 없으면 유료 분석을 하지 않는다
         self.story_analyses += 1
         try:
-            res = self.deps.answerer.analyze_story(program, transcript, story.masked_profile(self.conn), exps)
+            extra = {"images": list(images)} if images else {}
+            res = self.deps.answerer.analyze_story(program, transcript, story.masked_profile(self.conn), exps, **extra)
         except Exception as e:
             db.log(self.conn, "quizbot", f"{program} 사연 분석 실패: {str(e)[:120]}")
             return None
@@ -486,27 +568,64 @@ class Runner:
         exp = None
         if res.experience_id in {e["id"] for e in exps}:
             exp = self.conn.execute("SELECT * FROM experiences WHERE id = ?", (res.experience_id,)).fetchone()
+        target = "board" if res.board_only else "chat"
+        song = (res.song or "").strip()
+        if song and exp is not None and song != (exp["song"] or "").strip() and \
+                song != (db.get_profile(self.conn).get("song") or "").strip():
+            song = ""   # 경험·내 정보에 적힌 신청곡만 쓴다
         message, source = (res.message or "").strip(), "ai"
         if exp is not None and res.use_user_line and (exp["gorilla_line"] or "").strip():
             message, source = exp["gorilla_line"].strip(), "user_line"
+        if target == "board":
+            message, source = (res.board_body or "").strip(), "ai"
+        elif song and message and len(message) + len(song) + 8 <= answerer_mod.STORY_LIMIT:
+            message = f"{message} (신청곡: {song})"
         if exp is None:
             message = ""
-        warnings = story.message_checks(self.conn, message, exp, source, res.added_facts) if exp is not None else []
+        warnings = story.message_checks(self.conn, message, exp, source, res.added_facts,
+                                        limit=2000 if target == "board" else None) if exp is not None else []
         note = res.fit_reason if exp is not None else "주제에 맞는 실제 경험이 없음 — 직접 써서 보내거나 건너뛰세요"
+        draft_id = self.make_board_draft(program, exp, res.board_title, message, song) \
+            if target == "board" and exp is not None and message else None
         cur = self.conn.execute(
             """INSERT INTO story_posts (schedule_id, channel, program, broadcast_date, topic, experience_id, message, source,
-                   gorilla_accepted, deadline, warnings, excerpt, note, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   gorilla_accepted, deadline, warnings, excerpt, note, target, board_title, draft_id, song, chat_shots,
+                   created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (schedule["id"], self._channel_of(schedule), program, w.broadcast_date, res.topic.strip(), exp["id"] if exp is not None else None,
              message, source, res.gorilla_accepted, res.deadline_hint or None,
-             json.dumps(warnings, ensure_ascii=False), transcript[-2000:], note, db.now(), db.now()))
+             json.dumps(warnings, ensure_ascii=False), transcript[-2000:], note, target, res.board_title or None,
+             draft_id, song or None, len(images), db.now(), db.now()))
         self.conn.commit()
         pid = cur.lastrowid
         db.log(self.conn, "quizbot", f"{program} 사연 주제 감지 #{pid}: {res.topic[:40]} → "
-                                     + (f"경험 #{exp['id']} 사용" if exp is not None else "맞는 경험 없음"))
+                                     + (f"경험 #{exp['id']} 사용" if exp is not None else "맞는 경험 없음")
+                                     + (" · 게시판에만 받음" if target == "board" else "")
+                                     + (f" · 채팅창 {len(images)}장 함께 분석" if images else ""))
+        if target == "board":
+            self._hold("story_posts", pid, (f"게시판용 — 원고 검토함 #{draft_id}에서 확인하고 게시판에 입력하세요 (등록은 직접)"
+                                            if draft_id else "게시판용 — 이 프로그램의 게시판(코너)을 몰라 원고를 만들지 못함. "
+                                                             "코너 화면에서 게시판을 추가하세요"))
+            self.deps.notify(f"게시판 사연 '{res.topic[:30]}' — 원고 검토함 확인")
+            return pid
         if self.try_send_story(pid, schedule) is None:
             self.deps.notify(f"사연 주제 '{res.topic[:30]}' — 확인 대기")
         return pid
+
+    def make_board_draft(self, program: str, exp, title: str, body: str, song: str) -> int | None:
+        """진행자가 '게시판에만' 받는다고 하면 그 프로그램 게시판용 원고를 원고 검토함에 만든다.
+        게시판 등록은 로그인·보안 문자가 있어 사용자가 직접 한다 (원고 화면의 '실제 화면에 입력하기')."""
+        corner = self.conn.execute(
+            "SELECT id FROM corners WHERE program = ? ORDER BY is_target DESC, (title LIKE '%사연%') DESC, id LIMIT 1",
+            (program,)).fetchone()
+        if corner is None:
+            return None
+        cur = self.conn.execute(
+            """INSERT INTO drafts (experience_id, corner_id, title, body, song, source, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'pasted', 'draft', ?, ?)""",
+            (exp["id"], corner["id"], (title or "")[:60], body, song or "", db.now(), db.now()))
+        self.conn.commit()
+        return cur.lastrowid
 
     def try_send_story(self, pid: int, schedule) -> str | None:
         post = self.conn.execute("SELECT * FROM story_posts WHERE id = ?", (pid,)).fetchone()
@@ -530,7 +649,8 @@ class Runner:
             self._hold("quizzes", qid, "보류: " + " / ".join(reasons))
             return None
         template = config.get(self.conn, "sms.quiz_template" if route == "sms" else "gorilla.message_template")
-        text = q["send_text"] or config.format_message(template, q["answer"])
+        answer = q["witty_answer"] if q["answer_kind"] == "witty" and q["witty_answer"] else q["answer"]
+        text = q["send_text"] or config.format_message(template, answer)
         return self.deliver("quizzes", "entry_status", qid, route, q["channel"], text,
                             "사용자 승인 후 전송" if q["approved"] else "자동 전송", f"퀴즈 #{qid}")
 

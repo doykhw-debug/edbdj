@@ -41,7 +41,9 @@ def test_current_program_and_label(conn):
 def test_level_percent_and_keywords():
     assert live.level_percent(0) == 0 and live.level_percent(0.0005) == 0
     assert live.level_percent(1.0) == 100 and 40 < live.level_percent(0.03) < 60
-    assert live.keywords("오늘의 퀴즈 정답은 고릴라로 보내주세요") == ["퀴즈"]
+    assert live.keywords("오늘의 퀴즈 정답은 고릴라로 보내주세요") == ["퀴즈", "정답"]
+    assert live.keywords("신청곡과 사연은 게시판에, 힌트 하나 드릴게요") == ["힌트", "사연", "신청곡", "게시판"]
+    assert live.keywords("선물로 오답도 받아요") == ["오답", "선물"]
     assert live.keywords("다음 곡 듣고 오겠습니다") == []
 
 

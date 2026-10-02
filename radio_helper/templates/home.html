@@ -36,6 +36,7 @@
       <label class="inline"><input type="checkbox" name="auto_quiz" value="1" {{ 'checked' if options.auto_quiz }}> 퀴즈 정답 자동 전송</label>
       <label class="inline"><input type="checkbox" name="auto_story" value="1" {{ 'checked' if options.auto_story }}> 사연 자동 전송 <span class="hint">(경고 없는 글만)</span></label>
       <label class="inline"><input type="checkbox" name="gift" value="1" {{ 'checked' if options.gift }}> 선물 정보 기록</label>
+      <label class="inline"><input type="checkbox" name="witty" value="1" {{ 'checked' if options.witty }}> 기발한 오답 섞기 <span class="hint">(웃긴 포인트가 있을 때만)</span></label>
       <label class="inline"><input type="checkbox" name="captions" value="1" {{ 'checked' if options.captions }}> 자막 창 띄우기</label>
     </div>
     <div class="actions">
@@ -80,10 +81,10 @@
 </div>
 
 <div class="panel">
-  <h2>실시간 자막 <span class="muted">받아쓴 말 전부 · 노란색 퀴즈, 파란색 사연, 초록색 선물</span></h2>
+  <h2>실시간 자막 <span class="muted">받아쓴 말 전부 · 노란색 퀴즈·정답·오답·힌트, 파란색 사연·신청곡·게시판, 초록색 선물</span></h2>
   <div class="captions" id="captions">
     {% for l in vm.lines %}
-      <div class="line {{ ('kw kw-line-' ~ l.keywords[0]) if l.keywords }}"><span class="at">{{ l.at }}</span>{% for k in l.keywords %}<span class="kw-badge kw-{{ k }}">{{ k }}</span>{% endfor %}{{ l.text }}</div>
+      <div class="line {{ ('kw kw-line-' ~ l.kinds[0]) if l.kinds }}"><span class="at">{{ l.at }}</span>{% for k in l.keywords %}<span class="kw-badge kw-{{ l.kinds[loop.index0] }}">{{ k }}</span>{% endfor %}{{ l.text }}</div>
     {% else %}
       <div class="line muted">아직 받아쓴 말이 없습니다. 위 '마지막 녹음' 줄이 10초마다 바뀌면 듣기는 돌고 있는 것입니다.</div>
     {% endfor %}
@@ -115,7 +116,10 @@
   <details><summary class="muted">'청취 시작'을 누르면 일어나는 일</summary>
     <ol class="muted">
       <li>PC 스피커로 나오는 소리(고릴라 방송)를 10초씩 녹음해 이 PC에서 자막으로 바꿉니다. 오디오는 저장하지 않습니다.</li>
-      <li>자막에서 '퀴즈·정답', '사연·보내 주세요', '선물·당첨' 같은 말을 찾습니다.</li>
+      <li>자막에서 키워드(퀴즈·정답·오답·힌트 / 사연·신청곡·게시판 / 선물)를 찾습니다. 키워드가 들리면 그때부터 채팅창에 올라오는 글도
+        함께 찍어(설정 → 앱 채팅 ④) 녹취와 교차 분석해 주제와 맥락을 파악합니다.</li>
+      <li>퀴즈는 정답만 보내지 않고, 웃긴 포인트가 있는 '기발한 오답'을 섞습니다 (진행자가 재밌는 오답을 환영하거나 정답이 불확실할 때, 그 밖에는 30% 정도).</li>
+      <li>사연은 기본으로 채팅창에 보내고, 진행자가 '게시판에만' 받는다고 하면 게시판용 원고를 원고 검토함에 만듭니다 (게시판 등록은 직접).</li>
       <li>퀴즈: 앞뒤 몇 분 자막을 Claude로 분석해 정답을 찾고, 확신도가 기준 이상이면 고른 방법(앱 채팅: 고릴라·mini·콩 / 휴대폰 문자)으로 보냅니다. 한 번 보낸 문제는 다시 보내지 않습니다.</li>
       <li>사연: 내 '실제 경험' 중 주제에 맞는 것으로 짧은 글을 만들고, 검사 경고가 없으면 보냅니다. 경고가 있으면 '사연'에서 확인을 기다립니다. 없는 일을 지어내지 않습니다.</li>
       <li>선물: 선물 이름·조건·응모 방법을 채널·프로그램별로 기록만 합니다.</li>
@@ -138,9 +142,9 @@
     return n;
   }
   function line(l) {
-    var d = node('div', 'line' + (l.keywords.length ? ' kw kw-line-' + l.keywords[0] : ''));
+    var d = node('div', 'line' + (l.kinds.length ? ' kw kw-line-' + l.kinds[0] : ''));
     d.appendChild(node('span', 'at', l.at));
-    l.keywords.forEach(function (k) { d.appendChild(node('span', 'kw-badge kw-' + k, k)); });
+    l.keywords.forEach(function (k, i) { d.appendChild(node('span', 'kw-badge kw-' + l.kinds[i], k)); });
     d.appendChild(document.createTextNode(l.text));
     return d;
   }

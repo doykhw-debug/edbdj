@@ -98,15 +98,18 @@ def level_percent(rms: float) -> int:
     return max(0, min(100, int(round((20 * math.log10(rms) + 60) / 60 * 100))))
 
 
+# 화면에 표시하는 키워드 → 종류(색)
+KEYWORD_KIND = {"퀴즈": "퀴즈", "정답": "퀴즈", "오답": "퀴즈", "힌트": "퀴즈",
+                "사연": "사연", "신청곡": "사연", "게시판": "사연", "선물": "선물"}
+
+
 def keywords(text: str) -> list[str]:
-    kinds = []
-    if is_quiz_signal(text):
-        kinds.append("퀴즈")
-    if is_story_signal(text):
-        kinds.append("사연")
-    if is_gift_signal(text):
-        kinds.append("선물")
-    return kinds
+    """문장에 나온 키워드 (화면 강조용). 키워드 낱말이 없어도 신호 표현이면 종류 이름을 붙인다."""
+    found = [k for k in KEYWORD_KIND if k in text]
+    for kind, signal in (("퀴즈", is_quiz_signal), ("사연", is_story_signal), ("선물", is_gift_signal)):
+        if signal(text) and not any(KEYWORD_KIND[k] == kind for k in found):
+            found.append(kind)
+    return found
 
 
 def _age_seconds(stamp: str, now: datetime) -> float | None:
@@ -166,7 +169,8 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
         "program": program_label(conn, channel, now),
         "state": db.get_setting(conn, "quizbot.state"),
         "level": int(db.get_setting(conn, "quizbot.level") or 0) if collecting else 0,
-        "lines": [{"at": r["at"][11:19], "text": r["text"], "keywords": keywords(r["text"])} for r in reversed(rows)],
+        "lines": [{"at": r["at"][11:19], "text": r["text"], "keywords": keywords(r["text"]),
+                   "kinds": [KEYWORD_KIND[k] for k in keywords(r["text"])]} for r in reversed(rows)],
         "events": [{"at": e["at"][11:16], "message": e["message"]} for e in events],
         "pending": {"quizzes": pending_quiz, "stories": pending_story},
         "last_chunk": _json_setting(conn, "quizbot.last_chunk") if active else None,

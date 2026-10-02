@@ -14,8 +14,10 @@ from radio_helper.quizbot.detector import is_gift_signal, is_story_signal
 def test_story_and_gift_signals():
     assert is_story_signal("오늘의 주제는 첫 출근입니다 사연 보내주세요")
     assert is_story_signal("여러분의 추억 이야기를 들려주세요")
-    assert not is_story_signal("이 사연 보내주신 분 감사합니다")
-    assert not is_story_signal("다음 사연 읽어드릴게요")
+    # '사연'·'신청곡'·'게시판'은 들리기만 해도 신호 (실제 모집인지는 분석에서 가림)
+    assert is_story_signal("이 사연 보내주신 분 감사합니다") and is_story_signal("신청곡 받습니다")
+    assert is_story_signal("오늘은 게시판으로만 받을게요")
+    assert not is_story_signal("다음 곡 듣고 오겠습니다")
     assert is_gift_signal("정답 맞히신 분께 커피 기프티콘 선물 드려요")
     assert not is_gift_signal("다음 곡 듣고 오겠습니다")
 
