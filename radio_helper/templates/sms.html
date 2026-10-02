@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}휴대폰 문자 설정 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>휴대폰 문자 설정 <span class="muted">안드로이드 + USB 케이블</span></h1>
+<div class="actions" style="margin:0 0 12px">
+  <a class="btn secondary" href="{{ url_for('gorilla') }}">앱 채팅 설정 (고릴라·mini·콩)</a>
+  <a class="btn secondary" href="{{ url_for('home') }}">청취 화면</a>
+</div>
+
+<div class="panel">
+  <h2>문자로 보내는 원리</h2>
+  <p>라디오 문자(#1077 등)는 <b>내 휴대폰 번호</b>로 보내야 해서, PC에 USB로 연결한 휴대폰의 <b>기본 문자 앱</b>을 이 프로그램이 대신 눌러 보냅니다.
+    보내기 직전에 작성 화면의 받는 번호가 '#' 까지 맞는지 확인하고, 다르면 보내지 않습니다.</p>
+  <p class="muted">요금: 라디오 문자는 건당 약 50원(긴 글은 더)이 휴대폰 요금에 붙습니다. 비용 상한은 두지 않았습니다.
+    오늘 문자로 보낸 글 <b>{{ today.count }}건</b> (약 {{ '{:,}'.format(today.won) }}원).
+    지금 보내는 방법: <b>{{ '문자' if route == 'sms' else '앱 채팅' }}</b> (청취 화면에서 바꿈)</p>
+</div>
+
+<div class="panel">
+  <h2>처음 한 번 준비</h2>
+  <ol>
+    <li><b>휴대폰 개발자 옵션 켜기</b> — 설정 → 휴대전화 정보 → 소프트웨어 정보 → <b>빌드번호</b>를 7번 누릅니다.</li>
+    <li><b>USB 디버깅 켜기</b> — 설정 → 개발자 옵션 → <b>USB 디버깅</b> 켜기. 같은 화면의 <b>'충전 중 화면 켜짐 유지'</b>도 켜 두면 청취 중에 화면이 잠기지 않습니다.</li>
+    <li><b>PC에 adb 두기</b> — Google 공식 <a href="https://developer.android.com/tools/releases/platform-tools" target="_blank" rel="noopener">SDK Platform-Tools for Windows</a>를
+      내려받아 압축을 풀고, 나온 <code>platform-tools</code> 폴더를 이 프로그램 폴더(<code>start_windows.bat</code> 이 있는 곳)에 넣습니다.
+      {% if adb %}<span class="badge ok">찾음</span> <span class="muted">{{ adb }}</span>{% else %}<span class="badge bad">아직 없음</span>{% endif %}</li>
+    <li><b>USB로 연결</b> — 휴대폰에 'USB 디버깅을 허용하시겠습니까?'가 뜨면 <b>'이 컴퓨터에서 항상 허용'</b>을 체크하고 허용합니다.</li>
+    <li><b>연결 점검</b> → <b>시험 문자 보내기</b>. 휴대폰 화면 잠금은 풀어 두세요.</li>
+  </ol>
+  <div class="actions">
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="sms-check"><button>연결 점검</button></form>
+    <form method="post" action="{{ url_for('quizbot_tool') }}" data-msg="{{ channel }} {{ number or '(번호 없음)' }}" onsubmit="return confirm('[' + this.dataset.msg + '] 로 시험 문자를 실제로 보냅니다 (요금 약 50원). 계속할까요?')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="sms-test">
+      <button class="secondary" {{ 'disabled' if stopped or not number }}>시험 문자 보내기 ({{ channel }} {{ number or '번호 없음' }})</button></form>
+  </div>
+  {% if waiting %}<div class="flash" style="margin-top:10px">실행 중입니다… {{ waiting }}초 뒤 이 화면이 자동으로 새로 고쳐집니다.</div>{% endif %}
+  {% if check %}
+    <p class="muted" style="margin-top:12px">연결 점검 {{ check.at }}</p>
+    <ul class="list">{% for i in check["items"] %}<li>{% if i.ok %}<span class="badge ok">OK</span>{% else %}<span class="badge bad">확인 필요</span>{% endif %} {{ i.name }} <span class="muted">{{ i.detail }}</span></li>{% endfor %}</ul>
+  {% endif %}
+  {% if shots %}
+  <div class="shots" style="margin-top:12px">
+    {% for sh in shots %}
+    <figure><a href="{{ url_for('inspect_image', name=sh.file) }}?v={{ sh.v }}" target="_blank" rel="noopener"><img src="{{ url_for('inspect_image', name=sh.file) }}?v={{ sh.v }}" alt="{{ sh.label }}" style="max-height:420px"></a>
+      <figcaption>{{ sh.label }} · {{ sh.at }}</figcaption></figure>
+    {% endfor %}
+  </div>
+  <p class="muted">휴대폰 화면 사진은 이 PC에만 저장됩니다. 다른 대화 내용이 보일 수 있으니 공유하지 마세요.</p>
+  {% endif %}
+  {% if events %}
+    <p style="margin-top:12px"><b>최근 문자 기록</b></p>
+    {% for e in events %}<div class="muted">{{ e.at }} · {{ e.message }}</div>{% endfor %}
+  {% endif %}
+</div>
+
+<form method="post" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>설정값</h2>
+  <label>{{ labels['channels'] }} <span class="hint">채널=문자번호=앱 · 앱은 비우면 이름으로 정함 (SBS→고릴라, MBC→mini, KBS→콩)</span></label>
+  <textarea name="channels" class="mono" rows="8">{{ values['channels'] }}</textarea>
+  <div class="row">
+    {% for k in keys if k != 'channels' %}
+    <div><label>{{ labels.get(k, k) }} <span class="hint">{{ k }}</span></label>
+      <input type="text" name="{{ k }}" value="{{ values[k] }}"></div>
+    {% endfor %}
+  </div>
+  <p class="muted">끝에 붙는 이름: {% if nickname %}<b>'{{ nickname }}'</b> (내 정보의 방송용 이름) — 예: '정답 사과 - {{ nickname }}'{% else %}<span class="badge warn">없음</span> <a href="{{ url_for('profile') }}">내 정보</a>에서 방송용 이름을 정하세요{% endif %}</p>
+  <div class="actions"><button>저장</button></div>
+</form>
+{% if waiting %}
+<script>setTimeout(function () { location.href = location.pathname; }, {{ waiting * 1000 }});</script>
+{% endif %}
+{% endblock %}

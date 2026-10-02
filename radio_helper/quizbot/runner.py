@@ -19,6 +19,7 @@ from typing import Callable, Protocol
 
 from .. import db, quiz
 from . import config, live, story
+from . import sms as sms_mod
 from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
 from .audio import rms
 from .detector import Detector, TranscriptBuffer, is_gift_signal, is_story_signal
@@ -27,7 +28,13 @@ from .schedule import Window, active_window, next_window
 SILENCE_RMS = 0.002
 SILENT_CHUNKS_WARN = 4
 SIMILAR_QUESTION = 0.85  # 짧은 한국어 문장은 0.6이면 다른 문제도 같다고 본다
-GORILLA_HOLD = "대기: 고릴라 창을 찾지 못함 — 찾으면 보냄"
+def app_hold(app: str) -> str:
+    return f"대기: {config.app_label(app)} 창을 찾지 못함 — 찾으면 보냄"
+
+
+GORILLA_HOLD = app_hold("gorilla")
+APP_HOLDS = [app_hold(a) for a in config.CHAT_APPS]
+SMS_HOLD = "대기: 휴대폰(USB)이 연결되지 않음 — 연결되면 보냄"
 HELD_RETRY_MINUTES = 20  # 이보다 오래된 보류 글은 늦었으므로 자동으로 보내지 않는다
 
 
@@ -62,11 +69,14 @@ class Deps:
     lock: Callable[[], object] | None = None            # 입력 작업 직렬화 (웹 입력 도구와 공유)
     log: Callable[[str], None] = lambda m: print(m, flush=True)
     notify: Callable[[str], None] = lambda m: None      # 확인할 글이 생겼을 때 알림 (윈도우: 알림음)
+    sms: object | None = None                           # 휴대폰 문자: is_ready(), send(number, text)
+    chat_senders: dict | None = None                    # 앱별 채팅 전송 {"mini": ..., "kong": ...} (없으면 sender)
 
 
 # ── 판단 ────────────────────────────────────────────────────────────
-def decide(conn: sqlite3.Connection, q: sqlite3.Row, schedule: sqlite3.Row | None, now: datetime) -> list[str]:
-    """자동 전송을 막는 이유 목록. 비어 있으면 바로 보낸다."""
+def decide(conn: sqlite3.Connection, q: sqlite3.Row, schedule: sqlite3.Row | None, now: datetime,
+           route: str = "app") -> list[str]:
+    """자동 전송을 막는 이유 목록. 비어 있으면 바로 보낸다. 문자로 보낼 때는 고릴라 응모 조건을 보지 않는다."""
     reasons = []
     if db.is_stopped(conn):
         reasons.append("일괄 중지가 켜져 있음")
@@ -82,8 +92,10 @@ def decide(conn: sqlite3.Connection, q: sqlite3.Row, schedule: sqlite3.Row | Non
             reasons.append("이 예약은 자동 전송이 꺼져 있음 (확인 후 전송)")
         elif (q["confidence"] or 0) < schedule["min_confidence"]:
             reasons.append(f"확신도 {q['confidence']:.2f} < 기준 {schedule['min_confidence']:.2f}")
-        if q["gorilla_accepted"] == "no":
-            reasons.append("진행자가 고릴라가 아닌 다른 방법으로 받는다고 함")
+        if route == "sms":
+            pass
+        elif q["gorilla_accepted"] == "no":
+            reasons.append("진행자가 고릴라가 아닌 다른 방법(문자 등)으로 받는다고 함 — '문자로 보내기'를 누르면 보냄")
         elif q["gorilla_accepted"] != "yes" and not (schedule and schedule["gorilla_confirmed"]):
             reasons.append("고릴라 응모 인정 여부 미확인")
     limit = config.get_int(conn, "quizbot.max_sends_per_hour")
@@ -199,15 +211,17 @@ class Runner:
         보낼 글은 고릴라 창을 찾을 때까지 보류한다.
         """
         session, w = get_session(self.deps.now())
-        while wait_for_gorilla and not self.deps.sender.is_running():
+        while wait_for_gorilla and not self.chat_ok(session["channel"]):
             if self.should_stop() or not keep_going(self.deps.now()):
                 return
-            self.state(f"{session['program']} — 고릴라가 실행 중이 아님 (30초마다 확인)")
+            label = config.app_label(config.chat_app(self.conn, session["channel"]))
+            self.state(f"{session['program']} — {label}가 실행 중이 아님 (30초마다 확인)")
             self.deps.sleep(30)
-        gorilla_ok = self.deps.sender.is_running()
+        gorilla_ok = self.chat_ok(session["channel"])
         gorilla_checked = self.deps.now()
-        if not gorilla_ok:
-            db.log(self.conn, "quizbot", "고릴라 창을 찾지 못했습니다 — 듣기·자막은 계속하고, 보낼 글은 고릴라 창을 찾으면 보냅니다.")
+        if not gorilla_ok and config.route(self.conn) == "app":
+            label = config.app_label(config.chat_app(self.conn, session["channel"]))
+            db.log(self.conn, "quizbot", f"{label} 창을 찾지 못했습니다 — 듣기·자막은 계속하고, 보낼 글은 {label} 창을 찾으면 보냅니다.")
 
         model = config.get(self.conn, "quizbot.whisper_model")
         self.state(f"음성 인식 모델 불러오는 중 ({config.get(self.conn, 'quizbot.whisper_device')} · {model}, "
@@ -244,11 +258,14 @@ class Runner:
                     current, self.analyses, self.story_analyses, self.gift_analyses = program, 0, 0, 0
                 if not wait_for_gorilla and (self.deps.now() - gorilla_checked).total_seconds() >= 60:
                     gorilla_checked, was_ok = self.deps.now(), gorilla_ok
-                    gorilla_ok = self.deps.sender.is_running()
+                    gorilla_ok = self.chat_ok(session["channel"])
                     if gorilla_ok and not was_ok:
-                        db.log(self.conn, "quizbot", "고릴라 창을 찾았습니다 — 보류한 글을 보냅니다.")
+                        label = config.app_label(config.chat_app(self.conn, session["channel"]))
+                        db.log(self.conn, "quizbot", f"{label} 창을 찾았습니다 — 보류한 글을 보냅니다.")
+                needs_app = config.route(self.conn) == "app"
+                label = config.app_label(config.chat_app(self.conn, session["channel"]))
                 self.state(f"{program} 듣는 중 · 분석 퀴즈 {self.analyses}·사연 {self.story_analyses}·선물 {self.gift_analyses}회"
-                           + ("" if gorilla_ok else " · 고릴라 창 못 찾음(전송 보류)"))
+                           + (f" · {label} 창 못 찾음(전송 보류)" if needs_app and not gorilla_ok else ""))
                 audio = recorder.read_chunk()
                 now = self.deps.now()
                 level = rms(audio)
@@ -297,8 +314,7 @@ class Runner:
                         db.log(self.conn, "quizbot", f"{program}: 분석 횟수 상한({max_analyses}) 도달 — 이 프로그램에서는 더 분석하지 않음")
                         self.analyses += 1
                 self.process_approved(session)
-                if gorilla_ok:
-                    self.retry_held(session)
+                self.retry_held(session, gorilla_ok)
         db.log(self.conn, "quizbot", f"{current or session['program']} 듣기 끝 · 분석 {min(self.analyses, max_analyses)}회")
 
     def record_chunk(self, now: datetime, level: int, took: float, text: str, first: bool = False) -> None:
@@ -381,32 +397,25 @@ class Runner:
             "WHERE s.id = ?", (schedule_id,)).fetchone()
 
     def process_approved(self, schedule) -> None:
-        """관리 화면에서 '보내기'를 누른 퀴즈 정답·사연 글을 보낸다."""
-        quizzes = self.conn.execute(
-            "SELECT id, schedule_id FROM quizzes WHERE approved = 1 AND entry_status = 'pending'").fetchall()
-        stories = self.conn.execute(
-            "SELECT id, schedule_id FROM story_posts WHERE approved = 1 AND status = 'pending'").fetchall()
-        if (quizzes or stories) and not self.deps.sender.is_running():
-            self.conn.execute("UPDATE quizzes SET decision = ? WHERE approved = 1 AND entry_status = 'pending'",
-                              ("승인됨 — 고릴라가 켜지면 보냄",))
-            self.conn.execute("UPDATE story_posts SET decision = ? WHERE approved = 1 AND status = 'pending'",
-                              ("승인됨 — 고릴라가 켜지면 보냄",))
-            self.conn.commit()
-            return
-        for r in quizzes:
+        """관리 화면에서 '보내기'를 누른 퀴즈 정답·사연 글을 보낸다 (고른 방법으로)."""
+        for r in self.conn.execute("SELECT id, schedule_id FROM quizzes WHERE approved = 1 AND entry_status = 'pending'"
+                                   ).fetchall():
             self.try_send(r["id"], self._schedule(schedule, r["schedule_id"]))
-        for r in stories:
+        for r in self.conn.execute("SELECT id, schedule_id FROM story_posts WHERE approved = 1 AND status = 'pending'"
+                                   ).fetchall():
             self.try_send_story(r["id"], self._schedule(schedule, r["schedule_id"]))
 
-    def retry_held(self, schedule) -> None:
-        """고릴라 창을 못 찾아 보류한 자동 전송 글을 다시 판단해 보낸다 (최근 것만)."""
+    def retry_held(self, schedule, app_ok: bool = True) -> None:
+        """앱 창·휴대폰이 없어 보류한 자동 전송 글을 다시 판단해 보낸다 (최근 것만)."""
+        holds = [SMS_HOLD] + (APP_HOLDS if app_ok else [])
+        marks = ",".join("?" * len(holds))
         # created_at 은 db.now()(실제 시각)로 남으므로 같은 기준으로 비교한다
         since = (datetime.now() - timedelta(minutes=HELD_RETRY_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
-        for r in self.conn.execute("SELECT id, schedule_id FROM quizzes WHERE entry_status = 'pending' AND approved = 0 "
-                                   "AND decision = ? AND created_at >= ?", (GORILLA_HOLD, since)).fetchall():
+        for r in self.conn.execute(f"SELECT id, schedule_id FROM quizzes WHERE entry_status = 'pending' AND approved = 0 "
+                                   f"AND decision IN ({marks}) AND created_at >= ?", (*holds, since)).fetchall():
             self.try_send(r["id"], self._schedule(schedule, r["schedule_id"]))
-        for r in self.conn.execute("SELECT id, schedule_id FROM story_posts WHERE status = 'pending' AND approved = 0 "
-                                   "AND decision = ? AND created_at >= ?", (GORILLA_HOLD, since)).fetchall():
+        for r in self.conn.execute(f"SELECT id, schedule_id FROM story_posts WHERE status = 'pending' AND approved = 0 "
+                                   f"AND decision IN ({marks}) AND created_at >= ?", (*holds, since)).fetchall():
             self.try_send_story(r["id"], self._schedule(schedule, r["schedule_id"]))
 
     # ── 선물 정보 ────────────────────────────────────────────────
@@ -485,10 +494,10 @@ class Runner:
         warnings = story.message_checks(self.conn, message, exp, source, res.added_facts) if exp is not None else []
         note = res.fit_reason if exp is not None else "주제에 맞는 실제 경험이 없음 — 직접 써서 보내거나 건너뛰세요"
         cur = self.conn.execute(
-            """INSERT INTO story_posts (schedule_id, program, broadcast_date, topic, experience_id, message, source,
+            """INSERT INTO story_posts (schedule_id, channel, program, broadcast_date, topic, experience_id, message, source,
                    gorilla_accepted, deadline, warnings, excerpt, note, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (schedule["id"], program, w.broadcast_date, res.topic.strip(), exp["id"] if exp is not None else None,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (schedule["id"], self._channel_of(schedule), program, w.broadcast_date, res.topic.strip(), exp["id"] if exp is not None else None,
              message, source, res.gorilla_accepted, res.deadline_hint or None,
              json.dumps(warnings, ensure_ascii=False), transcript[-2000:], note, db.now(), db.now()))
         self.conn.commit()
@@ -501,72 +510,104 @@ class Runner:
 
     def try_send_story(self, pid: int, schedule) -> str | None:
         post = self.conn.execute("SELECT * FROM story_posts WHERE id = ?", (pid,)).fetchone()
+        route = self.route_of(post)
         reasons = story.decide(self.conn, post, schedule, self.deps.now(),
-                               config.get_int(self.conn, "quizbot.max_story_sends_per_hour"))
+                               config.get_int(self.conn, "quizbot.max_story_sends_per_hour"), route)
         if reasons:
-            self.conn.execute("UPDATE story_posts SET decision = ?, updated_at = ? WHERE id = ?",
-                              ("보류: " + " / ".join(reasons), db.now(), pid))
-            self.conn.commit()
+            self._hold("story_posts", pid, "보류: " + " / ".join(reasons))
             return None
-        if not self.deps.sender.is_running():
-            self.conn.execute("UPDATE story_posts SET decision = ?, updated_at = ? WHERE id = ?",
-                              (GORILLA_HOLD, db.now(), pid))
-            self.conn.commit()
-            return None
-        text = post["message"].strip()
-        self.conn.execute(
-            "UPDATE story_posts SET status = 'unknown', sent_at = ?, decision = ?, updated_at = ? "
-            "WHERE id = ? AND status = 'pending'",
-            (db.now(), "사용자 승인 후 전송" if post["approved"] else "직접 쓴 한 줄 자동 전송", db.now(), pid))
-        self.conn.commit()
-        try:
-            if self.deps.lock is not None:
-                with self.deps.lock():
-                    result = self.deps.sender.send(text)
-            else:
-                result = self.deps.sender.send(text)
-            status, detail = result.status, result.detail
-        except Exception as e:
-            status, detail = "unknown", f"전송 중 오류: {type(e).__name__}: {str(e)[:120]}"
-        self.conn.execute("UPDATE story_posts SET status = ?, note = COALESCE(note || ' / ', '') || ?, updated_at = ? "
-                          "WHERE id = ?", (status, detail, db.now(), pid))
-        self.conn.commit()
-        db.log(self.conn, "quizbot", f"사연 #{pid} 고릴라 전송 → {quiz.ENTRY_LABELS.get(status, status)} ({detail})")
-        return status
+        how = "사용자 승인 후 전송" if post["approved"] else (
+            "직접 쓴 한 줄 자동 전송" if post["source"] == "user_line" else "검사 통과 자동 전송")
+        channel = post["channel"] or self._channel_of(schedule) or config.get(self.conn, "live.channel")
+        return self.deliver("story_posts", "status", pid, route, channel, post["message"].strip(), how,
+                            f"사연 #{pid}")
 
     def try_send(self, qid: int, schedule) -> str | None:
         q = self.conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
-        reasons = decide(self.conn, q, schedule, self.deps.now())
+        route = self.route_of(q)
+        reasons = decide(self.conn, q, schedule, self.deps.now(), route)
         if reasons:
-            self.conn.execute("UPDATE quizzes SET decision = ?, updated_at = ? WHERE id = ?",
-                              ("보류: " + " / ".join(reasons), db.now(), qid))
-            self.conn.commit()
+            self._hold("quizzes", qid, "보류: " + " / ".join(reasons))
             return None
-        if not self.deps.sender.is_running():
-            self.conn.execute("UPDATE quizzes SET decision = ?, updated_at = ? WHERE id = ?",
-                              (GORILLA_HOLD, db.now(), qid))
-            self.conn.commit()
+        template = config.get(self.conn, "sms.quiz_template" if route == "sms" else "gorilla.message_template")
+        text = q["send_text"] or config.format_message(template, q["answer"])
+        return self.deliver("quizzes", "entry_status", qid, route, q["channel"], text,
+                            "사용자 승인 후 전송" if q["approved"] else "자동 전송", f"퀴즈 #{qid}")
+
+    # ── 보내기 (고릴라 채팅 / 휴대폰 문자) ────────────────────────
+    def route_of(self, item) -> str:
+        """글마다 고른 방법이 있으면 그것, 없으면 기본 설정."""
+        chosen = item["route"] if "route" in item.keys() else None
+        if chosen == "gorilla":
+            chosen = "app"
+        return chosen if chosen in config.ROUTES else config.route(self.conn)
+
+    def chat_sender(self, app: str | None):
+        """앱 채팅 전송 도구 (고릴라·mini·콩). 테스트처럼 앱별 도구가 없으면 기본 sender."""
+        if self.deps.chat_senders and app in self.deps.chat_senders:
+            return self.deps.chat_senders[app]
+        return self.deps.sender
+
+    def chat_ok(self, channel: str | None) -> bool:
+        app = config.chat_app(self.conn, channel)
+        return app is None or self.chat_sender(app).is_running()
+
+    def _channel_of(self, schedule) -> str | None:
+        if schedule is not None and "channel" in schedule.keys():
+            return schedule["channel"]
+        return None
+
+    def _hold(self, table: str, item_id: int, decision: str) -> None:
+        self.conn.execute(f"UPDATE {table} SET decision = ?, updated_at = ? WHERE id = ?", (decision, db.now(), item_id))
+        self.conn.commit()
+
+    def not_ready(self, route: str, channel: str | None) -> str | None:
+        """지금 보낼 수 없는 이유 (보류 문구). 보낼 수 있으면 None."""
+        if route == "sms":
+            if not config.sms_number(self.conn, channel):
+                return f"보류: '{channel or '채널 미확인'}' 문자 번호가 없음 (청취 화면의 채널 목록에서 입력)"
+            if self.deps.sms is None or not self.deps.sms.is_ready():
+                return SMS_HOLD
             return None
-        text = q["send_text"] or config.format_message(config.get(self.conn, "gorilla.message_template"), q["answer"])
+        app = config.chat_app(self.conn, channel)
+        if app is None:
+            return f"보류: '{channel or '채널 미확인'}'은(는) 채팅 앱이 정해지지 않음 — '문자로 보내기'를 누르면 문자로 보냄"
+        return None if self.chat_sender(app).is_running() else app_hold(app)
+
+    def deliver(self, table: str, status_col: str, item_id: int, route: str, channel: str | None, text: str,
+                how: str, label: str) -> str | None:
+        hold = self.not_ready(route, channel)
+        if hold:
+            self._hold(table, item_id, hold)
+            return None
+        number, app = None, config.chat_app(self.conn, channel)
+        if route == "sms":
+            number = config.sms_number(self.conn, channel)
+            text = sms_mod.with_signature(text, db.get_profile(self.conn).get("nickname"),
+                                          config.get(self.conn, "sms.signature") != "0")
         # 보내기 전에 먼저 '결과 불명'으로 바꿔 두어, 도중에 멈춰도 다시 보내지 않게 한다.
+        sent_text = ", send_text = ?" if table == "quizzes" else ""
         self.conn.execute(
-            "UPDATE quizzes SET entry_status = 'unknown', send_text = ?, sent_at = ?, decision = ?, updated_at = ? "
-            "WHERE id = ? AND entry_status = 'pending'",
-            (text, db.now(), "사용자 승인 후 전송" if q["approved"] else "자동 전송", db.now(), qid))
+            f"UPDATE {table} SET {status_col} = 'unknown', sent_at = ?, sent_via = ?, decision = ?{sent_text}, "
+            f"updated_at = ? WHERE id = ? AND {status_col} = 'pending'",
+            (db.now(), "sms" if route == "sms" else app, how, *((text,) if sent_text else ()), db.now(), item_id))
         self.conn.commit()
         try:
-            if self.deps.lock is not None:
+            if route == "sms":
+                result = self.deps.sms.send(number, text)
+            elif self.deps.lock is not None:
                 with self.deps.lock():
-                    result = self.deps.sender.send(text)
+                    result = self.chat_sender(app).send(text)
             else:
-                result = self.deps.sender.send(text)
+                result = self.chat_sender(app).send(text)
             status, detail = result.status, result.detail
         except Exception as e:  # 보냈는지 알 수 없다 → 결과 불명 유지
             status, detail = "unknown", f"전송 중 오류: {type(e).__name__}: {str(e)[:120]}"
-        self.conn.execute("UPDATE quizzes SET entry_status = ?, note = COALESCE(note || ' / ', '') || ?, "
-                          "updated_at = ? WHERE id = ?", (status, detail, db.now(), qid))
+        self.conn.execute(f"UPDATE {table} SET {status_col} = ?, note = COALESCE(note || ' / ', '') || ?, "
+                          "updated_at = ? WHERE id = ?", (status, detail, db.now(), item_id))
         self.conn.commit()
-        db.log(self.conn, "quizbot", f"퀴즈 #{qid} 고릴라 전송 '{text}' → {quiz.ENTRY_LABELS.get(status, status)} ({detail})")
+        via = f"문자({number})" if route == "sms" else config.app_label(app)
+        db.log(self.conn, "quizbot", f"{label} {via} 전송 '{text[:60]}' → {quiz.ENTRY_LABELS.get(status, status)} ({detail})")
         return status
 
 
@@ -596,6 +637,7 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
     from .answerer import ClaudeAnswerer
     from .audio import LoopbackRecorder
     from .gorilla import Gorilla
+    from .sms import AdbSms
     from .stt import WhisperTranscriber
 
     def notify(_message: str) -> None:
@@ -612,6 +654,8 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
         transcriber_factory=lambda model, program: WhisperTranscriber(
             model, program, config.get(conn, "quizbot.whisper_device")),
         answerer=ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort")),
-        sender=Gorilla(config.GorillaConfig.load(conn)),
+        sender=Gorilla(config.GorillaConfig.load(conn, "gorilla")),
+        chat_senders={app: Gorilla(config.GorillaConfig.load(conn, app)) for app in config.CHAT_APPS},
+        sms=AdbSms.from_settings(conn),
         lock=shared_input_lock,
     )

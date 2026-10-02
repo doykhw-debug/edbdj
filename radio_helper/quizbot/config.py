@@ -57,6 +57,16 @@ DEFAULTS = {
     "gorilla.send_y": "",
     "gorilla.message_template": "{answer}",
     "gorilla.test_message": "파워 FM 화이팅",   # '전송 테스트'로 실제로 보내 보는 글
+    # 보내는 방법: app(고릴라·mini·콩 앱 채팅, 무료) / sms(휴대폰 문자, 건당 요금)
+    "send.route": "app",
+    # 휴대폰 문자 (안드로이드 + USB)
+    # 듣는 채널과 문자 번호 (한 줄에 '채널=문자번호', 번호를 모르면 비움). 첫 화면 '채널 추가'로도 늘어난다
+    # 앱은 이름으로 정해진다 (SBS·파워FM·러브FM·고릴라M → 고릴라, MBC → mini, KBS → 콩). '채널=번호=앱'으로 직접 정할 수도 있다
+    "channels": "파워FM=#1077\n러브FM=#1035\n고릴라M=\nMBC FM4U=#8000\nKBS 쿨FM=#8910\nKBS 해피FM=#1061\nKBS 1라디오=",
+    "sms.signature": "1",                 # 끝에 방송용 별명 붙이기
+    "sms.quiz_template": "정답 {answer}",
+    "sms.verify_number": "1",             # 작성 화면에 받는 번호(#포함)가 보일 때만 보냄
+    "sms.adb_path": "",                   # 비우면 이 프로그램 폴더의 platform-tools 등에서 찾음
 }
 
 LABELS = {
@@ -86,7 +96,92 @@ LABELS = {
     "gorilla.send_button_name": "전송 버튼 이름(정규식)",
     "gorilla.message_template": "보낼 문구 ({answer} 자리에 정답)",
     "gorilla.test_message": "전송 테스트로 실제로 보낼 글",
+    "channels": "채널 목록과 문자 번호 (한 줄에 '채널=번호', 모르면 번호 비움)",
+    "sms.signature": "끝에 방송용 별명 붙이기 (1=예, 0=아니오)",
+    "sms.quiz_template": "퀴즈 정답 문자 ({answer} 자리에 정답)",
+    "sms.verify_number": "받는 번호 확인 후 보내기 (1 권장)",
+    "sms.adb_path": "adb 위치 (비우면 자동으로 찾음)",
 }
+
+ROUTES = {"app": "앱 채팅", "sms": "문자"}
+
+# 방송사 앱 채팅 (원리는 모두 같다: 앱 창의 입력칸에 글을 넣고 전송 버튼을 누른다)
+CHAT_APPS = {
+    "gorilla": {"label": "고릴라", "station": "SBS", "title": "고릴라|gorealra", "input": "공감로그|글쓰기",
+                "test": "파워 FM 화이팅"},
+    "mini": {"label": "mini", "station": "MBC", "title": r"\bmini\b|미니|MBC", "input": "메시지|채팅|글쓰기|댓글",
+             "test": "MBC FM4U 화이팅"},
+    "kong": {"label": "콩", "station": "KBS", "title": r"콩|\bkong\b|KBS", "input": "메시지|채팅|글쓰기|댓글",
+             "test": "KBS 화이팅"},
+}
+APP_ALIASES = {"고릴라": "gorilla", "gorilla": "gorilla", "mini": "mini", "미니": "mini", "콩": "kong", "kong": "kong"}
+_APP_FIELDS = {  # 앱마다 따로 저장하는 화면 설정 (고릴라는 기존 'gorilla.*' 키를 그대로 쓴다)
+    "process_name": "", "window_size": "", "screen_region": "", "input_rect": "", "send_rect": "",
+    "input_mode": "uia", "input_auto_id": "", "send_mode": "auto", "send_button_name": "전송|보내기|등록",
+    "input_x": "", "input_y": "", "send_x": "", "send_y": "",
+}
+for _app, _meta in CHAT_APPS.items():
+    if _app == "gorilla":
+        continue
+    for _f, _v in _APP_FIELDS.items():
+        DEFAULTS[f"{_app}.{_f}"] = _v
+    DEFAULTS[f"{_app}.window_title"] = _meta["title"]
+    DEFAULTS[f"{_app}.input_name"] = _meta["input"]
+    DEFAULTS[f"{_app}.test_message"] = _meta["test"]
+    for _f in ("process_name", "window_title", "input_mode", "input_name", "send_mode", "send_button_name", "test_message"):
+        LABELS[f"{_app}.{_f}"] = LABELS.get(f"gorilla.{_f}", _f).replace("고릴라", _meta["label"])
+
+
+def route(conn: sqlite3.Connection) -> str:
+    r = get(conn, "send.route")
+    return r if r in ROUTES else "app"   # 예전 값 'gorilla' 도 앱 채팅
+
+
+def app_label(app: str | None) -> str:
+    return CHAT_APPS[app]["label"] if app in CHAT_APPS else "앱"
+
+
+def app_settings(app: str, settings: dict) -> dict:
+    """화면 도구가 돌려주는 'gorilla.*' 설정 키를 그 앱의 키로 바꾼다."""
+    if app == "gorilla":
+        return settings
+    return {(f"{app}." + k[len("gorilla."):] if k.startswith("gorilla.") else k): v for k, v in settings.items()}
+
+
+def localize(app: str, message: str) -> str:
+    return message if app == "gorilla" else message.replace("고릴라", app_label(app))
+
+
+SBS_CHANNELS = ("파워FM", "러브FM", "고릴라M")
+
+
+def chat_app(conn: sqlite3.Connection, channel: str | None) -> str | None:
+    """채널의 채팅 앱: '채널=번호=앱'으로 정했으면 그것, 아니면 이름으로 (SBS→고릴라, MBC→mini, KBS→콩)."""
+    if not channel:
+        return None
+    for line in get(conn, "channels").splitlines():
+        parts = [p.strip() for p in line.split("=")]
+        if len(parts) >= 3 and parts[0] == channel and parts[2]:
+            return APP_ALIASES.get(parts[2].lower(), APP_ALIASES.get(parts[2]))
+    name = channel.upper()
+    if channel in SBS_CHANNELS or name.startswith("SBS"):
+        return "gorilla"
+    if name.startswith("MBC"):
+        return "mini"
+    if name.startswith("KBS"):
+        return "kong"
+    return None
+
+
+def channels(conn: sqlite3.Connection) -> dict[str, str]:
+    """{채널: 문자 번호(없으면 '')} — 설정 순서대로."""
+    from .sms import parse_channels
+
+    return parse_channels(get(conn, "channels"))
+
+
+def sms_number(conn: sqlite3.Connection, channel: str | None) -> str | None:
+    return channels(conn).get(channel or "") or None
 
 
 def get(conn: sqlite3.Connection, key: str) -> str:
@@ -127,11 +222,25 @@ class GorillaConfig:
     send_y: float | None = None
     message_template: str = "{answer}"
 
+    app: str = "gorilla"   # gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)
+
+    @property
+    def label(self) -> str:
+        return app_label(self.app)
+
+    @property
+    def default_title(self) -> str:
+        return CHAT_APPS.get(self.app, CHAT_APPS["gorilla"])["title"]
+
     @classmethod
-    def load(cls, conn: sqlite3.Connection) -> "GorillaConfig":
-        values = {}
+    def load(cls, conn: sqlite3.Connection, app: str = "gorilla") -> "GorillaConfig":
+        values = {"app": app}
         for f in fields(cls):
-            key = f"gorilla.{f.name}"
+            if f.name == "app":
+                continue
+            key = f"{app}.{f.name}"
+            if f.name == "message_template":
+                key = "gorilla.message_template"  # 퀴즈 정답 문구는 앱 공통
             values[f.name] = get_float(conn, key) if f.name.endswith(("_x", "_y")) else get(conn, key)
         return cls(**values)
 

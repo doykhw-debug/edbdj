@@ -25,9 +25,12 @@
   <form method="post" action="{{ url_for('listen_start') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="row">
-      <div><label>듣는 채널 <span class="hint">고릴라에서 틀어 둔 채널</span></label>
-        <select name="channel">{% for ch in channels %}<option value="{{ ch }}" {{ 'selected' if ch == vm.channel }}>{{ ch }}</option>{% endfor %}</select></div>
-      <div></div>
+      <div><label>듣는 채널 <span class="hint">PC에서 틀어 둔 방송 (고릴라·mini·콩·웹 어디서 듣든 PC 소리를 받아씀)</span></label>
+        <select name="channel" id="channel-select">{% for ch in channels %}<option value="{{ ch.name }}" data-app="{{ ch.app }}" data-app-label="{{ ch.app_label }}" data-number="{{ ch.number }}" {{ 'selected' if ch.name == vm.channel }}>{{ ch.name }}{{ ' · ' ~ ch.app_label if ch.app_label }}{{ ' · ' ~ ch.number if ch.number }}</option>{% endfor %}</select></div>
+      <div><label>보내는 방법 <span class="hint">퀴즈 정답·사연을 어디로 보낼지</span></label>
+        <label class="inline"><input type="radio" name="route" value="app" id="route-app" {{ 'checked' if route == 'app' }}> <span id="route-app-label">앱 채팅 (무료)</span></label>
+        <label class="inline"><input type="radio" name="route" value="sms" id="route-sms" {{ 'checked' if route == 'sms' }}> <span id="route-sms-label">문자 (건당 약 50원)</span></label>
+        <div class="hint" id="route-note"></div></div>
     </div>
     <div class="toggles" style="margin-top:8px">
       <label class="inline"><input type="checkbox" name="auto_quiz" value="1" {{ 'checked' if options.auto_quiz }}> 퀴즈 정답 자동 전송</label>
@@ -45,6 +48,18 @@
       {% endif %}
     </div>
   </form>
+  <details id="add-channel">
+    <summary class="muted">채널 추가·문자 번호 바꾸기</summary>
+    <form method="post" action="{{ url_for('listen_channels') }}" class="actions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="text" name="name" placeholder="채널 이름 (예: MBC 표준FM)" maxlength="20" style="width:200px" required>
+      <input type="text" name="number" placeholder="문자 번호 (예: #8001)" style="width:150px">
+      <select name="app" style="width:auto"><option value="">채팅 앱: 이름으로 자동</option>
+        <option value="gorilla">고릴라 (SBS)</option><option value="mini">mini (MBC)</option><option value="kong">콩 (KBS)</option></select>
+      <button class="secondary">추가·저장</button>
+    </form>
+    <p class="muted">같은 이름이면 번호·앱을 바꿉니다. 문자 번호를 모르면 비워 두세요 (그 채널은 앱 채팅으로만 보냄). 목록 전체는 <a href="{{ url_for('sms_page') }}">문자 설정</a>에서 고칠 수 있습니다.</p>
+  </details>
   {% if vm.active %}
   <form method="post" action="{{ url_for('listen_stop') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -101,10 +116,11 @@
     <ol class="muted">
       <li>PC 스피커로 나오는 소리(고릴라 방송)를 10초씩 녹음해 이 PC에서 자막으로 바꿉니다. 오디오는 저장하지 않습니다.</li>
       <li>자막에서 '퀴즈·정답', '사연·보내 주세요', '선물·당첨' 같은 말을 찾습니다.</li>
-      <li>퀴즈: 앞뒤 몇 분 자막을 Claude로 분석해 정답을 찾고, 확신도가 기준 이상이면 고릴라 공감로그로 보냅니다. 한 번 보낸 문제는 다시 보내지 않습니다.</li>
+      <li>퀴즈: 앞뒤 몇 분 자막을 Claude로 분석해 정답을 찾고, 확신도가 기준 이상이면 고른 방법(앱 채팅: 고릴라·mini·콩 / 휴대폰 문자)으로 보냅니다. 한 번 보낸 문제는 다시 보내지 않습니다.</li>
       <li>사연: 내 '실제 경험' 중 주제에 맞는 것으로 짧은 글을 만들고, 검사 경고가 없으면 보냅니다. 경고가 있으면 '사연'에서 확인을 기다립니다. 없는 일을 지어내지 않습니다.</li>
       <li>선물: 선물 이름·조건·응모 방법을 채널·프로그램별로 기록만 합니다.</li>
-      <li>고릴라 창을 못 찾으면 듣기·자막은 계속하고, 보낼 글은 고릴라 창을 찾을 때까지 보류합니다.</li>
+      <li>앱 창이나 휴대폰을 못 찾으면 듣기·자막은 계속하고, 보낼 글은 찾을 때까지 보류합니다 (20분 지나면 확인 대기로 남김).</li>
+      <li>MBC·KBS는 앱(mini·콩) 채팅이나 문자로 보냅니다. 앱마다 설정 → 앱 채팅에서 입력칸·전송 버튼을 한 번 지정하세요.</li>
     </ol>
   </details>
 </div>
@@ -195,6 +211,25 @@
       render(vm);
     }).catch(function () {});
   }
+  function syncRoute() {
+    var o = el('channel-select').selectedOptions[0];
+    if (!o) return;
+    var app = o.dataset.app, appLabel = o.dataset.appLabel, number = o.dataset.number;
+    el('route-app').disabled = !app;
+    el('route-sms').disabled = !number;
+    el('route-app-label').textContent = app ? appLabel + ' 채팅 (무료)' : '앱 채팅 (이 채널은 앱 없음)';
+    el('route-sms-label').textContent = number ? '문자 ' + number + ' (건당 약 50원)' : '문자 (번호 없음 — 아래에서 추가)';
+    if (!app && number) el('route-sms').checked = true;
+    if (!number && app) el('route-app').checked = true;
+    var smsToday = {{ vm.sms_today|tojson }};
+    el('route-note').textContent = el('route-sms').checked
+      ? '휴대폰(USB)으로 보냅니다 · 오늘 문자 ' + smsToday.count + '건 (약 ' + smsToday.won + '원)'
+      : (app ? appLabel + ' 창의 입력칸·전송 버튼 지정이 필요합니다 (설정 → 앱 채팅)' : '');
+  }
+  el('channel-select').addEventListener('change', syncRoute);
+  el('route-app').addEventListener('change', syncRoute);
+  el('route-sms').addEventListener('change', syncRoute);
+  syncRoute();
   render({{ vm|tojson }});
   el('captions').scrollTop = el('captions').scrollHeight;
   setInterval(poll, 2000);

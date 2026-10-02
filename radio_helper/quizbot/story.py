@@ -99,8 +99,9 @@ def find_duplicate(existing, topic: str) -> int | None:
     return None
 
 
-def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_hour: int) -> list[str]:
-    """보내기를 막는 이유. 비어 있으면 보낸다."""
+def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_hour: int,
+           route: str = "app") -> list[str]:
+    """보내기를 막는 이유. 비어 있으면 보낸다. 문자로 보낼 때는 고릴라 응모 조건을 보지 않는다."""
     reasons = []
     if db.is_stopped(conn):
         reasons.append("일괄 중지가 켜져 있음")
@@ -109,13 +110,13 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
     warnings = json.loads(post["warnings"] or "[]")
     if has_block(warnings):
         reasons.append("검사에서 막힌 항목이 있음")
-    if post["gorilla_accepted"] == "no":
-        reasons.append("진행자가 고릴라가 아닌 다른 방법으로 받는다고 함")
+    if post["gorilla_accepted"] == "no" and route != "sms":
+        reasons.append("진행자가 고릴라가 아닌 다른 방법(문자 등)으로 받는다고 함 — '문자로 보내기'를 누르면 보냄")
     if not post["approved"]:
         def allowed(key):
             return schedule is not None and key in schedule.keys() and bool(schedule[key])
 
-        gorilla_ok = post["gorilla_accepted"] == "yes" or allowed("gorilla_confirmed")
+        gorilla_ok = route == "sms" or post["gorilla_accepted"] == "yes" or allowed("gorilla_confirmed")
         auto_ok = gorilla_ok and (
             (post["source"] == "user_line" and allowed("story_auto_user_line"))
             # AI 초안은 검사 경고가 하나도 없을 때만 (재료에 없는 내용·민감 소재·숫자가 있으면 확인 대기)

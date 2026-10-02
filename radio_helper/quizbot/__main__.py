@@ -10,7 +10,11 @@
   select send      화면에 네모를 그려 전송 버튼 영역 저장
   calibrate input  7초 뒤 마우스 위치를 채팅 입력칸 위치로 저장
   calibrate send   7초 뒤 마우스 위치를 전송 버튼 위치로 저장
-  send-test        고릴라 공감로그에 시험 글('파워 FM 화이팅')을 실제로 입력하고 전송까지 누름
+  send-test        채팅 앱에 시험 글('파워 FM 화이팅' 등)을 실제로 입력하고 전송까지 누름
+  sms-check        휴대폰(USB) 문자 연결 점검
+  sms-test         지금 채널 번호로 시험 문자를 실제로 보냄 (요금 발생)
+
+  창·전송 도구는 --app gorilla|mini|kong 으로 앱을 고른다 (기본 gorilla).
   stt-test         PC 소리 10초를 녹음해 받아쓰기 시험 (단계별 결과를 관리 화면에 표시)
 """
 
@@ -67,13 +71,21 @@ def cmd_check(conn) -> int:
     from .answerer import get_api_key
 
     item("Claude API 키", bool(get_api_key()), "" if get_api_key() else "— 관리 화면 '퀴즈 자동'에서 저장하세요")
-    try:
-        from .gorilla import Gorilla
+    channel = config.get(conn, "live.channel")
+    app = config.chat_app(conn, channel)
+    if config.route(conn) == "sms" or app is None:
+        number = config.sms_number(conn, channel)
+        item(f"{channel} 문자 번호", bool(number), f"— {number}" if number else "— 청취 화면에서 문자 번호를 넣으세요")
+    else:
+        label = config.app_label(app)
+        try:
+            from .gorilla import Gorilla
 
-        w = Gorilla(config.GorillaConfig.load(conn)).find_window()
-        item("고릴라 창", w is not None, f"— '{w.window_text()}'" if w is not None else "— 고릴라 PC 앱을 실행하세요")
-    except Exception as e:
-        item("고릴라 창", False, f"— {type(e).__name__}")
+            w = Gorilla(config.GorillaConfig.load(conn, app)).find_window()
+            item(f"{label} 창 ({channel})", w is not None,
+                 f"— '{w.window_text()}'" if w is not None else f"— {label} PC 앱을 실행하세요")
+        except Exception as e:
+            item(f"{label} 창 ({channel})", False, f"— {type(e).__name__}")
     try:
         from .audio import LoopbackRecorder
 
@@ -86,75 +98,121 @@ def cmd_check(conn) -> int:
     return 0 if all(r["ok"] for r in results) else 1
 
 
-def cmd_auto_setup(conn) -> int:
+def _save(conn, app: str, settings: dict, message: str) -> str:
+    """화면 도구 결과를 그 앱의 설정으로 저장하고, 안내 문구의 앱 이름을 맞춘다."""
+    for key, value in config.app_settings(app, settings).items():
+        db.set_setting(conn, key, value)
+    message = config.localize(app, message)
+    db.log(conn, "gorilla", f"[{config.app_label(app)}] {message}")
+    say(message)
+    return message
+
+
+def cmd_auto_setup(conn, app: str = "gorilla") -> int:
     from .gorilla import Gorilla, dump
 
-    report = Gorilla(config.GorillaConfig.load(conn)).auto_setup()
-    for key, value in report["settings"].items():
-        db.set_setting(conn, key, value)
+    report = Gorilla(config.GorillaConfig.load(conn, app)).auto_setup()
     out_dir = db.data_dir() / "inspect"
     out_dir.mkdir(exist_ok=True)
-    out = out_dir / f"gorilla_auto_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    out = out_dir / f"{app}_auto_{time.strftime('%Y%m%d_%H%M%S')}.json"
     out.write_text(dump(report), encoding="utf-8")
-    db.log(conn, "gorilla", "자동 찾기: " + report["message"])
-    say(report["message"])
+    _save(conn, app, report["settings"], "자동 찾기: " + report["message"])
     return 0 if report["settings"] else 1
 
 
-def cmd_inspect(conn) -> int:
+def cmd_inspect(conn, app: str = "gorilla") -> int:
     from .gorilla import Gorilla, dump
 
-    report = Gorilla(config.GorillaConfig.load(conn)).inspect()
+    report = Gorilla(config.GorillaConfig.load(conn, app)).inspect()
     out_dir = db.data_dir() / "inspect"
     out_dir.mkdir(exist_ok=True)
-    out = out_dir / f"gorilla_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    out = out_dir / f"{app}_{time.strftime('%Y%m%d_%H%M%S')}.json"
     out.write_text(dump(report), encoding="utf-8")
-    db.log(conn, "gorilla", f"고릴라 창 점검: 입력칸(Edit) {report['edit_count']}개, 버튼 {len(report['button_names'])}종 → {out.name}")
-    say(f"점검 보고서: {out}")
+    _save(conn, app, {}, f"고릴라 창 점검: 입력칸(Edit) {report['edit_count']}개, 버튼 {len(report['button_names'])}종 → {out.name}")
     return 0
 
 
-def cmd_calibrate(conn, target: str) -> int:
+def cmd_calibrate(conn, target: str, app: str = "gorilla") -> int:
     from .gorilla import Gorilla
 
     label = "채팅 입력칸" if target == "input" else "전송 버튼"
     for n in range(7, 0, -1):
-        say(f"{n}초 뒤 마우스가 있는 곳을 고릴라 {label} 위치로 저장합니다…")
+        say(f"{n}초 뒤 마우스가 있는 곳을 {config.app_label(app)} {label} 위치로 저장합니다…")
         time.sleep(1)
     settings, message = Gorilla.calibrate(target)
-    for key, value in settings.items():
-        db.set_setting(conn, key, value)
-    db.log(conn, "gorilla", message)
-    say(message)
+    _save(conn, app, settings, message)
     return 0
 
 
-def cmd_select(conn, target: str) -> int:
+def cmd_select(conn, target: str, app: str = "gorilla") -> int:
     from .gorilla import Gorilla
 
-    result = Gorilla(config.GorillaConfig.load(conn)).select(target)
+    result = Gorilla(config.GorillaConfig.load(conn, app)).select(target)
     if result is None:
         say("취소했습니다. 아무것도 바꾸지 않았습니다.")
         return 1
-    settings, message = result
-    for key, value in settings.items():
-        db.set_setting(conn, key, value)
-    db.log(conn, "gorilla", message)
-    say(message)
+    _save(conn, app, *result)
     return 0
 
 
-def cmd_send_test(conn) -> int:
+def cmd_send_test(conn, app: str = "gorilla") -> int:
     from .. import quiz
     from .gorilla import Gorilla
     from .runner import shared_input_lock
 
-    text = config.get(conn, "gorilla.test_message").strip() or config.DEFAULTS["gorilla.test_message"]
+    text = config.get(conn, f"{app}.test_message").strip() or config.CHAT_APPS[app]["test"]
     with shared_input_lock():
-        result, msg = Gorilla(config.GorillaConfig.load(conn)).send_test(text)
-    db.log(conn, "gorilla", f"전송 테스트 → {quiz.ENTRY_LABELS.get(result.status, result.status)}: {msg}")
-    say(msg)
+        result, msg = Gorilla(config.GorillaConfig.load(conn, app)).send_test(text)
+    _save(conn, app, {}, f"전송 테스트 → {quiz.ENTRY_LABELS.get(result.status, result.status)}: {msg}")
     return 0 if result.status in ("entered", "posted") else 1
+
+
+def cmd_sms_check(conn) -> int:
+    from .sms import AdbSms
+
+    phone = AdbSms.from_settings(conn)
+    items = []
+
+    def item(name, ok, detail=""):
+        items.append({"name": name, "ok": bool(ok), "detail": detail})
+        say(f"[{'OK' if ok else '확인 필요'}] {name} {detail}")
+
+    item("adb (platform-tools)", phone.adb, phone.adb or "— 문자 설정 화면의 안내대로 platform-tools 를 풀어 두세요")
+    if phone.adb:
+        try:
+            ok, detail = phone.status()
+            item("휴대폰 연결 (USB 디버깅)", ok, detail)
+            if ok:
+                info = phone.info()
+                item("휴대폰", True, info["model"])
+                item("기본 문자 앱", bool(info["sms_app"]), info["sms_app"] or "확인 못 함")
+        except Exception as e:
+            item("휴대폰 연결 (USB 디버깅)", False, f"{type(e).__name__}: {str(e)[:150]}")
+    numbers = {c: n for c, n in config.channels(conn).items() if n}
+    item("채널별 문자 번호", bool(numbers), ", ".join(f"{c} {n}" for c, n in numbers.items()) or "없음")
+    db.set_setting(conn, "sms.check", json.dumps({"at": db.now(), "items": items}, ensure_ascii=False))
+    db.log(conn, "sms", "문자 연결 점검: " + ", ".join(f"{i['name']} {'OK' if i['ok'] else 'X'}" for i in items))
+    return 0 if all(i["ok"] for i in items) else 1
+
+
+def cmd_sms_test(conn) -> int:
+    from .. import quiz
+    from .sms import AdbSms, with_signature
+
+    channel = config.get(conn, "live.channel")
+    number = config.sms_number(conn, channel)
+    if not number:
+        say(f"[중단] '{channel}' 채널의 문자 번호가 없습니다. 청취 화면의 채널 목록에서 번호를 넣어 주세요.")
+        db.log(conn, "sms", f"문자 전송 테스트 중단: {channel} 문자 번호 없음")
+        return 1
+    app = config.chat_app(conn, channel) or "gorilla"
+    text = with_signature(config.get(conn, f"{app}.test_message").strip() or config.CHAT_APPS[app]["test"],
+                          db.get_profile(conn).get("nickname"), config.get(conn, "sms.signature") != "0")
+    result = AdbSms.from_settings(conn).send(number, text, shot="sms_test")
+    msg = f"문자 전송 테스트 '{text}' → {number}: {quiz.ENTRY_LABELS.get(result.status, result.status)} ({result.detail})"
+    db.log(conn, "sms", msg)
+    say(msg)
+    return 0 if result.status == "entered" else 1
 
 
 def cmd_stt_test(conn) -> int:
@@ -220,8 +278,10 @@ def cmd_stt_test(conn) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
     ap.add_argument("command", choices=["run", "captions", "check", "stt-test", "auto-setup", "inspect-gorilla",
-                                        "select", "calibrate", "send-test"])
+                                        "select", "calibrate", "send-test", "sms-check", "sms-test"])
     ap.add_argument("target", nargs="?", choices=["window", "input", "send"])
+    ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
+                    help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
     conn = db.connect()
@@ -242,24 +302,28 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_check(conn)
         if args.command == "stt-test":
             return cmd_stt_test(conn)
+        if args.command == "sms-check":
+            return cmd_sms_check(conn)
         if db.is_stopped(conn):
             say("[중단] 일괄 중지가 켜져 있습니다.")
             return 2
+        if args.command == "sms-test":
+            return cmd_sms_test(conn)
         if args.command == "auto-setup":
-            return cmd_auto_setup(conn)
+            return cmd_auto_setup(conn, args.app)
         if args.command == "inspect-gorilla":
-            return cmd_inspect(conn)
+            return cmd_inspect(conn, args.app)
         if args.command == "select":
             if not args.target:
                 ap.error("select 에는 window, input, send 중 하나가 필요합니다.")
-            return cmd_select(conn, args.target)
+            return cmd_select(conn, args.target, args.app)
         if args.command == "calibrate":
             if args.target not in ("input", "send"):
                 ap.error("calibrate 에는 input 또는 send 가 필요합니다.")
-            return cmd_calibrate(conn, args.target)
-        return cmd_send_test(conn)
+            return cmd_calibrate(conn, args.target, args.app)
+        return cmd_send_test(conn, args.app)
     except Exception as e:
-        first = (str(e).strip().splitlines() or [type(e).__name__])[0][:200]
+        first = config.localize(args.app, (str(e).strip().splitlines() or [type(e).__name__])[0][:200])
         say(f"[오류] {type(e).__name__}: {first}")
         db.log(conn, "quizbot", f"{args.command} 오류: {first}")
         return 1

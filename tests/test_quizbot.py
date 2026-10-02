@@ -398,7 +398,7 @@ def test_quizbot_pages_and_actions(client, conn, monkeypatch):
     assert db.get_setting(conn, "quizbot.stop") == "1"
 
     client.post("/quizbot/tool", data={"csrf_token": token, "tool": "calibrate-input"})
-    assert launched[-1] == ["calibrate", "input"]
+    assert launched[-1] == ["calibrate", "input", "--app", "gorilla"]
     assert client.post("/quizbot/tool", data={"csrf_token": token, "tool": "rm -rf"}).status_code == 400
 
     # 확인 대기 문제 승인 / 건너뛰기

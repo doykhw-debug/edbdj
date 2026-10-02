@@ -78,4 +78,4 @@ CHANNEL_LOVEFM = "러브FM"
 LOVEFM_PROGRAMS = [
     ("lovefm", "이숙영의 러브FM", "이숙영", "09:05", "11:00", "평일"),
 ]
-CHANNELS = [CHANNEL_POWERFM, CHANNEL_LOVEFM, "고릴라M"]
+CHANNELS = [CHANNEL_POWERFM, CHANNEL_LOVEFM, "고릴라M"]  # SBS (기본 채널 목록과 문자 번호는 quizbot.config 'channels')

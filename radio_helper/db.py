@@ -287,6 +287,13 @@ _ADDED_COLUMNS = {
         ("sent_at", "TEXT"),
         ("approved", "INTEGER NOT NULL DEFAULT 0"),     # 사용자가 화면에서 보내기를 승인함
         ("decision", "TEXT"),                           # 자동 전송/보류 판단 이유
+        ("route", "TEXT"),                              # 사용자가 고른 보내는 방법 (비면 기본 설정)
+        ("sent_via", "TEXT"),                           # 실제로 보낸 방법: gorilla / sms
+    ],
+    "story_posts": [
+        ("channel", "TEXT"),
+        ("route", "TEXT"),
+        ("sent_via", "TEXT"),
     ],
 }
 

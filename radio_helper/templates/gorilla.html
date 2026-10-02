@@ -1,30 +1,38 @@
 {% extends "base.html" %}
-{% block title %}고릴라·인식 설정 · 라디오 참여 도우미{% endblock %}
+{% block title %}앱 채팅·인식 설정 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>고릴라·인식 설정</h1>
+<h1>앱 채팅·인식 설정 <span class="muted">SBS 고릴라 · MBC mini · KBS 콩</span></h1>
+{% set tm = values[app ~ '.test_message'] %}
+<div class="actions" style="margin:0 0 12px">
+  {% for key, meta in apps.items() %}
+  <a class="btn {{ '' if key == app else 'secondary' }}" href="{{ url_for('gorilla', app=key) }}">{{ meta.label }} <span style="font-weight:400">({{ meta.station }})</span></a>
+  {% endfor %}
+  <a class="btn secondary" href="{{ url_for('sms_page') }}">휴대폰 문자</a>
+</div>
 
 <div class="panel">
-  <h2>1. 고릴라 창 맞추기</h2>
-  <p class="muted">고릴라 PC 앱을 켜고 <b>듣는 채널의 공감로그(채팅) 화면</b>을 열어 둔 상태에서 순서대로 하세요. 고릴라 창을 최소화하지 마세요.</p>
+  <h2>1. {{ label }} 창 맞추기</h2>
+  <p class="muted">{{ label }} PC 앱을 켜고 <b>듣는 채널의 채팅(글쓰기) 화면</b>을 열어 둔 상태에서 순서대로 하세요. {{ label }} 창을 최소화하지 마세요.
+    세 앱은 원리가 같고, 앱마다 따로 한 번씩 맞추면 됩니다.</p>
   <ol>
-    <li><b>입력칸 영역 지정</b> — 버튼을 누르면 화면이 어두워집니다. 고릴라의 <b>'공감로그 글쓰기' 칸</b>을 마우스로 끌어 네모로 그리세요. 손을 떼면 저장됩니다.
-      네모가 놓인 창을 고릴라 창으로 기억하고, 창 안에서의 위치(비율)로 저장하므로 창을 옮겨도 됩니다.</li>
-    <li><b>전송 버튼 영역 지정</b> — 같은 방법으로 파란 <b>'전송' 버튼</b>을 네모로 그리세요.</li>
-    <li><b>전송 테스트</b> — 입력칸에 <b>'{{ values['gorilla.test_message'] }}'</b>를 넣고 <b>전송까지 실제로 누릅니다</b>. 고릴라 채팅에 올라오면 설정 완료입니다.
+    <li><b>입력칸 영역 지정</b> — 버튼을 누르면 화면이 어두워집니다. {{ label }}의 <b>채팅 입력칸</b>{% if app == 'gorilla' %}('공감로그 글쓰기' 칸){% endif %}을 마우스로 끌어 네모로 그리세요. 손을 떼면 저장됩니다.
+      네모가 놓인 창을 {{ label }} 창으로 기억하고, 창 안에서의 위치(비율)로 저장하므로 창을 옮겨도 됩니다.</li>
+    <li><b>전송 버튼 영역 지정</b> — 같은 방법으로 <b>'전송' 버튼</b>을 네모로 그리세요.</li>
+    <li><b>전송 테스트</b> — 입력칸에 <b>'{{ tm }}'</b>를 넣고 <b>전송까지 실제로 누릅니다</b>. {{ label }} 채팅에 올라오면 설정 완료입니다.
       (보낼 글은 아래 설정값 '전송 테스트로 실제로 보낼 글'에서 바꿀 수 있습니다)</li>
   </ol>
   <div class="actions">
-    {% for tool, label in [('select-input', '① 입력칸 영역 지정'), ('select-send', '② 전송 버튼 영역 지정')] %}
-    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="{{ tool }}"><button {{ 'disabled' if stopped }}>{{ label }}</button></form>
+    {% for tool, tlabel in [('select-input', '① 입력칸 영역 지정'), ('select-send', '② 전송 버튼 영역 지정')] %}
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="{{ tool }}"><button {{ 'disabled' if stopped }}>{{ tlabel }}</button></form>
     {% endfor %}
-    <form method="post" action="{{ url_for('quizbot_tool') }}" data-msg="{{ values['gorilla.test_message'] }}" onsubmit="return confirm('고릴라 공감로그에 [' + this.dataset.msg + '] 를 실제로 보냅니다. 계속할까요?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="send-test"><button class="secondary" {{ 'disabled' if stopped }}>③ 전송 테스트 ('{{ values['gorilla.test_message'] }}' 보내기)</button></form>
+    <form method="post" action="{{ url_for('quizbot_tool') }}" data-msg="{{ tm }}" data-app="{{ label }}" onsubmit="return confirm(this.dataset.app + ' 채팅에 [' + this.dataset.msg + '] 를 실제로 보냅니다. 계속할까요?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="send-test"><button class="secondary" {{ 'disabled' if stopped }}>③ 전송 테스트 ('{{ tm }}' 보내기)</button></form>
   </div>
   <details style="margin-top:10px"><summary class="muted">창 인식이 안 될 때 / 다른 방법</summary>
-    <p class="muted">전송 테스트가 엉뚱한 곳에 글자를 넣으면, <b>고릴라 창 영역 지정</b>으로 고릴라 창 전체를 네모로 감싼 뒤 ①②를 다시 하세요.
-    이 방식은 창 대신 화면의 그 영역을 기준으로 하므로, 고릴라 창을 옮기면 다시 지정해야 합니다.</p>
+    <p class="muted">전송 테스트가 엉뚱한 곳에 글자를 넣으면, <b>{{ label }} 창 영역 지정</b>으로 {{ label }} 창 전체를 네모로 감싼 뒤 ①②를 다시 하세요.
+    이 방식은 창 대신 화면의 그 영역을 기준으로 하므로, {{ label }} 창을 옮기면 다시 지정해야 합니다.</p>
     <div class="actions">
-      {% for tool, label in [('select-window', '고릴라 창 영역 지정'), ('auto-setup', '자동 찾기'), ('inspect', '창 점검(상세)')] %}
-      <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="{{ tool }}"><button class="secondary" {{ 'disabled' if stopped }}>{{ label }}</button></form>
+      {% for tool, tlabel in [('select-window', label ~ ' 창 영역 지정'), ('auto-setup', '자동 찾기'), ('inspect', '창 점검(상세)')] %}
+      <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="{{ tool }}"><button class="secondary" {{ 'disabled' if stopped }}>{{ tlabel }}</button></form>
       {% endfor %}
     </div>
   </details>
@@ -37,15 +45,15 @@
       {% if rects.send %}<rect x="{{ rects.send[0]*100 }}" y="{{ rects.send[1]*140 }}" width="{{ (rects.send[2]-rects.send[0])*100 }}" height="{{ (rects.send[3]-rects.send[1])*140 }}" fill="#18794e33" stroke="#18794e" stroke-width="1.5"/>{% endif %}
     </svg>
     <div class="muted">
-      <div><b>기준</b>: {{ '지정한 화면 영역 ' ~ (region|map('int')|join(', ')) if region else '고릴라 창 (' ~ (values['gorilla.process_name'] or '프로그램 미확인') ~ ')' }}</div>
+      <div><b>기준</b>: {{ '지정한 화면 영역 ' ~ (region|map('int')|join(', ')) if region else label ~ ' 창 (' ~ (values[app ~ '.process_name'] or '프로그램 미확인') ~ ')' }}</div>
       <div><span style="color:#2554c7">■</span> 입력칸 {{ '저장됨' if rects.input else '미지정' }}</div>
       <div><span style="color:#18794e">■</span> 전송 버튼 {{ '저장됨' if rects.send else '미지정 (Enter 키로 전송)' }}</div>
     </div>
   </div>
   {% endif %}
   {% if shots %}
-  <h2 style="margin-top:16px">확인용 화면 사진 <span class="muted">지정·테스트 직후 찍은 고릴라 영역 · 이 PC에만 저장</span></h2>
-  <p class="muted">네모·점이 고릴라의 입력칸과 전송 버튼 위에 있어야 합니다. 엉뚱한 곳(다른 창, 빈 곳)에 있으면 그 단계를 다시 하세요.
+  <h2 style="margin-top:16px">확인용 화면 사진 <span class="muted">지정·테스트 직후 찍은 {{ label }} 영역 · 이 PC에만 저장</span></h2>
+  <p class="muted">네모·점이 {{ label }}의 입력칸과 전송 버튼 위에 있어야 합니다. 엉뚱한 곳(다른 창, 빈 곳)에 있으면 그 단계를 다시 하세요.
     ③ '누르기 직전' 사진에서 빨간 점이 입력칸, 초록 점이 전송 버튼 위에 있고, '보낸 뒤' 사진의 채팅에 글이 보이면 설정이 맞습니다.</p>
   <div class="shots">
     {% for sh in shots %}
@@ -59,7 +67,7 @@
     <p style="margin-top:12px"><b>최근 실행 결과</b> <span class="muted">{{ last_tool[0] }}</span></p>
     <pre class="box">{{ last_tool[1] }}</pre>
   {% endif %}
-  <p class="muted">현재 설정: 프로그램 {{ values['gorilla.process_name'] or '(미지정)' }} · 입력 {{ values['gorilla.input_mode'] }} · 전송 {{ values['gorilla.send_mode'] }}
+  <p class="muted">현재 설정: 프로그램 {{ values[app ~ '.process_name'] or '(미지정)' }} · 입력 {{ values[app ~ '.input_mode'] }} · 전송 {{ values[app ~ '.send_mode'] }}
     {% if coords.input_x %} · 입력칸 위치 {{ coords.input_x }}, {{ coords.input_y }}{% endif %}{% if coords.send_x %} · 전송 버튼 위치 {{ coords.send_x }}, {{ coords.send_y }}{% endif %}</p>
 
   {% if auto %}
@@ -97,6 +105,6 @@
   <div class="actions"><button>저장</button></div>
 </form>
 {% if waiting %}
-<script>setTimeout(function () { location.href = location.pathname; }, {{ waiting * 1000 }});</script>
+<script>setTimeout(function () { location.href = location.pathname + '?app={{ app }}'; }, {{ waiting * 1000 }});</script>
 {% endif %}
 {% endblock %}

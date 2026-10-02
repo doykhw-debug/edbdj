@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}사연 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>사연 <span class="muted">고릴라 공감로그 · 게시판 사연</span></h1>
+<h1>사연 <span class="muted">앱 채팅(고릴라·mini·콩) · 문자 · 게시판 사연</span></h1>
 
 <div class="grid" style="margin-bottom:16px">
   <a class="stat" href="{{ url_for('experiences') }}"><span class="muted">실제 경험</span><b>{{ counts.experiences }}</b><span class="muted">사실 확인 {{ counts.confirmed }}건 · 사연은 이것으로만 씀</span></a>
@@ -31,7 +31,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <textarea name="message" maxlength="200" oninput="this.nextElementSibling.textContent = this.value.length + '/200자'" placeholder="공감로그에 보낼 글">{{ p.message }}</textarea>
       <span class="muted">{{ p.message|length }}/200자</span>
-      <div class="actions"><button>이 글로 보내기</button></div>
+      <div class="actions"><button name="route" value="app">앱 채팅으로 보내기</button>
+        <button name="route" value="sms" class="secondary" onclick="return confirm('휴대폰 문자로 보냅니다 (요금 약 50원, 긴 글은 더). 계속할까요?')">문자로 보내기</button></div>
     </form>
     <details><summary class="muted">판단에 쓴 자막</summary><pre class="box">{{ p.excerpt or '' }}</pre></details>
     <form method="post" action="{{ url_for('story_skip', pid=p.id) }}" style="margin-top:6px"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">보내지 않음</button></form>
@@ -46,7 +47,7 @@
     {% for p in recent %}
     <tr><td>{{ p.id }}</td>
       <td>{{ p.program }}<br><span class="muted">{{ p.topic }}</span></td>
-      <td>{{ p.message or '' }}<br><span class="muted">{{ STORY_SOURCE.get(p.source, p.source) }} · {{ p.decision or '' }}</span></td>
+      <td>{{ p.message or '' }}<br><span class="muted">{{ STORY_SOURCE.get(p.source, p.source) }} · {{ p.decision or '' }}</span>{% if p.sent_via %} <span class="badge info">{{ VIA.get(p.sent_via, p.sent_via) }}</span>{% endif %}</td>
       <td>{% if p.experience_id %}<a href="{{ url_for('experience_edit', eid=p.experience_id) }}">#{{ p.experience_id }} {{ p.exp_label or '' }}</a>{% endif %}</td>
       <td><span class="badge {{ 'ok' if p.status == 'posted' else ('warn' if p.status in ('entered', 'unknown') else '') }}">{{ QUIZ_ENTRY.get(p.status, p.status) }}</span>
         <br><span class="muted">{{ p.sent_at or p.updated_at }}</span></td></tr>

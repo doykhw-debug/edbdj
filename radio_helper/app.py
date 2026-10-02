@@ -14,7 +14,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import db, gates, generator, quiz, seed
+from . import db, gates, generator, quiz
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
 from .quizbot import live
@@ -29,7 +29,7 @@ SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "m
 STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀"}
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
                 ("live.captions", "captions"))
-INSPECT_IMAGE = re.compile(r"gorilla_[a-z0-9_]+\.png")
+INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
 
 def create_app(data_dir: str | None = None) -> Flask:
@@ -49,6 +49,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         YES_NO=YES_NO, RECRUITING=RECRUITING, AI_POLICY=AI_POLICY, DRAFT_STATUS=DRAFT_STATUS,
         SOURCE=SOURCE, POST_STATUS=STATUS_LABELS, QUIZ_KIND=quiz.KIND_LABELS, QUIZ_ENTRY=quiz.ENTRY_LABELS,
         STORY_SOURCE=STORY_SOURCE,
+        VIA={"sms": "문자", **{k: v["label"] for k, v in qconfig.CHAT_APPS.items()}},
     )
 
     # ── 보안: 로컬 전용 + 위조 요청 차단 ─────────────────────────────
@@ -87,9 +88,20 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     # ── 청취 (첫 화면) ─────────────────────────────────────────────
     def channel_list() -> list[str]:
+        listed = list(qconfig.channels(g.conn))
         found = [r[0] for r in g.conn.execute(
             "SELECT DISTINCT channel FROM programs WHERE on_air = 1 AND channel NOT IN ('', '미확인')")]
-        return seed.CHANNELS + sorted(c for c in found if c not in seed.CHANNELS)
+        return listed + sorted(c for c in found if c not in listed)
+
+    def channel_meta() -> list[dict]:
+        """듣는 채널 목록: 이름·문자 번호·채팅 앱."""
+        numbers = qconfig.channels(g.conn)
+        out = []
+        for name in channel_list():
+            app_ = qconfig.chat_app(g.conn, name)
+            out.append({"name": name, "number": numbers.get(name, ""), "app": app_ or "",
+                        "app_label": qconfig.app_label(app_) if app_ else ""})
+        return out
 
     def setup_items() -> list[dict]:
         from .quizbot.answerer import get_api_key
@@ -101,16 +113,31 @@ def create_app(data_dir: str | None = None) -> Flask:
             check = None
         failed = [i["name"] for i in (check or {}).get("items", []) if not i.get("ok")]
         confirmed = c.execute("SELECT COUNT(*) FROM experiences WHERE user_confirmed = 1").fetchone()[0]
-        input_set = bool(qconfig.get(c, "gorilla.input_rect") or qconfig.get(c, "gorilla.input_x"))
+        channel, route = qconfig.get(c, "live.channel"), qconfig.route(c)
+        app_ = qconfig.chat_app(c, channel)
         stt = live.view_model(c)["stt_test"] or {}
+        if route == "sms":
+            sms_check = _json(db.get_setting(c, "sms.check")) or {}
+            sms_failed = [i["name"] for i in sms_check.get("items", []) if not i.get("ok")]
+            send_item = {"name": "휴대폰 문자 연결 (USB)", "ok": bool(sms_check) and not sms_failed,
+                         "url": url_for("sms_page"),
+                         "detail": ("확인 필요: " + ", ".join(sms_failed)) if sms_failed else
+                         ("" if sms_check else "문자 설정에서 '연결 점검'을 눌러 주세요")}
+        elif app_:
+            label = qconfig.app_label(app_)
+            send_item = {"name": f"{label} 입력칸 지정", "url": url_for("gorilla", app=app_),
+                         "ok": bool(qconfig.get(c, f"{app_}.input_rect") or qconfig.get(c, f"{app_}.input_x")),
+                         "detail": f"{label} 채팅 입력칸·전송 버튼을 네모로 지정하고 전송 테스트"}
+        else:
+            send_item = {"name": "보내는 방법", "ok": False, "url": url_for("home"),
+                         "detail": f"{channel}은(는) 채팅 앱이 정해지지 않았습니다 — '문자'를 고르거나 채널에 앱을 지정하세요"}
         return [
             {"name": "받아쓰기 테스트", "ok": bool(stt.get("ok")), "url": url_for("home") + "#stt",
              "detail": "PC 소리 10초를 받아써 보기" if not stt else
              ("성공 " + stt.get("at", "")[5:16] if stt.get("ok") else "진행 중" if stt.get("running") else "실패 — 결과 확인")},
             {"name": "Claude API 키", "ok": bool(get_api_key()), "url": url_for("quizbot"),
              "detail": "퀴즈·사연 분석에 필요"},
-            {"name": "고릴라 입력칸 지정", "ok": input_set, "url": url_for("gorilla"),
-             "detail": "공감로그 글쓰기 칸·전송 버튼을 네모로 지정"},
+            send_item,
             {"name": "환경 점검", "ok": bool(check) and not failed, "url": url_for("quizbot"),
              "detail": ("확인 필요: " + ", ".join(failed)) if failed else ("" if check else "아직 안 함")},
             {"name": "사연용 실제 경험", "ok": confirmed > 0, "url": url_for("experiences"),
@@ -122,14 +149,15 @@ def create_app(data_dir: str | None = None) -> Flask:
         vm["captions_open"] = _fresh(db.get_setting(g.conn, "captions.heartbeat"), 15)
         vm["chunk_text"] = live.chunk_text(vm["last_chunk"])
         vm["log_tail"] = runner_log_tail(g.conn) if vm["status"] in ("stalled", "launching") else ""
+        vm["sms_today"] = sms_today(g.conn)
         return vm
 
     @app.get("/")
     def home():
         c = g.conn
         return render_template(
-            "home.html", vm=home_vm(), setup=setup_items(), channels=channel_list(),
-            options={name: live.flag(c, key) for key, name in LIVE_OPTIONS})
+            "home.html", vm=home_vm(), setup=setup_items(), channels=channel_meta(),
+            route=qconfig.route(c), options={name: live.flag(c, key) for key, name in LIVE_OPTIONS})
 
     @app.get("/live.json")
     def live_json():
@@ -161,6 +189,16 @@ def create_app(data_dir: str | None = None) -> Flask:
         db.set_setting(c, "live.channel", channel)
         for key, name in LIVE_OPTIONS:
             db.set_setting(c, key, "1" if request.form.get(name) else "0")
+        route = form("route") or qconfig.route(c)
+        if route not in qconfig.ROUTES:
+            abort(400)
+        if route == "app" and qconfig.chat_app(c, channel) is None:
+            route = "sms"
+            flash(f"{channel}은(는) 채팅 앱이 정해지지 않아 문자로 보냅니다.", "warn")
+        if route == "sms" and not qconfig.sms_number(c, channel):
+            flash(f"{channel}의 문자 번호가 없습니다. 아래 '채널 추가·번호 바꾸기'에서 넣어 주세요. 그전까지 보낼 글은 확인 대기에 남습니다.",
+                  "warn")
+        db.set_setting(c, "send.route", route)
         was_active = live.is_active(c)
         db.set_setting(c, "live.active", "1")
         db.set_setting(c, "quizbot.stop", "0")
@@ -174,6 +212,30 @@ def create_app(data_dir: str | None = None) -> Flask:
         else:
             db.log(c, "quizbot", f"청취 시작 요청 — {channel}")
             flash(f"{channel} 청취를 시작합니다. 처음 한 번은 음성 인식 모델을 내려받느라 몇 분 걸릴 수 있습니다.")
+        return redirect(url_for("home"))
+
+    @app.post("/listen/channels")
+    def listen_channels():
+        """듣는 채널 추가·번호 바꾸기: '채널=문자번호=앱' 한 줄을 넣거나 고친다."""
+        name = form("name")
+        number = form("number").replace("-", "").replace(" ", "")
+        app_ = form("app")
+        if not name or len(name) > 20 or "=" in name or "\n" in name:
+            flash("채널 이름은 20자 이내로, '='은 빼고 적어 주세요.", "error")
+            return redirect(url_for("home"))
+        if number and not re.fullmatch(r"#?\d{3,12}", number):
+            flash("문자 번호는 #1077 처럼 적어 주세요.", "error")
+            return redirect(url_for("home"))
+        if app_ and app_ not in qconfig.CHAT_APPS:
+            abort(400)
+        lines = [ln for ln in qconfig.get(g.conn, "channels").splitlines()
+                 if ln.strip() and ln.split("=", 1)[0].strip() != name]
+        lines.append(f"{name}={number}" + (f"={qconfig.app_label(app_)}" if app_ else ""))
+        db.set_setting(g.conn, "channels", "\n".join(lines))
+        db.set_setting(g.conn, "live.channel", name)
+        app_ = qconfig.chat_app(g.conn, name)
+        flash(f"채널 '{name}'을(를) 저장했습니다 — 문자 {number or '번호 없음'}, 채팅 앱 "
+              f"{qconfig.app_label(app_) if app_ else '없음(문자로만)'}.")
         return redirect(url_for("home"))
 
     @app.post("/listen/stop")
@@ -756,9 +818,10 @@ def create_app(data_dir: str | None = None) -> Flask:
             flash("정답을 적어 주세요.", "error")
             return redirect(url_for(back_to("quizzes")) + "#pending")
         send_text = form("send_text") or None
+        route = form("route") if form("route") in qconfig.ROUTES else None
         g.conn.execute(
-            "UPDATE quizzes SET answer = ?, send_text = ?, approved = 1, kind = 'new', entry_status = 'pending', "
-            "decision = '승인됨 — 실행기가 곧 보냄', updated_at = ? WHERE id = ?", (answer, send_text, db.now(), qid))
+            "UPDATE quizzes SET answer = ?, send_text = ?, route = ?, approved = 1, kind = 'new', entry_status = 'pending', "
+            "decision = '승인됨 — 실행기가 곧 보냄', updated_at = ? WHERE id = ?", (answer, send_text, route, db.now(), qid))
         g.conn.commit()
         db.log(g.conn, "quizbot", f"퀴즈 #{qid} 보내기 승인 (사용자): {answer}")
         if qconfig.runner_alive(g.conn):
@@ -803,8 +866,9 @@ def create_app(data_dir: str | None = None) -> Flask:
                     flash(w["message"], "error")
             flash("위 문제를 고친 뒤 다시 보내기를 누르세요.", "error")
             return redirect(url_for(back_to("stories")))
-        g.conn.execute("UPDATE story_posts SET approved = 1, status = 'pending', decision = ?, updated_at = ? "
-                       "WHERE id = ?", ("승인됨 — 실행기가 곧 보냄", db.now(), pid))
+        route = form("route") if form("route") in qconfig.ROUTES else None
+        g.conn.execute("UPDATE story_posts SET approved = 1, status = 'pending', route = ?, decision = ?, updated_at = ? "
+                       "WHERE id = ?", (route, "승인됨 — 실행기가 곧 보냄", db.now(), pid))
         g.conn.commit()
         db.log(g.conn, "quizbot", f"사연 #{pid} 보내기 승인 (사용자)")
         flash("승인했습니다. 실행기가 고릴라로 보냅니다." if qconfig.runner_alive(g.conn)
@@ -901,6 +965,17 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.post("/quizbot/tool")
     def quizbot_tool():
         tool = form("tool")
+        app_ = form("app", "gorilla")
+        if app_ not in qconfig.CHAT_APPS:
+            abort(400)
+        if tool in ("sms-check", "sms-test"):
+            if tool == "sms-test" and db.is_stopped(g.conn):
+                flash("일괄 중지가 켜져 있습니다.", "error")
+                return redirect(url_for("sms_page"))
+            launch_quizbot([tool])
+            flash("휴대폰 문자 연결을 점검합니다. 10초쯤 뒤 이 화면이 새로 고쳐집니다." if tool == "sms-check" else
+                  "시험 문자를 실제로 보냅니다 (요금 발생). 20초쯤 뒤 휴대폰 화면 사진이 아래에 나옵니다.")
+            return redirect(url_for("sms_page", wait=10 if tool == "sms-check" else 20))
         args = {"check": ["check"], "auto-setup": ["auto-setup"], "inspect": ["inspect-gorilla"],
                 "select-window": ["select", "window"], "select-input": ["select", "input"],
                 "select-send": ["select", "send"],
@@ -910,7 +985,9 @@ def create_app(data_dir: str | None = None) -> Flask:
             abort(400)
         if tool != "check" and db.is_stopped(g.conn):
             flash("일괄 중지가 켜져 있습니다.", "error")
-            return redirect(url_for("gorilla"))
+            return redirect(url_for("gorilla", app=app_))
+        if tool != "check":
+            args = args + ["--app", app_]
         log_name = launch_quizbot(args)
         messages = {
             "check": "환경을 점검합니다. 10~30초 뒤 이 화면을 새로 고치세요.",
@@ -921,23 +998,30 @@ def create_app(data_dir: str | None = None) -> Flask:
             "select-send": "화면이 어두워지면 고릴라의 파란 '전송' 버튼을 마우스로 끌어 네모로 그리세요.",
             "calibrate-input": "지금 7초 안에 마우스를 고릴라의 '공감로그 글쓰기' 칸 위에 올려 두고 움직이지 마세요.",
             "calibrate-send": "지금 7초 안에 마우스를 고릴라의 파란 '전송' 버튼 위에 올려 두고 움직이지 마세요.",
-            "send-test": f"고릴라 공감로그에 '{qconfig.get(g.conn, 'gorilla.test_message')}'를 입력하고 전송을 누릅니다. "
+            "send-test": f"고릴라 채팅에 '{qconfig.get(g.conn, app_ + '.test_message')}'를 입력하고 전송을 누릅니다. "
                          "끝나면 누르기 직전·보낸 뒤 사진이 아래에 나옵니다.",
         }
-        flash(f"{messages[tool]} (기록: {log_name})")
+        flash(f"{qconfig.localize(app_, messages[tool])} (기록: {log_name})")
         wait = 25 if tool.startswith(("select", "calibrate")) else 12
-        return redirect(url_for("quizbot" if tool == "check" else "gorilla", wait=wait))
+        if tool == "check":
+            return redirect(url_for("quizbot", wait=wait))
+        return redirect(url_for("gorilla", app=app_, wait=wait))
 
     @app.route("/gorilla", methods=["GET", "POST"])
     def gorilla():
-        keys = [k for k in qconfig.DEFAULTS if k.startswith("gorilla.") and not k.endswith(("_x", "_y"))] + \
+        """채팅 앱(고릴라·mini·콩) 창 맞추기와 인식 설정. ?app= 으로 앱을 고른다."""
+        app_ = request.args.get("app", "gorilla")
+        if app_ not in qconfig.CHAT_APPS:
+            abort(404)
+        keys = [k for k in qconfig.DEFAULTS if k.startswith(f"{app_}.") and not k.endswith(("_x", "_y"))] + \
                [k for k in qconfig.DEFAULTS if k.startswith("quizbot.") and k != "quizbot.autostart"]
         if request.method == "POST":
             for k in keys:
                 if k in request.form:
                     db.set_setting(g.conn, k, request.form[k].strip())
-            flash("고릴라·인식 설정을 저장했습니다. 실행 중이면 '멈춤' 후 다시 '시작'하면 적용됩니다.")
-            return redirect(url_for("gorilla"))
+            flash(f"{qconfig.app_label(app_)}·인식 설정을 저장했습니다. 청취 중이면 '설정 바꾸기'나 다시 시작하면 적용됩니다.")
+            return redirect(url_for("gorilla", app=app_))
+
         def latest(pattern):
             files = sorted((db.data_dir() / "inspect").glob(pattern), reverse=True)[:1]
             if not files:
@@ -949,39 +1033,70 @@ def create_app(data_dir: str | None = None) -> Flask:
             data["file"] = files[0].name
             return data
 
-        report = latest("gorilla_2*.json")       # 창 점검
-        auto = latest("gorilla_auto_*.json")     # 자동 찾기
-        if report and auto and report["file"][len("gorilla_"):] < auto["file"][len("gorilla_auto_"):]:
+        report = latest(f"{app_}_2*.json")       # 창 점검
+        auto = latest(f"{app_}_auto_*.json")     # 자동 찾기
+        if report and auto and report["file"][len(app_) + 1:] < auto["file"][len(app_) + 6:]:
             report = None  # 자동 찾기 이전의 점검 결과는 다른 창을 봤을 수 있다
-        coords = {k: qconfig.get(g.conn, f"gorilla.{k}") for k in ("input_x", "input_y", "send_x", "send_y")}
+        coords = {k: qconfig.get(g.conn, f"{app_}.{k}") for k in ("input_x", "input_y", "send_x", "send_y")}
         from .quizbot.gorilla import parse_rect
 
-        rects = {k: parse_rect(qconfig.get(g.conn, f"gorilla.{k}_rect")) for k in ("input", "send")}
-        region = parse_rect(qconfig.get(g.conn, "gorilla.screen_region"))
+        rects = {k: parse_rect(qconfig.get(g.conn, f"{app_}.{k}_rect")) for k in ("input", "send")}
+        region = parse_rect(qconfig.get(g.conn, f"{app_}.screen_region"))
         log_dir = db.data_dir() / "logs"
         tool_logs = sorted(log_dir.glob("quizbot_*.log"), key=lambda f: f.stat().st_mtime, reverse=True) \
             if log_dir.exists() else []
         last_tool = None
         for f in tool_logs[:5]:
             text = f.read_text(encoding="utf-8", errors="replace").strip()
-            if "퀴즈 자동 참여를 시작합니다" in text:
-                continue  # 실행기 기록은 제외하고 설정 도구 결과만
+            if "퀴즈 자동 참여를 시작합니다" in text or "받아쓰기" in text or "문자" in text[:200]:
+                continue  # 실행기·받아쓰기·문자 기록은 제외하고 화면 설정 도구 결과만
             last_tool = (f.name, text[-1500:] or "(아직 진행 중이거나 출력 없음)")
             break
-        shots = []
-        for name, label in (("gorilla_test", "③ 전송 테스트 — 누르기 직전 (빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치)"),
-                            ("gorilla_test_sent", "③ 전송 테스트 — 보낸 뒤 (채팅에 글이 올라왔는지 확인)"),
-                            ("gorilla_select_input", "① 입력칸으로 지정한 영역"),
-                            ("gorilla_select_send", "② 전송 버튼으로 지정한 영역"),
-                            ("gorilla_select_window", "고릴라 창으로 지정한 영역")):
-            f = db.data_dir() / "inspect" / f"{name}.png"
-            if f.exists():
-                stamp = datetime.fromtimestamp(f.stat().st_mtime)
-                shots.append({"file": f.name, "label": label, "at": f"{stamp:%m/%d %H:%M:%S}", "v": int(stamp.timestamp())})
-        return render_template("gorilla.html", keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
+        label = qconfig.app_label(app_)
+        shots = image_list([(f"{app_}_test", "③ 전송 테스트 — 누르기 직전 (빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치)"),
+                            (f"{app_}_test_sent", "③ 전송 테스트 — 보낸 뒤 (채팅에 글이 올라왔는지 확인)"),
+                            (f"{app_}_select_input", "① 입력칸으로 지정한 영역"),
+                            (f"{app_}_select_send", "② 전송 버튼으로 지정한 영역"),
+                            (f"{app_}_select_window", f"{label} 창으로 지정한 영역")])
+        return render_template("gorilla.html", app=app_, label=label, apps=qconfig.CHAT_APPS,
+                               keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
                                labels=qconfig.LABELS, report=report, auto=auto, coords=coords, last_tool=last_tool,
                                rects=rects, region=region, shots=shots,
                                waiting=request.args.get("wait", type=int))
+
+    @app.route("/sms", methods=["GET", "POST"])
+    def sms_page():
+        """휴대폰 문자 설정 (안드로이드 + USB)."""
+        keys = ["channels", "sms.signature", "sms.quiz_template", "sms.verify_number", "sms.adb_path"]
+        if request.method == "POST":
+            for k in keys:
+                if k in request.form:
+                    db.set_setting(g.conn, k, request.form[k].replace("\r\n", "\n").strip())
+            flash("문자 설정을 저장했습니다.")
+            return redirect(url_for("sms_page"))
+        from .quizbot.sms import find_adb
+
+        return render_template(
+            "sms.html", keys=keys, values={k: qconfig.get(g.conn, k) for k in keys}, labels=qconfig.LABELS,
+            check=_json(db.get_setting(g.conn, "sms.check")), adb=find_adb(qconfig.get(g.conn, "sms.adb_path")),
+            today=sms_today(g.conn), channel=qconfig.get(g.conn, "live.channel"),
+            number=qconfig.sms_number(g.conn, qconfig.get(g.conn, "live.channel")),
+            nickname=db.get_profile(g.conn).get("nickname"), route=qconfig.route(g.conn),
+            events=g.conn.execute("SELECT * FROM events WHERE kind = 'sms' OR message LIKE '%문자(%' "
+                                  "ORDER BY id DESC LIMIT 10").fetchall(),
+            shots=image_list([("sms_test", "시험 문자 — 전송 버튼 누르기 직전 휴대폰 화면"),
+                              ("sms_test_sent", "시험 문자 — 보낸 뒤 휴대폰 화면")]),
+            waiting=request.args.get("wait", type=int))
+
+    def image_list(items) -> list[dict]:
+        shots = []
+        for name, label in items:
+            f = db.data_dir() / "inspect" / f"{name}.png"
+            if f.exists():
+                stamp = datetime.fromtimestamp(f.stat().st_mtime)
+                shots.append({"file": f.name, "label": label, "at": f"{stamp:%m/%d %H:%M:%S}",
+                              "v": int(stamp.timestamp())})
+        return shots
 
     # ── 로컬 모의 글쓰기 화면 ─────────────────────────────────────
     @app.route("/mock/write", methods=["GET", "POST"])
@@ -1046,6 +1161,23 @@ def runner_log_tail(conn, chars: int = 2500) -> str:
     if not path.exists():
         return ""
     return f"[{name}]\n" + path.read_text(encoding="utf-8", errors="replace")[-chars:]
+
+
+def sms_today(conn) -> dict:
+    """오늘 문자로 보낸 수와 대략의 요금."""
+    from .quizbot.sms import COST_PER_SMS
+
+    day = datetime.now().strftime("%Y-%m-%d")
+    n = sum(conn.execute(f"SELECT COUNT(*) FROM {t} WHERE sent_via = 'sms' AND sent_at >= ?", (day,)).fetchone()[0]
+            for t in ("quizzes", "story_posts"))
+    return {"count": n, "won": n * COST_PER_SMS}
+
+
+def _json(text: str | None):
+    try:
+        return json.loads(text or "null")
+    except ValueError:
+        return None
 
 
 def pending_counts(conn) -> dict:

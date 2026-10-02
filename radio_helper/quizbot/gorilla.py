@@ -1,4 +1,6 @@
-"""고릴라 PC 앱 채팅(공감로그)창에 입력·전송 (윈도우 화면 요소 자동화, pywinauto).
+"""방송사 앱 채팅창에 입력·전송 (윈도우 화면 요소 자동화, pywinauto).
+
+SBS 고릴라(공감로그)·MBC mini·KBS 콩 모두 같은 방식이다. 설정은 앱마다 따로 저장한다 (gorilla.* / mini.* / kong.*).
 
 창 찾기
   브라우저·이 도우미 화면처럼 제목에 '고릴라'가 들어갈 수 있는 창은 빼고,
@@ -20,9 +22,7 @@ import re
 import time
 from dataclasses import dataclass
 
-from .config import DEFAULTS, GorillaConfig
-
-DEFAULT_TITLE = DEFAULTS["gorilla.window_title"]
+from .config import GorillaConfig, localize
 
 # 제목에 '고릴라'가 들어갈 수 있지만 고릴라 앱이 아닌 창
 OWN_TITLE = "라디오 참여 도우미"
@@ -31,8 +31,8 @@ EXCLUDED_PROCESSES = {
     "iexplore.exe", "arc.exe", "aside.exe", "python.exe", "pythonw.exe", "explorer.exe", "cmd.exe",
     "conhost.exe", "windowsterminal.exe", "claude.exe", "code.exe", "notepad.exe", "kakaotalk.exe",
 }
-TITLE_HINT = re.compile(r"고릴라|gorealra|공감로그", re.I)
-PROCESS_HINT = re.compile(r"gorealra|gorilla|고릴라", re.I)
+TITLE_HINT = re.compile(r"고릴라|gorealra|공감로그|\bmini\b|미니|\bkong\b|콩", re.I)
+PROCESS_HINT = re.compile(r"gorealra|gorilla|고릴라|mbcmini|\bmini|kong", re.I)
 CHAT_INPUT_HINT = re.compile(r"공감로그|글쓰기")
 SEND_BUTTON_HINT = re.compile(r"^\s*(전송|보내기|등록)\s*$")
 
@@ -361,11 +361,11 @@ class Gorilla:
         if self.cfg.process_name:
             cands = [x for x in wins if x[2] == self.cfg.process_name.lower()]
             # 자동 찾기·위치 지정으로 저장한 제목일 때만 좁힌다 (기본 패턴 '고릴라'는 플레이어 창만 고르게 됨)
-            if len(cands) > 1 and self.cfg.window_title and self.cfg.window_title != DEFAULT_TITLE:
+            if len(cands) > 1 and self.cfg.window_title and self.cfg.window_title != self.cfg.default_title:
                 titled = [x for x in cands if re.search(self.cfg.window_title, x[1] or "", re.I)]
                 cands = titled or cands
             return cands
-        pattern = re.compile(self.cfg.window_title or "고릴라", re.I)
+        pattern = re.compile(self.cfg.window_title or self.cfg.default_title, re.I)
         matched = [x for x in wins if x[1] and pattern.search(x[1])]
         # 제목이 맞은 창과 같은 프로그램의 다른 창(예: 따로 뜬 공감로그 창)도 후보에 넣는다
         procs = {x[2] for x in matched if x[2]}
@@ -511,9 +511,9 @@ class Gorilla:
 
     def select(self, target: str) -> tuple[dict, str] | None:
         prompts = {"window": "고릴라 창 전체를 네모로 감싸 주세요",
-                   "input": "고릴라의 '공감로그 글쓰기' 입력칸을 네모로 그려 주세요",
-                   "send": "고릴라의 파란 '전송' 버튼을 네모로 그려 주세요"}
-        rect = select_rectangle(prompts[target])
+                   "input": "고릴라의 채팅 입력칸('공감로그 글쓰기' 등)을 네모로 그려 주세요",
+                   "send": "고릴라의 '전송' 버튼을 네모로 그려 주세요"}
+        rect = select_rectangle(localize(self.cfg.app, prompts[target]))
         if rect is None:
             return None
         time.sleep(0.4)  # 어둡게 덮은 창이 완전히 사라진 뒤 아래 창을 본다
@@ -524,7 +524,7 @@ class Gorilla:
             ref = rect
         color = {"input": "#2554c7", "send": "#18794e", "window": "#f59e0b"}[target]
         try:
-            shot = capture(ref, f"gorilla_select_{target}", boxes=[(rect, color)])
+            shot = capture(ref, f"{self.cfg.app}_select_{target}", boxes=[(rect, color)])
             if shot:
                 message += f" (저장한 부분 사진: {shot})"
         except Exception:
@@ -686,8 +686,8 @@ class Gorilla:
             time.sleep(0.5)
             notes = []
             try:
-                if capture(self._ref_rect(w), "gorilla_test", points=self.click_points(w)):
-                    notes.append("누르기 직전 사진 gorilla_test.png (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼)")
+                if capture(self._ref_rect(w), f"{self.cfg.app}_test", points=self.click_points(w)):
+                    notes.append(f"누르기 직전 사진 {self.cfg.app}_test.png (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼)")
             except Exception as e:
                 notes.append(f"사진 실패: {type(e).__name__}")
             self._press_send(w)
@@ -695,8 +695,8 @@ class Gorilla:
             after = self._value(edit) if edit is not None else None
             result = judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
             try:
-                if capture(self._ref_rect(w), "gorilla_test_sent"):
-                    notes.append("보낸 뒤 사진 gorilla_test_sent.png")
+                if capture(self._ref_rect(w), f"{self.cfg.app}_test_sent"):
+                    notes.append(f"보낸 뒤 사진 {self.cfg.app}_test_sent.png")
             except Exception as e:
                 notes.append(f"사진 실패: {type(e).__name__}")
             msg = (f"'{w.window_text() or '(제목 없음)'}' 창에 '{text}'를 입력하고 전송을 눌렀습니다 → {result.detail}. "

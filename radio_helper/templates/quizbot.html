@@ -1,10 +1,11 @@
 {% extends "base.html" %}
 {% block title %}설정 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>설정 <span class="muted">API 키 · 환경 점검 · 고릴라 · 예약</span></h1>
+<h1>설정 <span class="muted">API 키 · 환경 점검 · 앱 채팅 · 문자 · 예약</span></h1>
 
 <div class="actions" style="margin:0 0 16px">
-  <a class="btn" href="{{ url_for('gorilla') }}">고릴라·인식 설정</a>
+  <a class="btn" href="{{ url_for('gorilla') }}">앱 채팅·인식 설정 (고릴라·mini·콩)</a>
+  <a class="btn" href="{{ url_for('sms_page') }}">휴대폰 문자 설정</a>
   <a class="btn secondary" href="{{ url_for('settings') }}">일괄 중지 · 작업 기록</a>
   <a class="btn secondary" href="{{ url_for('home') }}">청취 화면</a>
 </div>
@@ -23,7 +24,7 @@
       <form method="post" action="{{ url_for('quizbot_start') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button {{ 'disabled' if stopped or not schedules }}>시작</button></form>
     {% endif %}
     <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="tool" value="check"><button class="secondary">환경 점검</button></form>
-    <a class="btn secondary" href="{{ url_for('gorilla') }}">고릴라·인식 설정</a>
+    <a class="btn secondary" href="{{ url_for('gorilla') }}">앱 채팅·인식 설정</a>
   </div>
   {% if check %}
     <p class="muted" style="margin-top:12px">환경 점검 {{ check.at }}</p>

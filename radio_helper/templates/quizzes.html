@@ -19,7 +19,8 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="text" name="answer" value="{{ q.answer or '' }}" placeholder="정답" style="width:180px">
         <input type="text" name="send_text" value="{{ q.send_text or '' }}" placeholder="보낼 문구(비우면 기본 형식)" style="width:220px">
-        <button>이 답으로 보내기</button>
+        <button name="route" value="app">앱 채팅으로 보내기</button>
+        <button name="route" value="sms" class="secondary" onclick="return confirm('휴대폰 문자로 보냅니다 (요금 약 50원). 계속할까요?')">문자로 보내기</button>
       </form>
       <form method="post" action="{{ url_for('quizbot_skip', qid=q.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">보내지 않음</button></form>
     </div>
@@ -34,7 +35,7 @@
     {% for q in auto %}
     <tr><td>{{ q.id }}</td><td>{{ q.channel }}<br>{{ q.program }}<br><span class="muted">{{ q.sent_at or q.updated_at }}</span></td>
       <td>{{ q.question }}<br><span class="muted">{{ q.decision or '' }}</span></td>
-      <td>{{ q.send_text or '' }}</td>
+      <td>{{ q.send_text or '' }}{% if q.sent_via %}<br><span class="badge info">{{ VIA.get(q.sent_via, q.sent_via) }}</span>{% endif %}</td>
       <td><span class="badge {{ 'ok' if q.entry_status == 'posted' else ('warn' if q.entry_status in ('entered', 'unknown') else '') }}">{{ QUIZ_ENTRY.get(q.entry_status, q.entry_status) }}</span>
         <br><span class="muted">{{ q.note or '' }}</span></td>
       <td>

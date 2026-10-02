@@ -388,7 +388,7 @@ def test_stt_and_send_test_routes(client, conn, monkeypatch):
     assert "받아쓰기 테스트" in client.get("/").get_data(as_text=True)
 
     client.post("/quizbot/tool", data={"csrf_token": token, "tool": "send-test"})
-    assert launched[-1] == ["send-test"]
+    assert launched[-1] == ["send-test", "--app", "gorilla"]
     assert client.post("/quizbot/tool", data={"csrf_token": token, "tool": "type-test"}).status_code == 400
     assert "파워 FM 화이팅" in client.get("/gorilla").get_data(as_text=True)
 
