@@ -288,7 +288,17 @@ def create_app(data_dir: str | None = None) -> Flask:
             rows = g.conn.execute("SELECT * FROM corners ORDER BY is_target DESC, program, id").fetchall()
         programs_ = [r["program"] for r in g.conn.execute(
             "SELECT DISTINCT program FROM corners ORDER BY program").fetchall()]
-        return render_template("corners.html", corners=rows, programs=programs_, program=program)
+        counts = g.conn.execute(
+            """SELECT p.title, p.channel, p.checked_at, (SELECT COUNT(*) FROM corners c WHERE c.program = p.title) AS boards
+               FROM programs p WHERE p.on_air = 1
+               ORDER BY CASE p.channel WHEN '파워FM' THEN 0 WHEN '러브FM' THEN 1 ELSE 2 END, p.channel, p.start_time"""
+        ).fetchall()
+        groups: dict[str, list] = {}
+        for c in counts:
+            groups.setdefault(c["channel"], []).append(c)
+        last = g.conn.execute("SELECT * FROM events WHERE kind = 'programs' ORDER BY id DESC LIMIT 1").fetchone()
+        return render_template("corners.html", corners=rows, programs=programs_, program=program,
+                               groups=groups, total=sum(c["boards"] for c in counts), last=last)
 
     # ── 파워FM 프로그램 ───────────────────────────────────────────
     @app.get("/programs")
@@ -305,13 +315,14 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.post("/programs/refresh")
     def programs_refresh():
+        back = "corners" if request.form.get("back") == "corners" else "programs"
         if db.is_stopped(g.conn):
             flash("일괄 중지가 켜져 있습니다.", "error")
-            return redirect(url_for("programs"))
+            return redirect(url_for(back))
         log_name = launch_programs_refresh()
-        flash("공식 페이지에서 방송 시간과 게시판을 읽는 중입니다. 1~2분 뒤 이 화면을 새로 고치세요. "
-              f"(기록: {log_name})")
-        return redirect(url_for("programs"))
+        flash("공식 페이지에서 방송 시간과 코너·게시판을 읽는 중입니다. 프로그램이 많아 3~5분 걸립니다. "
+              f"끝나면 이 화면을 새로 고치세요. (기록: {log_name})")
+        return redirect(url_for(back))
 
     @app.route("/programs/<int:pid>", methods=["GET", "POST"])
     def program_edit(pid):
@@ -337,10 +348,11 @@ def create_app(data_dir: str | None = None) -> Flask:
         if request.method == "POST":
             limit = form("char_limit")
             g.conn.execute(
-                """UPDATE corners SET recruiting = ?, char_limit = ?, deadline = ?, required_fields = ?,
+                """UPDATE corners SET title = ?, recruiting = ?, char_limit = ?, deadline = ?, required_fields = ?,
                        ai_assist_policy = ?, is_target = ?, write_url = ?, title_selector = ?, body_selector = ?,
                        song_selector = ?, updated_at = ? WHERE id = ?""",
-                (form("recruiting", "unknown"), int(limit) if limit.isdigit() else None, form("deadline") or None,
+                ((form("corner_title") or corner["title"])[:80],
+                 form("recruiting", "unknown"), int(limit) if limit.isdigit() else None, form("deadline") or None,
                  form("required_fields") or None, form("ai_assist_policy", "unknown"),
                  1 if request.form.get("is_target") else 0, form("write_url") or None,
                  form("title_selector") or None, form("body_selector") or None, form("song_selector") or None,

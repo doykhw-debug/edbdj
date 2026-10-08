@@ -138,3 +138,127 @@ def test_program_pages_and_refresh_launch(client, conn, monkeypatch):
                                           "start_time": "22:00", "end_time": "24:00", "days": "매일", "on_air": "1"})
     assert conn.execute("SELECT end_time FROM programs WHERE id = ?", (pid,)).fetchone()[0] == "24:00"
     assert client.get("/corners?program=김영철의 파워FM").status_code == 200
+
+
+# ── 코너·게시판 모두 수집 ─────────────────────────────────────────────
+MAIN = "https://programs.sbs.co.kr/radio/0chulpowerfm/main"
+CB = "https://programs.sbs.co.kr/radio/0chulpowerfm/cornerboards/57577"
+
+
+def test_board_link_normalizes_urls():
+    f = programs.board_link
+    codes = {"0chulpowerfm"}
+    assert f("/radio/0chulpowerfm/cornerboards/57577?cornerid=3002&div=gnb", " 사연과\n신청곡 ", MAIN, codes) == \
+        ("코너", "사연과 신청곡", CB + "?cornerid=3002")
+    # 글 하나를 여는 주소 → 게시판 주소로 줄이고, 글 제목은 이름으로 쓰지 않는다
+    assert f("/radio/0chulpowerfm/boards/57580?cmd=view&amp;board_no=999", "오늘 받은 선물 후기", MAIN, codes) == \
+        ("게시판", "", "https://programs.sbs.co.kr/radio/0chulpowerfm/boards/57580")
+    assert f("https://m.programs.sbs.co.kr/radio/0ChulPowerFM/boards/57580/write", "글쓰기", MAIN, codes)[2] == \
+        "https://programs.sbs.co.kr/radio/0ChulPowerFM/boards/57580"
+    assert f("/radio/0chulpowerfm/boards/57580", "가" * 61, MAIN, codes)[1] == ""     # 너무 긴 글자는 이름 아님
+    assert f("/radio/lovegame/boards/1", "다른 프로그램", MAIN, codes) is None
+    assert f("/radio/0chulpowerfm/clips/1", "클립", MAIN, codes) is None
+
+
+def test_links_in_text_and_json():
+    html = '<div ng-click="go(\'/radio/ten/boards/57950\')"></div><script>u="https:\\/\\/programs.sbs.co.kr\\/radio\\/ten\\/cornerboards\\/1?cornerid=7"</script>'
+    assert programs.links_in_text(html) == [("/radio/ten/boards/57950", ""),
+                                            ("https://programs.sbs.co.kr/radio/ten/cornerboards/1?cornerid=7", "")]
+    data = '{"menus": [{"menu_name": "사연과 신청곡", "link": "/radio/ten/boards/57950"}, {"title": "", "sub": [{"name": "퀴즈", "url": "https://programs.sbs.co.kr/radio/ten/cornerboards/1?cornerid=7"}]}]}'
+    assert programs.links_in_json(data) == [("/radio/ten/boards/57950", "사연과 신청곡"),
+                                            ("https://programs.sbs.co.kr/radio/ten/cornerboards/1?cornerid=7", "퀴즈")]
+    assert programs.links_in_json("not json /radio/ten/boards/2") == [("/radio/ten/boards/2", "")]
+
+
+def test_collect_boards_opens_corner_board_for_tabs():
+    pages = {
+        CB + "?cornerid=3002": ("", [("?cornerid=3002", "사연과 신청곡"), ("?cornerid=3003", "영철이가 쏜다"),
+                                     ("/radio/0chulpowerfm/cornerboards/57577?cornerid=52015", "[월] 리얼드라마"),
+                                     ("/radio/0chulpowerfm/boards/57580", "문화선물 게시판")]),
+    }
+    main_links = [("/radio/0chulpowerfm/cornerboards/57577", ""),                      # 탭 없는 코너 게시판
+                  ("/radio/0chulpowerfm/cornerboards/57577?cornerid=3002", "코너"),
+                  ("/radio/0chulpowerfm/boards/57580?board_no=5", "어떤 글 제목")]       # 이름 없는 게시판
+    opened = []
+
+    def fetch(url):
+        opened.append(url)
+        if url == CB:
+            raise TimeoutError(url)
+        return pages[url] if url in pages else ("", [])
+
+    boards, visits = programs.collect_boards(fetch, "0chulpowerfm", main_links, MAIN)
+    assert boards == [
+        ("코너", "코너", CB + "?cornerid=3002"),
+        ("게시판", "문화선물 게시판", "https://programs.sbs.co.kr/radio/0chulpowerfm/boards/57580"),
+        ("코너", "영철이가 쏜다", CB + "?cornerid=3003"),
+        ("코너", "[월] 리얼드라마", CB + "?cornerid=52015"),
+    ]
+    # 탭 없는 주소가 안 열리면 탭 주소로 다시 열고, 같은 코너 게시판은 그 뒤로 열지 않는다.
+    # 이름 없던 게시판은 코너 페이지에서 이름이 나와 따로 열지 않는다 (탭 없는 주소는 목록에서 뺀다)
+    assert opened == [CB, CB + "?cornerid=3002"] and visits == 2
+    assert programs.collect_boards(fetch, "0chulpowerfm", main_links, MAIN, limit=0)[1] == 0
+
+
+def test_collect_boards_visit_limit():
+    links = [(f"/radio/ten/cornerboards/{i}", "") for i in range(10)]
+    opened = []
+    boards, visits = programs.collect_boards(lambda u: opened.append(u) or ("", []), "ten", links,
+                                             "https://programs.sbs.co.kr/radio/ten/main", limit=3)
+    assert visits == 3 and len(opened) == 3 and len(boards) == 10
+
+
+def test_refresh_collects_all_boards_with_redirect_and_discovery(conn):
+    pages = {p: ("", []) for (p,) in conn.execute("SELECT main_url FROM programs")}
+    # 주소가 바뀐 프로그램: 최종 주소의 코드로 된 게시판도 그 프로그램 것으로 본다
+    pages["https://programs.sbs.co.kr/radio/ten/main"] = (
+        "월~금 22:00~24:00", [("/radio/ten2026/boards/57950", "사연과 신청곡")],
+        "https://programs.sbs.co.kr/radio/ten2026/main")
+    pages[MAIN] = ("매일 07:00 ~ 09:00", [("/radio/0chulpowerfm/cornerboards/57577?cornerid=3002", "사연")])
+    pages[CB + "?cornerid=3002"] = ("", [("?cornerid=3099", "새 코너")])
+    pages[programs.RADIO_HOME_URL] = ("", [("https://programs.sbs.co.kr/radio/lovenew/main", "러브 새 프로그램")])
+    pages["https://programs.sbs.co.kr/radio/lovenew/main"] = (
+        "SBS 러브FM 103.5 · 러브FM 매일 오후 2시 ~ 4시", [("/radio/lovenew/boards/1", "사연 게시판")])
+    said = []
+
+    report = programs.refresh(conn, lambda u: pages[u] if u in pages else ("", []), say=said.append)
+
+    ten = conn.execute("SELECT * FROM corners WHERE program = '배성재의 텐'").fetchone()
+    assert ten["board_url"] == "https://programs.sbs.co.kr/radio/ten2026/boards/57950"
+    chul = {r["board_url"]: r["title"] for r in conn.execute("SELECT * FROM corners WHERE program = '김영철의 파워FM'")}
+    assert chul[CB + "?cornerid=3002"].startswith("사연과 신청곡")          # 처음 넣은 이름은 그대로
+    assert chul[CB + "?cornerid=3099"] == "새 코너" and len(chul) == len(programs.seed.CORNERS) + 1
+    assert conn.execute("SELECT title FROM corners WHERE program = '러브 새 프로그램'").fetchone()[0] == "사연 게시판"
+    assert report.board_counts["배성재의 텐"] == 1 and report.board_counts["김영철의 파워FM"] == 2
+    assert "애프터클럽" in report.no_boards and "게시판을 못 찾음" in report.summary()
+    assert any(s.startswith("- 김영철의 파워FM: 게시판·코너 2개 (새로 추가 1개") for s in said)
+
+    again = programs.refresh(conn, lambda u: pages[u] if u in pages else ("", []))
+    assert again.new_boards == [] and again.board_counts["배성재의 텐"] == 1
+
+
+def test_unnamed_board_gets_placeholder(conn):
+    pages = {p: ("", []) for (p,) in conn.execute("SELECT main_url FROM programs")}
+    pages["https://programs.sbs.co.kr/radio/ten/main"] = ("", [("/radio/ten/boards/57950?board_no=3", "글 제목"),
+                                                                ("/radio/ten/cornerboards/9?cornerid=4", "")])
+    programs.refresh(conn, lambda u: pages[u] if u in pages else ("", []), discover=False)
+    rows = {r["board_url"]: r for r in conn.execute("SELECT * FROM corners WHERE program = '배성재의 텐'")}
+    board = rows["https://programs.sbs.co.kr/radio/ten/boards/57950"]
+    assert board["title"] == "(이름 확인 필요) 게시판 57950" and "이름을 못 읽음" in board["dev_note"]
+    assert rows["https://programs.sbs.co.kr/radio/ten/cornerboards/9?cornerid=4"]["title"] == "(이름 확인 필요) 코너 4"
+
+
+def test_corners_page_collect_button_and_counts(client, conn, monkeypatch):
+    launched = []
+    monkeypatch.setattr(app_module, "launch_programs_refresh", lambda: launched.append(1) or "p.log")
+    page = client.get("/corners").get_data(as_text=True)
+    assert "코너·게시판 모두 수집" in page and 'name="back" value="corners"' in page
+    assert "김영철의 파워FM 12" in page and "배성재의 텐 0" in page
+    token = csrf(client, "/corners")
+    r = client.post("/programs/refresh", data={"csrf_token": token, "back": "corners"})
+    assert launched == [1] and r.headers["Location"].endswith("/corners")
+
+    cid = conn.execute("SELECT id FROM corners ORDER BY id LIMIT 1").fetchone()[0]
+    client.post(f"/corners/{cid}", data={"csrf_token": token, "corner_title": "고친 이름", "recruiting": "unknown",
+                                          "ai_assist_policy": "unknown"})
+    assert conn.execute("SELECT title FROM corners WHERE id = ?", (cid,)).fetchone()[0] == "고친 이름"

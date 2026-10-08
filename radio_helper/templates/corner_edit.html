@@ -23,6 +23,10 @@
 <form method="post" class="panel">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <h2>모집 조건 <span class="muted">공식 공지에서 확인한 내용</span></h2>
+  <div class="row">
+    <div><label>코너 이름 <span class="hint">자동 수집에서 이름을 못 읽었으면 게시판을 열어 보고 고치세요</span></label>
+      <input type="text" name="corner_title" value="{{ c.title }}" maxlength="80"></div>
+  </div>
   <div class="row3">
     <div>
       <label>현재 사연 모집 여부</label>

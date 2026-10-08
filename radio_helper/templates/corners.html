@@ -2,6 +2,28 @@
 {% block title %}코너 · 라디오 참여 도우미{% endblock %}
 {% block content %}
 <h1>코너·게시판 목록 {% if program %}<span class="muted">{{ program }}</span>{% endif %}</h1>
+
+<div class="panel">
+  <form method="post" action="{{ url_for('programs_refresh') }}" class="actions" style="margin-top:0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="back" value="corners">
+    <button {{ 'disabled' if stopped }}>코너·게시판 모두 수집</button>
+    <span class="muted">편성에 있는 모든 SBS 프로그램(파워FM·러브FM) 공식 페이지를 열어 코너 탭까지 읽습니다. 3~5분 걸립니다.</span>
+  </form>
+  {% if last %}<details class="muted" style="margin-top:8px"><summary>마지막 수집: {{ last.at[:16] }} · {{ last.message | truncate(70) }}</summary>
+    <p style="margin:6px 0 0">{{ last.message }}</p></details>{% endif %}
+  <div class="board-counts"><a href="{{ url_for('corners') }}"><span class="badge {{ 'on' if not program }}">전체 {{ total }}</span></a></div>
+  {% for channel, rows in groups.items() %}
+  <div class="board-counts"><b>{{ channel }}</b>
+    {% for c in rows %}
+    <a href="{{ url_for('corners', program=c.title) }}" title="{{ '마지막 확인 ' ~ c.checked_at[:16] if c.checked_at else '아직 수집 전' }}">
+      <span class="badge {{ 'info' if c.boards else 'warn' }} {{ 'on' if c.title == program }}">{{ c.title }} {{ c.boards }}</span></a>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  <p class="muted" style="margin:8px 0 0">노란색 0 은 아직 게시판을 못 찾은 프로그램입니다. MBC·KBS 게시판은 다른 사이트라 여기서 모으지 않습니다.</p>
+</div>
+
 <form method="get" class="actions" style="margin-bottom:12px">
   <select name="program" style="max-width:360px" onchange="this.form.submit()">
     <option value="">전체 프로그램</option>
@@ -16,7 +38,9 @@
   <tr><th>코너</th><th>모집 여부</th><th>공지 확인</th><th>제출 대상</th><th>초기 활용 판단</th></tr>
   {% for c in corners %}
   <tr>
-    <td><a href="{{ url_for('corner_edit', cid=c.id) }}">{{ c.title }}</a><br><span class="muted">{{ c.program }} · {{ c.kind }}</span></td>
+    <td><a href="{{ url_for('corner_edit', cid=c.id) }}">{{ c.title }}</a>
+      <a class="muted" href="{{ c.board_url }}" target="_blank" rel="noopener">↗</a><br>
+      <span class="muted">{{ c.program }} · {{ c.kind }}</span></td>
     <td><span class="badge {{ 'ok' if c.recruiting == 'open' else ('bad' if c.recruiting == 'closed' else '') }}">{{ RECRUITING[c.recruiting] }}</span></td>
     <td>
       {% if c.notice_changed %}<span class="badge bad">공지 바뀜·재검토</span>
@@ -26,6 +50,8 @@
     <td>{% if c.is_target %}<span class="badge info">대상</span>{% endif %}</td>
     <td class="muted">{{ c.dev_note }}</td>
   </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">아직 모은 코너·게시판이 없습니다. 위의 <b>코너·게시판 모두 수집</b>을 누르세요.</td></tr>
   {% endfor %}
 </table>
 </div>
