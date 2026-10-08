@@ -382,7 +382,10 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     # ── 실제 경험 ─────────────────────────────────────────────────
     EXP_FIELDS = ["label", "when_text", "people", "story", "quotes", "quote_kind", "highlight", "ending",
-                  "fixed_facts", "hide", "song", "prior_history", "gorilla_line"]
+                  "fixed_facts", "hide", "song", "prior_history", "gorilla_line", "about_person_id"]
+
+    def people_options():
+        return g.conn.execute("SELECT id, name, alias, grp, side FROM people ORDER BY sort, id").fetchall()
 
     @app.get("/experiences")
     def experiences():
@@ -401,13 +404,17 @@ def create_app(data_dir: str | None = None) -> Flask:
         corners_ = g.conn.execute("SELECT id, title, is_target FROM corners ORDER BY is_target DESC, id").fetchall()
         if request.method == "POST":
             values = {f: form(f) for f in EXP_FIELDS}
+            about = request.form.get("about_person_id", type=int)
+            values["about_person_id"] = about if about and g.conn.execute(
+                "SELECT 1 FROM people WHERE id = ? AND side != 'self'", (about,)).fetchone() else None
             if not values["story"]:
                 flash("'실제로 있었던 일'은 비워 둘 수 없습니다.", "error")
-                return render_template("experience_edit.html", e=values, eid=eid, drafts=[], corners=corners_)
+                return render_template("experience_edit.html", e=values, eid=eid, drafts=[], corners=corners_,
+                                       people=people_options())
             values["quote_kind"] = values["quote_kind"] if values["quote_kind"] in ("exact", "gist") else "none"
             confirmed = 1 if request.form.get("user_confirmed") else 0
             if exp:
-                changed = any((exp[f] or "") != values[f] for f in EXP_FIELDS)
+                changed = any((exp[f] or "") != (values[f] or "") for f in EXP_FIELDS)
                 g.conn.execute(
                     f"UPDATE experiences SET {', '.join(f'{f} = ?' for f in EXP_FIELDS)}, user_confirmed = ?, "
                     "updated_at = ? WHERE id = ?",
@@ -428,7 +435,15 @@ def create_app(data_dir: str | None = None) -> Flask:
         drafts = g.conn.execute(
             "SELECT d.*, c.title AS corner_title FROM drafts d JOIN corners c ON c.id = d.corner_id "
             "WHERE d.experience_id = ? ORDER BY d.id DESC", (eid,)).fetchall() if eid else []
-        return render_template("experience_edit.html", e=exp, eid=eid, drafts=drafts, corners=corners_)
+        prefill = None
+        if exp is None and request.args.get("about", type=int):
+            # 인물 화면의 '실제 경험 만들기': 그 사람 이야기로 미리 채움
+            prefill = {f: "" for f in EXP_FIELDS}
+            prefill.update({"about_person_id": request.args.get("about", type=int),
+                            "when_text": request.args.get("when", ""), "story": request.args.get("text", ""),
+                            "label": request.args.get("text", "")[:30], "quote_kind": "none"})
+        return render_template("experience_edit.html", e=exp or prefill, eid=eid, drafts=drafts, corners=corners_,
+                               people=people_options())
 
     # ── 원고 ──────────────────────────────────────────────────────
     @app.get("/drafts")
@@ -443,7 +458,11 @@ def create_app(data_dir: str | None = None) -> Flask:
     def draft_new():
         exp = one("SELECT * FROM experiences WHERE id = ?", int(form("experience_id") or 0))
         corner = one("SELECT * FROM corners WHERE id = ?", int(form("corner_id") or 0))
-        d = generator.template_draft(exp, db.get_profile(g.conn), corner)
+        from . import people as people_mod
+        from .quizbot import story as story_mod
+
+        d = generator.template_draft(exp, db.get_profile(g.conn), corner, about=story_mod.about_of(g.conn, exp),
+                                     private=people_mod.private_terms(g.conn))
         cur = g.conn.execute(
             "INSERT INTO drafts (experience_id, corner_id, title, body, song, source, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, 'template', ?, ?)",
@@ -950,6 +969,29 @@ def create_app(data_dir: str | None = None) -> Flask:
             if not text.strip():
                 flash("가져올 파일을 고르거나 내용을 붙여 넣으세요.", "error")
                 return redirect(url_for("import_page"))
+            from . import people as people_mod
+
+            kind = people_mod.detect(text)
+            try:
+                if kind == "people":
+                    added, updated = people_mod.import_people(g.conn, people_mod.parse_character_map(text))
+                    db.log(g.conn, "people", f"인물 관계도 가져오기: 새 인물 {added}명, 고침 {updated}명")
+                    flash(f"인물 관계도를 가져왔습니다: 새 인물 {added}명, 고침 {updated}명. 사연에는 실명 대신 '호칭'을 씁니다 — "
+                          "인물 화면에서 호칭을 확인하세요.")
+                    return redirect(url_for("people_page"))
+                if kind == "library":
+                    rows = people_mod.parse_story_log(text)
+                    added, updated = people_mod.import_library(g.conn, rows)
+                    fiction = sum(1 for r in rows if r["kind"] == "fiction")
+                    db.log(g.conn, "people", f"사연 보관함 가져오기: 새 사연 {added}편, 고침 {updated}편")
+                    flash(f"사연 보관함에 {added + updated}편을 넣었습니다 (새 {added} · 고침 {updated}).")
+                    if fiction:
+                        flash(f"그중 {fiction}편은 원본 사연을 각색한 가상 사연이라 읽기용으로만 둡니다. "
+                              "실제로 있었던 일이 아니므로 이 프로그램은 보내지 않습니다.", "warn")
+                    return redirect(url_for("library"))
+            except people_mod.PeopleImportError as e:
+                flash(str(e), "error")
+                return redirect(url_for("import_page"))
             try:
                 report = importer.import_data(g.conn, importer.parse(text),
                                               overwrite_profile=bool(request.form.get("overwrite")))
@@ -964,6 +1006,79 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("experiences"))
         return render_template("import.html",
                                template=json.dumps(importer.TEMPLATE, ensure_ascii=False, indent=2))
+
+    # ── 인물 관계도 · 사연 보관함 ─────────────────────────────────
+    def person_rows():
+        return g.conn.execute(
+            """SELECT p.*,
+                      (SELECT COUNT(*) FROM experiences e WHERE e.about_person_id = p.id) AS exp_count,
+                      (SELECT COUNT(*) FROM story_library l WHERE l.person_id = p.id) AS lib_count
+               FROM people p ORDER BY p.sort, p.id""").fetchall()
+
+    @app.get("/people")
+    def people_page():
+        from . import people as people_mod
+
+        rows = person_rows()
+        groups: dict[str, list] = {}
+        for r in rows:
+            groups.setdefault(r["grp"] or "기타", []).append({**dict(r), "events_n": len(json.loads(r["events"] or "[]"))})
+        own = g.conn.execute("SELECT COUNT(*) FROM experiences WHERE about_person_id IS NULL").fetchone()[0]
+        return render_template("people.html", d=people_mod.diagram(rows) if rows else None, groups=groups,
+                               sides=people_mod.SIDES, total=len(rows), own_experiences=own,
+                               library_n=g.conn.execute("SELECT COUNT(*) FROM story_library").fetchone()[0])
+
+    @app.route("/people/<int:pid>", methods=["GET", "POST"])
+    def person_page(pid):
+        from . import people as people_mod
+
+        p = one("SELECT * FROM people WHERE id = ?", pid)
+        if request.method == "POST":
+            alias = form("alias") or p["alias"]
+            closeness = form("closeness") if form("closeness") in ("", "가까움", "보통", "서먹") else p["closeness"]
+            g.conn.execute("UPDATE people SET alias = ?, closeness = ?, note = ?, updated_at = ? WHERE id = ?",
+                           (alias[:20], closeness, form("note") or None, db.now(), pid))
+            g.conn.commit()
+            flash("저장했습니다.")
+            return redirect(url_for("person_page", pid=pid))
+        exps = g.conn.execute("SELECT * FROM experiences WHERE about_person_id = ? ORDER BY id DESC", (pid,)).fetchall()
+        library_rows = g.conn.execute("SELECT id, code, title, event_date, kind FROM story_library WHERE person_id = ? "
+                                      "ORDER BY code", (pid,)).fetchall()
+        events = json.loads(p["events"] or "[]")
+        # 사건에서 만든 경험: 날짜 + 미리 채운 짧은 이름(사건 앞 30자)으로 알아본다 (본문은 고쳐도 됨)
+        made = {(e["when_text"] or "", (e["label"] or "")[:30]) for e in exps}
+        return render_template("person.html", p=p, details=json.loads(p["details"] or "[]"), events=events, made=made,
+                               exps=exps, library=library_rows, sides=people_mod.SIDES,
+                               intro=people_mod.intro_for(p["alias"] if p["side"] != "self" else None))
+
+    @app.get("/library")
+    def library():
+        person = request.args.get("person", type=int)
+        kind = request.args.get("kind", "")
+        q = (request.args.get("q") or "").strip()
+        where, params = [], []
+        if person:
+            where.append("l.person_id = ?")
+            params.append(person)
+        if kind in ("fiction", "real"):
+            where.append("l.kind = ?")
+            params.append(kind)
+        if q:
+            where.append("(l.title LIKE ? OR l.body LIKE ? OR l.summary LIKE ?)")
+            params += [f"%{q}%"] * 3
+        rows = g.conn.execute(
+            "SELECT l.*, p.name AS person_name, p.alias AS person_alias FROM story_library l "
+            "LEFT JOIN people p ON p.id = l.person_id" + (" WHERE " + " AND ".join(where) if where else "")
+            + " ORDER BY l.code, l.id", params).fetchall()
+        return render_template("library.html", rows=rows, people=people_options(), person=person, kind=kind, q=q,
+                               counts={k: g.conn.execute("SELECT COUNT(*) FROM story_library WHERE kind = ?",
+                                                         (k,)).fetchone()[0] for k in ("fiction", "real")})
+
+    @app.get("/library/<int:lid>")
+    def library_item(lid):
+        item = one("SELECT l.*, p.name AS person_name, p.alias AS person_alias FROM story_library l "
+                   "LEFT JOIN people p ON p.id = l.person_id WHERE l.id = ?", lid)
+        return render_template("library_item.html", s=item)
 
     @app.post("/quizbot/tool")
     def quizbot_tool():

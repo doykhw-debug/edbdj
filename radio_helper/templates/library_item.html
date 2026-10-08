@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ s.code }} · 사연 보관함 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>{{ s.code }} {{ s.title }}</h1>
+<p><a href="{{ url_for('library') }}">← 사연 보관함</a>{% if s.person_id %} · <a href="{{ url_for('person_page', pid=s.person_id) }}">{{ s.person_name }}</a>{% endif %}</p>
+{% if s.kind == 'fiction' %}
+<div class="flash warn"><b>가상(각색) 사연</b>{% if s.origin %} — 원본: {{ s.origin }}{% endif %}. 실제로 있었던 일이 아니라서 이 프로그램은 보내지 않습니다.</div>
+{% endif %}
+<div class="panel">
+  <div class="row3 muted">
+    <div>인물: {{ s.person_alias or s.person_label or '' }}</div>
+    <div>시기: {{ s.event_date or '' }}</div>
+    <div>보내기 좋은 때: {{ s.timing or '' }}</div>
+  </div>
+  {% if s.summary %}<p class="muted">{{ s.summary }}</p>{% endif %}
+  <pre class="box" style="max-height:none;font-size:14px">{{ s.body }}</pre>
+  {% if s.song %}<p class="muted">신청곡: {{ s.song }}</p>{% endif %}
+  {% if s.closing %}<p class="muted">한마디: {{ s.closing }}</p>{% endif %}
+</div>
+{% endblock %}

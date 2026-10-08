@@ -111,3 +111,15 @@ button.big { font-size: 20px; padding: 14px 28px; border-radius: 12px; }
 .live-dot.stalled { background: #a855f7; }
 .last-chunk { font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-variant-numeric: tabular-nums; }
 .last-chunk:empty { display: none; }
+
+/* 인물 관계도 */
+.people-map-wrap { overflow-x: auto; }
+.people-map { width: 100%; min-width: 640px; max-width: 980px; display: block; margin: 0 auto; }
+.people-map text.node { font-size: 13px; fill: var(--text); }
+.people-map text.hub { font-size: 12px; fill: var(--muted); font-weight: 600; paint-order: stroke; stroke: #fff; stroke-width: 4px; }
+.people-map text.me { font-size: 18px; font-weight: 700; fill: #fff; }
+.people-map text.me-sub { font-size: 11px; fill: #dbe4ff; }
+.people-map a:hover text { text-decoration: underline; }
+.legend { display: flex; gap: 14px; margin-bottom: 6px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.event-row { display: flex; gap: 10px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }

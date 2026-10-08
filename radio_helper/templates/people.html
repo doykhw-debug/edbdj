@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}인물 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>인물 <span class="muted">관계도 · 목록 · 사연 보관함</span></h1>
+<div class="actions" style="margin:0 0 12px">
+  <a class="btn" href="#map">관계도</a>
+  <a class="btn secondary" href="#list">인물 목록 ({{ total }})</a>
+  <a class="btn secondary" href="{{ url_for('library') }}">사연 보관함 ({{ library_n }})</a>
+  <a class="btn secondary" href="{{ url_for('import_page') }}">가져오기</a>
+</div>
+
+<div class="panel">
+  <h2>사연 쓰는 규칙</h2>
+  <ul class="list">
+    <li>화자는 언제나 <b>나</b>입니다. 다른 사람이 주인공인 실제 경험은 <b>"제 와이프 이야기인데요"</b>, <b>"제 대학 친구 이야기인데요"</b>처럼 관계로 시작합니다.</li>
+    <li>사연과 AI 요청에는 실명 대신 아래 <b>호칭</b>만 씁니다. 실명(앞 낱말)은 사연에 나오면 자동으로 막습니다.</li>
+    <li>이야기 주인공은 바꾸지 않습니다. 내가 겪은 일을 다른 사람 일로, 다른 사람 일을 내 일로 옮기지 않습니다.</li>
+    <li>실제 경험에서 <b>누구 이야기인가요?</b>를 고르면 그 사람 이야기로 씁니다. 인물의 '실제 사건'에서 바로 경험을 만들 수 있습니다.</li>
+  </ul>
+  <p class="muted">내 이야기로 적은 경험 {{ own_experiences }}건 · 인물·사연 정보는 이 PC에만 저장됩니다.</p>
+</div>
+
+{% if not d %}
+<div class="panel"><p>아직 인물이 없습니다. <a href="{{ url_for('import_page') }}">가져오기</a>에서 인물 관계도 파일(<code>character-map.md</code>)을 넣으세요.</p></div>
+{% else %}
+<div class="panel" id="map">
+  <h2>관계도 <span class="muted">이름을 누르면 인물 화면</span></h2>
+  <div class="legend muted">
+    {% for side, color in [('family', '#2554c7'), ('work', '#18794e'), ('friend', '#c2410c'), ('life', '#667085')] %}
+    <span><span class="dot" style="background:{{ color }}"></span>{{ sides[side] }}</span>
+    {% endfor %}
+  </div>
+  <div class="people-map-wrap">
+  <svg class="people-map" viewBox="0 0 {{ d.size }} {{ d.size }}" role="img" aria-label="인물 관계도">
+    {% for h in d.hubs %}<line x1="{{ d.c }}" y1="{{ d.c }}" x2="{{ h.x }}" y2="{{ h.y }}" stroke="{{ h.color }}" stroke-opacity=".35" stroke-width="2"/>{% endfor %}
+    {% for n in d.nodes %}{% set h = d.hubs[n.hub] %}<line x1="{{ h.x }}" y1="{{ h.y }}" x2="{{ n.x }}" y2="{{ n.y }}" stroke="{{ n.color }}" stroke-opacity=".3"/>{% endfor %}
+    {% for h in d.hubs %}
+      <circle cx="{{ h.x }}" cy="{{ h.y }}" r="5" fill="{{ h.color }}"/>
+      <text transform="translate({{ h.lx }},{{ h.ly }}) rotate({{ h.rot }})" text-anchor="{{ h.anchor }}" dominant-baseline="middle" class="hub">{{ h.label }}</text>
+    {% endfor %}
+    {% for n in d.nodes %}
+      <a href="{{ url_for('person_page', pid=n.id) }}">
+        <circle cx="{{ n.x }}" cy="{{ n.y }}" r="7" fill="{{ n.color }}"/>
+        <title>{{ n.name }}{{ ' — 사연 호칭: ' ~ n.alias if n.alias }}</title>
+        <text transform="translate({{ n.lx }},{{ n.ly }}) rotate({{ n.rot }})" text-anchor="{{ n.anchor }}" dominant-baseline="middle" class="node">{{ n.label }}</text>
+      </a>
+    {% endfor %}
+    {% if d.me %}
+    <a href="{{ url_for('person_page', pid=d.me.id) }}">
+      <circle cx="{{ d.c }}" cy="{{ d.c }}" r="38" fill="#2554c7"/>
+      <text x="{{ d.c }}" y="{{ d.c - 4 }}" text-anchor="middle" class="me">나</text>
+      <text x="{{ d.c }}" y="{{ d.c + 16 }}" text-anchor="middle" class="me-sub">{{ d.me.name }}</text>
+    </a>
+    {% endif %}
+  </svg>
+  </div>
+</div>
+
+<div class="panel table-wrap" id="list">
+  <h2>인물 목록</h2>
+  <table>
+    <tr><th>이름</th><th>사연 호칭</th><th>한 줄 소개</th><th>나이</th><th>실제 사건</th><th>내 경험</th><th>보관함</th><th>가까움</th></tr>
+    {% for grp, members in groups.items() %}
+    <tr><td colspan="8" style="background:var(--bg)"><b>{{ grp }}</b> <span class="muted">{{ members|length }}명</span></td></tr>
+    {% for p in members %}
+    <tr>
+      <td><span class="dot" style="background:{{ {'self': '#2554c7', 'family': '#2554c7', 'work': '#18794e', 'friend': '#c2410c'}.get(p.side, '#667085') }}"></span><a href="{{ url_for('person_page', pid=p.id) }}">{{ p.name }}</a></td>
+      <td>{{ p.alias or '' }}</td>
+      <td class="muted">{{ p.relation or '' }}</td>
+      <td>{{ p.age or '' }}</td>
+      <td>{{ p.events_n or '' }}</td>
+      <td>{{ p.exp_count or '' }}</td>
+      <td>{% if p.lib_count %}<a href="{{ url_for('library', person=p.id) }}">{{ p.lib_count }}</a>{% endif %}</td>
+      <td>{{ p.closeness or '' }}</td>
+    </tr>
+    {% endfor %}
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

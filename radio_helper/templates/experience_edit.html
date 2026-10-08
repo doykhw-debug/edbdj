@@ -15,6 +15,18 @@
       <input type="text" name="when_text" value="{{ e.when_text or '' }}" placeholder="예: 지난주 토요일 아침에">
     </div>
   </div>
+  <div class="row">
+    <div>
+      <label>누구 이야기인가요? <span class="hint">화자는 늘 나 · 다른 사람이면 "제 와이프 이야기인데요"처럼 시작</span></label>
+      <select name="about_person_id">
+        <option value="">내 이야기</option>
+        {% for p in people if p.side != 'self' %}
+        <option value="{{ p.id }}" {{ 'selected' if (e.about_person_id or 0)|int == p.id }}>{{ p.alias or p.name }} — {{ p.name }} · {{ p.grp }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="muted" style="padding-top:34px">{% if not people %}<a href="{{ url_for('import_page') }}">인물 관계도를 가져오면</a> 여기서 고를 수 있습니다.{% else %}사연에는 실명 대신 <a href="{{ url_for('people_page') }}">인물</a>에 적힌 호칭만 씁니다.{% endif %}</div>
+  </div>
   <label>누가 등장하는지 <span class="hint">(실명 불필요)</span></label>
   <input type="text" name="people" value="{{ e.people or '' }}" placeholder="예: 나, 옆지기, 첫째(7살)">
   <label>실제로 있었던 일 <span class="hint">— 편하게 설명하세요. 이 문장이 원고의 바탕이 됩니다.</span></label>

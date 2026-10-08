@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}사연 보관함 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>사연 보관함 <span class="muted">가상 {{ counts.fiction }}편 · 실제 {{ counts.real }}편</span></h1>
+<p><a href="{{ url_for('people_page') }}">← 인물</a></p>
+<div class="flash warn">원본 사연을 각색해 인물에게 붙인 <b>가상 사연</b>은 읽기용입니다. 실제로 있었던 일이 아니라서 이 프로그램은 라디오로 보내지 않고,
+  사연 초안(AI)의 재료로도 쓰지 않습니다. 보내는 사연은 <a href="{{ url_for('experiences') }}">실제 경험</a>에서 만듭니다.</div>
+<form method="get" class="panel actions" style="margin-top:0">
+  <select name="person" style="width:auto"><option value="">모든 인물</option>
+    {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if person == p.id }}>{{ p.name }}{{ ' (' ~ p.alias ~ ')' if p.alias and p.alias != p.name }}</option>{% endfor %}</select>
+  <select name="kind" style="width:auto"><option value="">모든 종류</option>
+    <option value="fiction" {{ 'selected' if kind == 'fiction' }}>가상(각색)</option><option value="real" {{ 'selected' if kind == 'real' }}>실제</option></select>
+  <input type="text" name="q" value="{{ q }}" placeholder="제목·본문 검색" style="width:220px">
+  <button class="secondary">찾기</button>
+</form>
+<div class="panel table-wrap">
+  <table>
+    <tr><th>번호</th><th>제목</th><th>인물</th><th>시기</th><th>보내기 좋은 때</th><th>종류</th></tr>
+    {% for s in rows %}
+    <tr><td>{{ s.code or s.id }}</td>
+      <td><a href="{{ url_for('library_item', lid=s.id) }}">{{ s.title }}</a><br><span class="muted">{{ s.summary or '' }}</span></td>
+      <td>{% if s.person_id %}<a href="{{ url_for('person_page', pid=s.person_id) }}">{{ s.person_name }}</a>{% else %}{{ s.person_label or '' }}{% endif %}</td>
+      <td class="muted">{{ s.event_date or '' }}</td>
+      <td class="muted">{{ s.timing or '' }}</td>
+      <td>{% if s.kind == 'fiction' %}<span class="badge warn">가상</span>{% else %}<span class="badge ok">실제</span>{% endif %}</td></tr>
+    {% else %}<tr><td colspan="6" class="muted">없음 — <a href="{{ url_for('import_page') }}">가져오기</a>에서 사연 로그(.jsonl)를 넣으세요.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

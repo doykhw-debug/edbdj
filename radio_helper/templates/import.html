@@ -1,12 +1,17 @@
 {% extends "base.html" %}
 {% block title %}가져오기 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>특징·경험 가져오기</h1>
+<h1>가져오기 <span class="muted">특징·경험 · 인물 관계도 · 사연 로그</span></h1>
 <form method="post" enctype="multipart/form-data" class="panel">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <p>Claude와의 대화에서 받은 <b>가져오기 파일(.json)</b>을 고르거나, 내용을 아래 칸에 그대로 붙여 넣으세요.</p>
+  <p>파일 종류는 내용을 보고 알아서 고릅니다.</p>
+  <ul class="list">
+    <li><b>특징·경험 (.json)</b> — 기본 정보와 실제 경험.</li>
+    <li><b>인물 관계도 (character-map.md)</b> — 인물 카드와 실제 사건(연표)을 <a href="{{ url_for('people_page') }}">인물</a>에 넣습니다. 〔사연〕 가상 사건은 넣지 않습니다. 다시 넣으면 고친 내용으로 바뀌고, 직접 정한 호칭·가까움·메모는 그대로입니다.</li>
+    <li><b>사연 로그 (.jsonl)</b> — <a href="{{ url_for('library') }}">사연 보관함</a>에 넣습니다. 원본 사연을 각색한 가상 사연은 읽기용이며 보내지 않습니다.</li>
+  </ul>
   <label>파일</label>
-  <input type="file" name="file" accept=".json,application/json,text/plain">
+  <input type="file" name="file" accept=".json,.jsonl,.md,application/json,text/plain,text/markdown">
   <label>또는 내용 붙여넣기</label>
   <textarea name="text" class="mono tall" placeholder='{"profile": {...}, "experiences": [...]}'></textarea>
   <label class="inline"><input type="checkbox" name="overwrite" value="1"> 이미 적힌 기본 정보도 바꾸기 (체크하지 않으면 비어 있는 칸만 채움)</label>

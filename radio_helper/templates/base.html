@@ -18,6 +18,7 @@
     <a href="{{ url_for('gifts') }}" class="{{ 'on' if ep == 'gifts' }}">선물 기록</a>
     <a href="{{ url_for('corners') }}" class="{{ 'on' if ep.startswith('corner') }}">코너</a>
     <a href="{{ url_for('programs') }}" class="{{ 'on' if ep.startswith('program') }}">프로그램</a>
+    <a href="{{ url_for('people_page') }}" class="{{ 'on' if ep in ('people_page', 'person_page', 'library', 'library_item') }}">인물</a>
     <a href="{{ url_for('profile') }}" class="{{ 'on' if ep in ('profile', 'import_page') or ep.startswith('experience') }}">내 정보</a>
     <a href="{{ url_for('quizbot') }}" class="{{ 'on' if ep in ('quizbot', 'quizbot_start', 'quizbot_stop', 'quizbot_settings', 'quizbot_schedule_new', 'quizbot_schedule_update', 'quizbot_tool', 'gorilla', 'sms_page', 'settings') }}">설정</a>
   </nav>

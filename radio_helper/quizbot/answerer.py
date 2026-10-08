@@ -157,6 +157,9 @@ STORY_SYSTEM = f"""당신은 라디오(SBS·MBC·KBS 등) 녹취를 듣고, 청�
 - experience_id: 주제에 자연스럽게 맞는 경험이 있을 때만 그 번호. 억지로 끼워 맞추지 말고, 없으면 0.
 
 글쓰기 원칙 (반드시 지킬 것):
+- 화자는 언제나 보내는 사람 본인('나')입니다. 경험에 '이야기 주인공'이 적혀 있으면 그 사람 이야기를 내가 전하는 형식으로,
+  적힌 첫머리(예: "제 와이프 이야기인데요")로 시작하고 그 사람은 호칭으로만 부릅니다. 주인공이 없으면 내 이야기입니다.
+- 이야기 주인공을 바꾸지 않습니다. 내가 겪은 일을 다른 사람 일로, 다른 사람 일을 내 일로 옮기지 않습니다.
 - 고른 경험의 재료에 있는 사건·인물·결과·숫자만 씁니다. 새 사건, 대사, 인물, 결말, 숫자를 만들지 않습니다.
 - '정확한 인용'이 아닌 말은 큰따옴표 직접 인용으로 쓰지 않습니다.
 - 질병·사고·사망·경제적 곤란·가족 갈등 등 재료에 없는 소재를 덧붙이지 않습니다.
@@ -186,6 +189,8 @@ def build_story_message(program: str, transcript: str, profile: dict, experience
     for e in experiences:
         quote_kind = {"exact": "정확한 인용", "gist": "취지만"}.get(e.get("quote_kind"), "없음")
         lines.append(f"#{e['id']} {e.get('label') or ''}".rstrip())
+        if e.get("about") and e["about"] != "나":
+            lines.append(f"  - 이야기 주인공: {e['about']} (화자는 나 · 첫머리 '{e.get('intro') or ''}')")
         for key, label in [("when_text", "언제"), ("people", "등장"), ("story", "있었던 일"), ("highlight", "포인트"),
                            ("ending", "결말"), ("fixed_facts", "바꾸면 안 되는 사실")]:
             if e.get(key):

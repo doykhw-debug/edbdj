@@ -223,6 +223,46 @@ CREATE TABLE IF NOT EXISTS mock_posts (
     song       TEXT,
     created_at TEXT NOT NULL
 );
+
+-- 인물 관계도: 나(화자)와 주변 인물. 이 PC 에만 저장된다 (실명은 사연·AI 요청에 쓰지 않고 '호칭'만 쓴다).
+CREATE TABLE IF NOT EXISTS people (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,              -- 관계도에 보이는 이름
+    alias      TEXT,                              -- 사연에 쓰는 호칭 (예: 와이프, 대학 친구, 회사 선배)
+    grp        TEXT,                              -- 묶음 (예: 우리 집 · 대전, 직장)
+    side       TEXT NOT NULL DEFAULT 'family',    -- self / family / work / friend / life
+    relation   TEXT,                              -- 한 줄 소개
+    age        TEXT,
+    details    TEXT NOT NULL DEFAULT '[]',        -- [{"key", "value", "tag"}]
+    events     TEXT NOT NULL DEFAULT '[]',        -- 실제 사건 [{"when", "text", "tag"}] (가상 사건은 넣지 않음)
+    closeness  TEXT NOT NULL DEFAULT '',          -- 가까움 / 보통 / 서먹
+    note       TEXT,
+    sort       INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- 사연 보관함: 가져온 사연 글. kind = fiction(각색·가상) 은 읽기용이며 보내지 않는다.
+CREATE TABLE IF NOT EXISTS story_library (
+    id           INTEGER PRIMARY KEY,
+    code         TEXT UNIQUE,
+    person_id    INTEGER REFERENCES people(id),
+    person_label TEXT,
+    title        TEXT NOT NULL DEFAULT '',
+    intro        TEXT,
+    event_date   TEXT,
+    summary      TEXT,
+    timing       TEXT,
+    song         TEXT,
+    closing      TEXT,
+    body         TEXT NOT NULL DEFAULT '',
+    kind         TEXT NOT NULL DEFAULT 'fiction',  -- fiction / real
+    origin       TEXT,
+    category     TEXT,
+    theme        TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
 """
 
 PROFILE_KEYS = [
@@ -267,6 +307,7 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
 _ADDED_COLUMNS = {
     "experiences": [
         ("gorilla_line", "TEXT"),                       # 공감로그용 한 줄 (사용자가 직접 씀, 200자 이내)
+        ("about_person_id", "INTEGER"),                 # 누구 이야기인가 (화자는 늘 나, 비면 내 이야기)
     ],
     "quiz_schedules": [
         ("story_enabled", "INTEGER NOT NULL DEFAULT 1"),         # 사연·주제 모집도 듣기

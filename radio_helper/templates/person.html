@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}{{ p.name }} · 인물 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>{{ p.name }} <span class="badge">{{ sides.get(p.side, p.side) }}</span> <span class="muted">{{ p.grp }}{{ ' · ' ~ p.age if p.age }}</span></h1>
+<p><a href="{{ url_for('people_page') }}#map">← 관계도</a> · <a href="{{ url_for('people_page') }}#list">인물 목록</a></p>
+
+<form method="post" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>사연에서 부르는 법</h2>
+  <div class="row3">
+    <div><label>호칭 <span class="hint">실명 대신 사연에 씀</span></label>
+      <input type="text" name="alias" value="{{ p.alias or '' }}" maxlength="20" {{ 'readonly' if p.side == 'self' }}></div>
+    <div><label>가까움</label>
+      <select name="closeness">{% for c in ['', '가까움', '보통', '서먹'] %}<option value="{{ c }}" {{ 'selected' if p.closeness == c }}>{{ c or '정하지 않음' }}</option>{% endfor %}</select></div>
+    <div><label>메모</label><input type="text" name="note" value="{{ p.note or '' }}"></div>
+  </div>
+  <p class="muted">사연 첫머리: <b>"{{ intro }}"</b> — 화자는 늘 나입니다.</p>
+  <div class="actions"><button class="secondary">저장</button></div>
+</form>
+
+<div class="panel">
+  <h2>실제 사건 <span class="muted">대화·통화에서 확인한 일 · 경험으로 만들면 '실제로 있었던 일'을 확인한 뒤 사연에 씀</span></h2>
+  {% for ev in events %}
+  <div class="event-row">
+    <span class="muted" style="min-width:72px">{{ ev.when }}</span>
+    <span style="flex:1">{{ ev.text }} {% if ev.tag %}<span class="badge info">{{ ev.tag }}</span>{% endif %}</span>
+    {% if (ev.when, ev.text[:30]) in made %}<span class="badge ok">경험 있음</span>
+    {% elif p.side != 'self' %}<a class="btn secondary" style="padding:2px 10px" href="{{ url_for('experience_edit', about=p.id, when=ev.when, text=ev.text) }}">실제 경험 만들기</a>
+    {% else %}<a class="btn secondary" style="padding:2px 10px" href="{{ url_for('experience_edit', when=ev.when, text=ev.text) }}">실제 경험 만들기</a>{% endif %}
+  </div>
+  {% else %}<p class="muted">없음</p>{% endfor %}
+</div>
+
+<div class="panel">
+  <h2>{{ '내 이야기' if p.side == 'self' else p.alias ~ ' 이야기' }}로 적은 실제 경험</h2>
+  {% for e in exps %}
+    <div><a href="{{ url_for('experience_edit', eid=e.id) }}">#{{ e.id }} {{ e.label or e.story[:40] }}</a>
+      {% if e.user_confirmed %}<span class="badge ok">사실 확인</span>{% else %}<span class="badge warn">확인 전 — 사연에 안 씀</span>{% endif %}</div>
+  {% else %}<p class="muted">없음</p>{% endfor %}
+</div>
+
+<div class="panel table-wrap">
+  <h2>정보 <span class="muted">출처 표시: 주신·수정 = 직접 알려 준 값 / 대화·통화 = 유추 / 임의 = 확인 전 초안</span></h2>
+  <table>
+    {% for d in details %}
+    <tr><th style="width:140px">{{ d.key }}</th><td>{{ d.value }}</td>
+      <td style="width:70px">{% if d.tag %}<span class="badge {{ 'ok' if d.tag in ('주신', '수정') else ('warn' if d.tag == '임의' else 'info') }}">{{ d.tag }}</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% if library %}
+<div class="panel">
+  <h2>사연 보관함 <span class="muted">이 인물에게 붙인 사연 {{ library|length }}편</span></h2>
+  {% for s in library %}
+    <div><a href="{{ url_for('library_item', lid=s.id) }}">{{ s.code }} {{ s.title }}</a> <span class="muted">{{ s.event_date or '' }}</span>
+      {% if s.kind == 'fiction' %}<span class="badge warn">가상 · 보내지 않음</span>{% endif %}</div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

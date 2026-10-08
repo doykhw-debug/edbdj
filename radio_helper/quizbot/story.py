@@ -23,10 +23,23 @@ SIMILAR_TOPIC = 0.7
 
 
 def banned_terms(conn: sqlite3.Connection, exp=None) -> list[str]:
-    terms = checks.split_terms(db.get_profile(conn).get("banned_words"))
+    from .. import people
+
+    terms = checks.split_terms(db.get_profile(conn).get("banned_words")) + people.private_terms(conn)
     if exp is not None:
         terms += checks.split_terms(exp["hide"])
     return terms
+
+
+def about_of(conn: sqlite3.Connection, exp) -> str | None:
+    """경험의 주인공 호칭 (내 이야기면 None). 화자는 늘 나."""
+    pid = exp["about_person_id"] if "about_person_id" in exp.keys() else None
+    if not pid:
+        return None
+    row = conn.execute("SELECT alias, side FROM people WHERE id = ?", (pid,)).fetchone()
+    if row is None or row["side"] == "self":
+        return None
+    return row["alias"] or None
 
 
 def used_experience_ids(conn: sqlite3.Connection) -> set[int]:
@@ -50,8 +63,17 @@ def candidate_experiences(conn: sqlite3.Connection) -> list[dict]:
         for f in EXP_FIELDS:
             v = e[f] or ""
             item[f] = v if f == "quote_kind" else generator.mask_terms(v, terms)
+        about = about_of(conn, e)
+        item["about"] = about or "나"
+        item["intro"] = people_intro(about)
         out.append(item)
     return out
+
+
+def people_intro(about: str | None) -> str:
+    from ..people import intro_for
+
+    return intro_for(about)
 
 
 def masked_profile(conn: sqlite3.Connection) -> dict:

@@ -67,14 +67,21 @@ def _paragraph(text: str | None) -> str:
     return "\n".join(line.strip() for line in (text or "").strip().splitlines() if line.strip())
 
 
-def template_draft(exp, profile: dict, corner=None) -> dict[str, str]:
-    """사용자가 적은 경험 문장을 그대로 쓰는 초안. 반환: title, body, song."""
+def template_draft(exp, profile: dict, corner=None, about: str | None = None,
+                   private: list[str] | None = None) -> dict[str, str]:
+    """사용자가 적은 경험 문장을 그대로 쓰는 초안. 반환: title, body, song.
+
+    화자는 늘 나다. about(이야기 주인공의 호칭, 예: '와이프')이 있으면 "제 와이프 이야기인데요"로 시작한다.
+    private: 사연에 나오면 안 되는 인물 이름 (○○로 가림).
+    """
     tone = profile.get("tone") if profile.get("tone") in GREETINGS else DEFAULT_TONE
-    banned = checks.split_terms(profile.get("banned_words")) + checks.split_terms(exp["hide"])
+    banned = checks.split_terms(profile.get("banned_words")) + checks.split_terms(exp["hide"]) + list(private or [])
 
     paras = [GREETINGS[tone].format(host=PROGRAM_HOST, intro=_intro(profile))]
 
     story = _paragraph(exp["story"])
+    if about and about != "나":
+        story = f"제 {about} 이야기인데요.\n{story}"
     if exp["when_text"]:
         story = f"{exp['when_text'].strip()} 있었던 일이에요.\n{story}"
     paras.append(story)
