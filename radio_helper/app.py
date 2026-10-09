@@ -77,6 +77,11 @@ def create_app(data_dir: str | None = None) -> Flask:
         return {"csrf_token": session.get("csrf", ""), "stopped": db.is_stopped(g.conn),
                 "nav_pending": pending_counts(g.conn), "listening": live.is_active(g.conn)}
 
+    @app.get("/health")
+    def health():
+        """실행할 때 이 번호를 이미 이 도우미가 쓰는지, 서버가 떴는지 확인하는 용도."""
+        return {"app": "radio_helper", "pid": os.getpid()}
+
     def one(sql, *params):
         row = g.conn.execute(sql, params).fetchone()
         if row is None:
