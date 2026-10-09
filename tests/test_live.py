@@ -524,3 +524,41 @@ def test_setup_item_ok_when_listening_already_transcribes(client, conn):
     conn.commit()
     assert "청취 중 받아쓰기 확인됨" in item()
     assert "badge ok\">OK</span>" in client.get("/").get_data(as_text=True).rsplit("받아쓰기 테스트</a>", 1)[0][-160:]
+
+
+# ── 최근 퀴즈와 보낸 답을 눈에 띄게 ─────────────────────────────────
+def add_quiz(conn, key, question, answer, status, at, **extra):
+    cols = dict(dedupe_key=key, account="a", channel="파워FM", program="황제성의 황제파워", broadcast_date=at[:10],
+                question_key=key, question=question, answer=answer, entry_status=status, created_at=at, updated_at=at,
+                source="auto", **extra)
+    conn.execute(f"INSERT INTO quizzes ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", tuple(cols.values()))
+    conn.commit()
+
+
+def test_last_quiz_text(client, conn):
+    now = datetime.now()
+    stamp = lambda m: (now - timedelta(minutes=m)).strftime("%Y-%m-%d %H:%M:%S")  # noqa: E731
+    assert live.last_quiz_text(conn, now) == ""
+    add_quiz(conn, "q1", "옛날 문제", "답1", "posted", stamp(45))                                  # 30분 지남
+    assert live.last_quiz_text(conn, now) == ""
+    add_quiz(conn, "q2", "황제성이 개그콘서트에서 꼭 한번 출연해 보고 싶었던 코너는 무엇인가?", "봉숭아학당", "posted",
+             stamp(2), sent_at=stamp(1), send_text="봉숭아학당")
+    text = live.last_quiz_text(conn, now)
+    assert text.startswith(f"퀴즈 {stamp(1)[11:16]} · 황제성이 개그콘서트에서")
+    assert text.endswith("→ 보낸 답 '봉숭아학당' · 채팅에 올라감 확인")
+    add_quiz(conn, "q3", "다음 문제", "정답", "pending", stamp(0))
+    assert live.last_quiz_text(conn, now).endswith("→ 답 '정답' 확인 대기 (퀴즈 기록에서 보내기)")
+    add_quiz(conn, "q4", "웃긴 문제", "정답", "entered", stamp(0), answer_kind="witty", witty_answer="엉뚱한 답")
+    assert "기발한 오답 '엉뚱한 답' · 채팅 입력함·올라감 미확인" in live.last_quiz_text(conn, now)
+    add_quiz(conn, "q5", "정답 발표", "x", "posted", stamp(0), kind="answer_reveal")               # 정답 발표는 제외
+    assert "웃긴 문제" in live.last_quiz_text(conn, now)
+    assert "웃긴 문제" in client.get("/live.json").get_json()["quiz_text"]
+    assert 'id="last-quiz"' in client.get("/").get_data(as_text=True) and "엉뚱한 답" in client.get("/").get_data(as_text=True)
+
+
+def test_entry_label_says_chat_or_sms():
+    from radio_helper import quiz
+
+    assert quiz.entry_label("posted", "gorilla") == "채팅에 올라감 확인"
+    assert quiz.entry_label("entered", None) == "채팅 입력함·올라감 미확인"
+    assert quiz.entry_label("entered", "sms") == "문자 보냄" and quiz.entry_label("failed", "sms") == "실패"

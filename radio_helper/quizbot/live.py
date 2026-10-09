@@ -151,6 +151,33 @@ def _json_setting(conn: sqlite3.Connection, key: str):
         return None
 
 
+QUIZ_SHOW_MINUTES = 30   # 첫 화면·자막 창에 '최근 퀴즈와 보낸 답'을 보여 주는 시간
+
+
+def last_quiz_text(conn: sqlite3.Connection, now: datetime | None = None) -> str:
+    """최근 퀴즈 한 줄: 문제 → 보낸 답(또는 확인 대기)과 상태. 30분이 지나면 빈 글."""
+    from .. import quiz
+
+    since = ((now or datetime.now()) - timedelta(minutes=QUIZ_SHOW_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
+    q = conn.execute("SELECT * FROM quizzes WHERE kind != 'answer_reveal' AND COALESCE(sent_at, updated_at) >= ? "
+                     "ORDER BY COALESCE(sent_at, updated_at) DESC, id DESC LIMIT 1", (since,)).fetchone()
+    if q is None:
+        return ""
+    keys = q.keys()
+    witty = "answer_kind" in keys and q["answer_kind"] == "witty" and q["witty_answer"]
+    answer = (q["send_text"] if "send_text" in keys and q["send_text"] else None) or \
+        (q["witty_answer"] if witty else q["answer"]) or "?"
+    at = ((q["sent_at"] if "sent_at" in keys and q["sent_at"] else None) or q["updated_at"] or "")[11:16]
+    question = " ".join((q["question"] or "").split())
+    question = question if len(question) <= 40 else question[:39] + "…"
+    if q["entry_status"] == "pending":
+        tail = f"답 '{answer}' 확인 대기 (퀴즈 기록에서 보내기)"
+    else:
+        via = q["sent_via"] if "sent_via" in keys else None
+        tail = f"{'기발한 오답' if witty else '보낸 답'} '{answer}' · {quiz.entry_label(q['entry_status'], via)}"
+    return f"퀴즈 {at} · {question} → {tail}"
+
+
 def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int = 20) -> dict:
     """관리 화면과 자막 창이 함께 쓰는 지금 상태."""
     now = now or datetime.now()
@@ -195,6 +222,7 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
         "pending": {"quizzes": pending_quiz, "stories": pending_story},
         "last_chunk": _json_setting(conn, "quizbot.last_chunk") if active else None,
         "stt_test": stt_test,
+        "quiz_text": last_quiz_text(conn, now),
     }
 
 

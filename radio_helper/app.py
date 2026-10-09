@@ -48,6 +48,7 @@ def create_app(data_dir: str | None = None) -> Flask:
     app.jinja_env.globals.update(
         YES_NO=YES_NO, RECRUITING=RECRUITING, AI_POLICY=AI_POLICY, DRAFT_STATUS=DRAFT_STATUS,
         SOURCE=SOURCE, POST_STATUS=STATUS_LABELS, QUIZ_KIND=quiz.KIND_LABELS, QUIZ_ENTRY=quiz.ENTRY_LABELS,
+        entry_label=quiz.entry_label,
         STORY_SOURCE=STORY_SOURCE,
         VIA={"sms": "문자", **{k: v["label"] for k, v in qconfig.CHAT_APPS.items()}},
     )
@@ -1054,7 +1055,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                          "where": " · ".join(x for x in (sp["channel"], sp["program"]) if x),
                          "how": qconfig.app_label(sp["sent_via"]) if sp["sent_via"] in qconfig.CHAT_APPS
                          else ("문자" if sp["sent_via"] == "sms" else "앱 채팅"),
-                         "status": quiz.ENTRY_LABELS.get(sp["status"], sp["status"]), "ok": sp["status"] == "posted",
+                         "status": quiz.entry_label(sp["status"], sp["sent_via"]), "ok": sp["status"] == "posted",
                          "topic": sp["topic"], "text": sp["message"], "exp_id": sp["experience_id"],
                          "exp_label": sp["exp_label"]})
         for sub in g.conn.execute(

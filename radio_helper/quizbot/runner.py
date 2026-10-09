@@ -751,7 +751,7 @@ class Runner:
                           "updated_at = ? WHERE id = ?", (status, detail, db.now(), item_id))
         self.conn.commit()
         via = f"문자({number})" if route == "sms" else config.app_label(app)
-        db.log(self.conn, "quizbot", f"{label} {via} 전송 '{text[:60]}' → {quiz.ENTRY_LABELS.get(status, status)} ({detail})")
+        db.log(self.conn, "quizbot", f"{label} {via} 전송 '{text[:60]}' → {quiz.entry_label(status, route)} ({detail})")
         return status
 
 

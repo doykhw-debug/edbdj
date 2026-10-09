@@ -126,3 +126,5 @@ button.big { font-size: 20px; padding: 14px 28px; border-radius: 12px; }
 .board-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
 .board-counts a { text-decoration: none; color: inherit; }
 .board-counts .badge.on { outline: 2px solid var(--accent); }
+.last-quiz { margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: #fef9c3; font-weight: 600; }
+.last-quiz a { color: #854d0e; text-decoration: none; }

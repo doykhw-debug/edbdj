@@ -66,7 +66,7 @@ def judge_result(mode: str, input_after: str | None, text: str, seen_in_chat: bo
     if seen_in_chat:
         return SendResult("posted", "채팅 목록에서 보낸 문구를 확인함")
     if mode == "coords":
-        return SendResult("entered", "위치 클릭 방식이라 게시 여부는 확인하지 못함")
+        return SendResult("entered", "위치 클릭 방식이라 채팅에 올라갔는지는 확인하지 못함")
     if input_after is not None and text not in input_after:
         return SendResult("entered", "입력칸이 비워져 전송된 것으로 보임 (채팅 목록에서는 확인 못 함)")
     return SendResult("unknown", "전송 후에도 입력칸에 글자가 남아 있거나 확인할 수 없음")

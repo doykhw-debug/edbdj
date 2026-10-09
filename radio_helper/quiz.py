@@ -13,14 +13,23 @@ import sqlite3
 from . import db
 
 KIND_LABELS = {"new": "새 문제", "rerun": "재방송", "answer_reveal": "정답 발표"}
+# 퀴즈 답·공감로그 사연은 앱 채팅(고릴라·mini·콩)이나 문자로만 보낸다. 게시판 등록은 제출 이력(gates.STATUS_LABELS)이 따로 맡는다.
 ENTRY_LABELS = {
     "pending": "대기",
-    "entered": "입력함·게시 미확인",
-    "posted": "게시 확인",
+    "entered": "채팅 입력함·올라감 미확인",
+    "posted": "채팅에 올라감 확인",
     "unknown": "결과 불명",
     "failed": "실패",
     "skipped": "보내지 않음",
 }
+SMS_ENTRY_LABELS = {"entered": "문자 보냄", "posted": "문자 보냄 확인"}
+
+
+def entry_label(status: str, via: str | None = None) -> str:
+    """보낸 방법에 맞는 상태 이름 (문자면 '문자 보냄', 앱 채팅이면 '채팅에 올라감 확인' 등)."""
+    if via == "sms" and status in SMS_ENTRY_LABELS:
+        return SMS_ENTRY_LABELS[status]
+    return ENTRY_LABELS.get(status, status)
 
 
 def normalize_question(text: str) -> str:

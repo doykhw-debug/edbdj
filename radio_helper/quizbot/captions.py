@@ -34,7 +34,7 @@ def run_window() -> None:
     root.title("라디오 자막 · 라디오 참여 도우미")
     root.attributes("-topmost", True)
     root.configure(bg="#111827")
-    w, h = 540, 210
+    w, h = 540, 240
     root.geometry(f"{w}x{h}+{root.winfo_screenwidth() - w - 24}+{root.winfo_screenheight() - h - 72}")
 
     header = tk.Frame(root, bg="#111827")
@@ -49,6 +49,9 @@ def run_window() -> None:
 
     chunk_line = tk.Label(root, text="", anchor="w", fg="#9ca3af", bg="#111827", font=("Malgun Gothic", 9))
     chunk_line.pack(fill="x", padx=10)
+    quiz_line = tk.Label(root, text="", anchor="w", justify="left", wraplength=w - 30, fg="#facc15", bg="#111827",
+                         font=("Malgun Gothic", 10, "bold"))
+    quiz_line.pack(fill="x", padx=10)
     body = tk.Frame(root, bg="#111827")
     body.pack(fill="both", expand=True, padx=10, pady=(2, 8))
     labels = [tk.Label(body, text="", anchor="w", justify="left", wraplength=w - 30, bg="#111827",
@@ -80,6 +83,7 @@ def run_window() -> None:
         chunk_line.configure(text=live.chunk_text(vm["last_chunk"])
                              or ("실행기 신호 없음 — 관리 화면 첫 화면을 확인하세요" if vm["status"] == "stalled" else vm["state"]))
         meter.coords(bar, 0, 0, int(120 * vm["level"] / 100), 10)
+        quiz_line.configure(text=vm.get("quiz_text") or "")
         lines = caption_lines(vm) or [("아직 받아쓴 말이 없습니다. 진행자가 말하면 여기에 나옵니다.", "#9ca3af")]
         for lb, (text, fg) in zip(labels, lines + [("", "#ffffff")] * (4 - len(lines))):
             lb.configure(text=text, fg=fg)

@@ -38,7 +38,7 @@
     <tr><td>{{ q.id }}</td><td>{{ q.channel }}<br>{{ q.program }}<br><span class="muted">{{ q.sent_at or q.updated_at }}</span></td>
       <td>{{ q.question }}<br><span class="muted">정답 {{ q.answer or '?' }}{% if q.answer_kind == 'witty' %} · <span class="badge warn">기발한 오답</span> {{ q.witty_point or '' }}{% endif %} · {{ q.decision or '' }}</span></td>
       <td>{{ q.send_text or '' }}{% if q.sent_via %}<br><span class="badge info">{{ VIA.get(q.sent_via, q.sent_via) }}</span>{% endif %}</td>
-      <td><span class="badge {{ 'ok' if q.entry_status == 'posted' else ('warn' if q.entry_status in ('entered', 'unknown') else '') }}">{{ QUIZ_ENTRY.get(q.entry_status, q.entry_status) }}</span>
+      <td><span class="badge {{ 'ok' if q.entry_status == 'posted' else ('warn' if q.entry_status in ('entered', 'unknown') else '') }}">{{ entry_label(q.entry_status, q.sent_via) }}</span>
         <br><span class="muted">{{ q.note or '' }}</span></td>
       <td>
         <form method="post" action="{{ url_for('quiz_result', qid=q.id) }}">

@@ -62,7 +62,7 @@
       <td>{{ p.program }}<br><span class="muted">{{ p.topic }}</span></td>
       <td>{{ p.message or '' }}<br><span class="muted">{{ STORY_SOURCE.get(p.source, p.source) }} · {{ p.decision or '' }}</span>{% if p.sent_via %} <span class="badge info">{{ VIA.get(p.sent_via, p.sent_via) }}</span>{% endif %}</td>
       <td>{% if p.experience_id %}<a href="{{ url_for('experience_edit', eid=p.experience_id) }}">#{{ p.experience_id }} {{ p.exp_label or '' }}</a>{% endif %}</td>
-      <td><span class="badge {{ 'ok' if p.status == 'posted' else ('warn' if p.status in ('entered', 'unknown') else '') }}">{{ QUIZ_ENTRY.get(p.status, p.status) }}</span>
+      <td><span class="badge {{ 'ok' if p.status == 'posted' else ('warn' if p.status in ('entered', 'unknown') else '') }}">{{ entry_label(p.status, p.sent_via) }}</span>
         <br><span class="muted">{{ p.sent_at or p.updated_at }}</span></td></tr>
     {% else %}<tr><td colspan="5" class="muted">없음</td></tr>{% endfor %}
   </table>
