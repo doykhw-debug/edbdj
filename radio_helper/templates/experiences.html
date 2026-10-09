@@ -5,6 +5,19 @@
 <p class="muted">제목과 완성된 글은 쓰지 않아도 됩니다. 실제 있었던 일을 편하게 적으면 됩니다. 처음에는 서로 다른 경험 3건이면 충분합니다.</p>
 <div class="actions" style="margin-bottom:12px"><a class="btn" href="{{ url_for('experience_edit') }}">+ 경험 추가</a>
   <a class="btn secondary" href="{{ url_for('import_page') }}">가져오기 (파일)</a></div>
+{% if enrich_left or enrich_status.running %}
+<form method="post" action="{{ url_for('experiences_enrich') }}" class="panel actions" style="margin-top:0">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% if enrich_status.running %}
+  <span><b>사연처럼 풀어 쓰는 중</b> {{ (enrich_status.done or 0) + (enrich_status.kept or 0) }}/{{ enrich_status.total }} —
+    끝난 사건부터 바로 사연에 씁니다. 잠시 뒤 새로 고치세요.</span>
+  {% else %}
+  <button>관계도 사건 {{ enrich_left }}건 사연처럼 풀어 쓰기</button>
+  <span class="muted">사실(사건 한 줄)은 그대로 두고 나의 마음·배경·마무리로 살을 붙입니다 (Claude API).</span>
+  {% endif %}
+  {% if enrich_status.error %}<span class="badge bad">{{ enrich_status.error }}</span>{% endif %}
+</form>
+{% endif %}
 {% if pending_events %}
 <div class="flash warn">인물 관계도 실제 사건에서 옮긴 경험 <b>{{ pending_events }}건</b>이 확인 전입니다.
   {% if only != 'events' %}<a href="{{ url_for('experiences', only='events') }}">확인 전 사건만 보기</a> · {% endif %}

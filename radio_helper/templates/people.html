@@ -12,8 +12,8 @@
 <form method="post" action="{{ url_for('people_events_to_experiences') }}" class="panel actions" style="margin-top:0">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <button>실제 사건 {{ events_left }}건 → 경험으로 모두 옮기기</button>
-  <span class="muted">인물 관계도 연표의 실제 사건(대화·통화로 확인)을 '확인 전' 경험으로 만듭니다. 가상(사연)·임의 사건은 옮기지 않습니다.
-    옮긴 뒤 사건마다 체크해 확인한 것만 사연에 씁니다.</span>
+  <span class="muted">인물 관계도 연표의 실제 사건(대화·통화로 확인)을 바로 쓸 수 있는 실제 경험으로 만들고, 사연처럼 풀어 씁니다.
+    가상(사연)·임의 사건은 옮기지 않습니다.</span>
 </form>
 {% endif %}
 

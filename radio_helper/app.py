@@ -415,9 +415,12 @@ def create_app(data_dir: str | None = None) -> Flask:
                FROM experiences e LEFT JOIN people p ON p.id = e.about_person_id"""
             + (" WHERE e.from_event IS NOT NULL AND e.user_confirmed = 0" if only == "events" else "")
             + " ORDER BY e.id DESC").fetchall()
+        from .quizbot import enrich
+
         pending_events = g.conn.execute(
             "SELECT COUNT(*) FROM experiences WHERE from_event IS NOT NULL AND user_confirmed = 0").fetchone()[0]
-        return render_template("experiences.html", rows=rows, only=only, pending_events=pending_events)
+        return render_template("experiences.html", rows=rows, only=only, pending_events=pending_events,
+                               enrich_left=len(enrich.pending(g.conn)), enrich_status=enrich.load_status(g.conn))
 
     @app.post("/experiences/confirm")
     def experiences_confirm():
@@ -1121,13 +1124,18 @@ def create_app(data_dir: str | None = None) -> Flask:
         if pid:
             one("SELECT id FROM people WHERE id = ?", pid)
         added, skipped = people_mod.events_to_experiences(g.conn, pid)
-        if added:
-            db.log(g.conn, "record", f"관계도 실제 사건 {added}건 → 확인 전 경험")
-            flash(f"실제 사건 {added}건을 '확인 전' 경험으로 옮겼습니다" + (f" (이미 있던 {skipped}건은 건너뜀)" if skipped else "")
-                  + ". 사건마다 내용을 보고 맞는 것만 체크해 확인하세요. 확인한 것만 사연에 씁니다.")
-        else:
-            flash("새로 옮길 실제 사건이 없습니다" + (f" (이미 옮긴 {skipped}건)" if skipped else "") + ".", "warn")
-        return redirect(url_for("experiences", only="events"))
+        earlier = people_mod.confirm_moved_events(g.conn)   # 예전에 '확인 전'으로 옮긴 사건도 확인
+        if added or earlier:
+            db.log(g.conn, "record", f"관계도 실제 사건 {added + earlier}건 → 실제 경험 (확인됨)")
+        msg = (f"실제 사건 {added}건을 실제 경험으로 옮겼습니다" if added else "새로 옮길 실제 사건이 없습니다") \
+            + (f" (이미 있던 {skipped}건은 건너뜀)" if skipped else "") + "."
+        flash(msg + " " + start_enrich(g.conn), "message" if added or earlier else "warn")
+        return redirect(url_for("experiences"))
+
+    @app.post("/experiences/enrich")
+    def experiences_enrich():
+        flash(start_enrich(g.conn) or "풀어 쓸 사건이 없습니다.")
+        return redirect(url_for("experiences"))
 
     @app.route("/people/<int:pid>", methods=["GET", "POST"])
     def person_page(pid):
@@ -1393,6 +1401,31 @@ def launch_autofill(args: list[str]) -> str:
 
 def launch_programs_refresh() -> str:
     return launch_module("radio_helper.programs", ["refresh"], "programs")
+
+
+def start_enrich(conn) -> str:
+    """관계도 사건 풀어 쓰기를 뒤에서 시작하고 안내 글을 돌려준다 (풀어 쓸 것이 없으면 빈 글)."""
+    from .quizbot import enrich
+    from .quizbot.answerer import get_api_key
+
+    left = len(enrich.pending(conn))
+    if not left:
+        return ""
+    if not get_api_key():
+        return f"사연처럼 풀어 쓰기({left}건)는 Claude API 키를 설정 화면에 저장하면 시작할 수 있습니다. 그전에도 한 줄 그대로 사연 재료로 씁니다."
+    status = enrich.load_status(conn)
+    if status.get("running") and not _stale(status.get("at")):
+        return f"사연처럼 풀어 쓰는 중입니다 ({status.get('done', 0) + status.get('kept', 0)}/{status.get('total', left)})."
+    enrich.save_status(conn, running=True, done=0, kept=0, total=left)
+    launch_quizbot(["enrich"])
+    return f"{left}건을 사연처럼 풀어 쓰기 시작했습니다 (Claude API, 몇 분). 끝난 사건부터 바로 사연에 씁니다."
+
+
+def _stale(at: str | None, minutes: int = 30) -> bool:
+    try:
+        return (datetime.now() - datetime.strptime(at or "", "%Y-%m-%d %H:%M:%S")).total_seconds() > minutes * 60
+    except ValueError:
+        return True
 
 
 def launch_quizbot(args: list[str]) -> str:

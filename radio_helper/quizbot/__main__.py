@@ -305,6 +305,26 @@ def cmd_stt_test(conn) -> int:
     return 0 if result["ok"] else 1
 
 
+def cmd_enrich(conn) -> int:
+    """관계도 실제 사건을 사연처럼 풀어 쓴다 (Claude API)."""
+    from . import enrich
+    from .answerer import ClaudeAnswerer, get_api_key
+
+    lock = config.instance_lock("enrich")
+    if lock is None:
+        say("이미 풀어 쓰는 중입니다.")
+        return 0
+    if not get_api_key():
+        enrich.save_status(conn, running=False, done=0, kept=0, total=len(enrich.pending(conn)),
+                           error="Claude API 키가 없습니다. 설정 화면에서 저장하세요.")
+        say("[중단] Claude API 키가 없습니다.")
+        return 2
+    answerer = ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort"))
+    done, kept = enrich.run(conn, answerer.enrich_events, say)
+    say(f"끝: {done}건 풀어 씀, {kept}건은 원래 한 줄 유지")
+    return 0
+
+
 def cmd_gpu_check() -> int:
     """그래픽카드로 받아쓰기가 되는지 시험한다. 실행기와 다른 프로세스에서 돌려, 라이브러리 문제로 꺼져도 영향이 없게 한다."""
     import numpy as np
@@ -330,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
     ap.add_argument("command", choices=["run", "captions", "check", "stt-test", "auto-setup", "inspect-gorilla",
                                         "select", "calibrate", "send-test", "chat-test", "sms-check", "sms-test",
-                                        "gpu-check"])
+                                        "gpu-check", "enrich"])
     ap.add_argument("target", nargs="?", choices=["window", "input", "send", "chat"])
     ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
@@ -358,6 +378,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_stt_test(conn)
         if args.command == "sms-check":
             return cmd_sms_check(conn)
+        if args.command == "enrich":
+            return cmd_enrich(conn)
         if db.is_stopped(conn):
             say("[중단] 일괄 중지가 켜져 있습니다.")
             return 2

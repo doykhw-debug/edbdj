@@ -4,8 +4,9 @@
 {% set e = e or {} %}
 <h1>{{ '경험 #' ~ eid if eid else '새 경험' }}</h1>
 {% if e.from_event %}
-<div class="flash">인물 관계도의 실제 사건에서 옮긴 경험입니다. 기억나는 장면·말·결말을 덧붙이면 사연이 더 살아납니다.
-  실제와 같으면 '실제로 있었던 일'을 체크하고 저장하세요.</div>
+<div class="flash">인물 관계도의 실제 사건에서 옮긴 경험입니다.
+  {% if e.enriched_at and not e.enrich_note %}사건 한 줄을 사연처럼 풀어 썼습니다 (원래 사건은 '바꾸면 안 되는 사실'에 있음).
+  {% elif e.enrich_note %}{{ e.enrich_note }}.{% else %}곧 사연처럼 풀어 씁니다.{% endif %}</div>
 {% endif %}
 {% if e.from_library_id %}
 <div class="flash warn">사연 보관함의 <a href="{{ url_for('library_item', lid=e.from_library_id) }}">각색 사연</a>에서 옮긴 경험입니다.

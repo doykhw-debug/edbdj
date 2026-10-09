@@ -254,23 +254,31 @@ def test_move_library_story_to_unconfirmed_experience(client, conn):
     assert "경험·확인함" in client.get("/library").get_data(as_text=True)
 
 
-def test_move_all_real_events_then_confirm_one_by_one(client, conn):
+def test_move_all_real_events_confirmed_and_enrich_starts(client, conn, monkeypatch):
+    import radio_helper.app as app_module
+    from radio_helper.quizbot import answerer
+
     load(conn)
+    launched = []
+    monkeypatch.setattr(app_module, "launch_quizbot", lambda args: launched.append(args) or "q.log")
+    monkeypatch.setattr(answerer, "get_api_key", lambda: "sk-test")
     token = csrf(client, "/people")
     assert "실제 사건 5건 → 경험으로 모두 옮기기" in client.get("/people").get_data(as_text=True)
     assert people.events_left(conn, person(conn, "와이프")["id"]) == 2
 
     r = client.post("/people/events-to-experiences", data={"csrf_token": token})
-    assert r.headers["Location"].endswith("/experiences?only=events")
+    assert r.headers["Location"].endswith("/experiences") and launched == [["enrich"]]
     rows = conn.execute("SELECT * FROM experiences WHERE from_event IS NOT NULL ORDER BY id").fetchall()
-    # 실제 사건만 (〔사연〕 가상 사건·〔임의〕 사건 빼고): 나 1, 와이프 2, 홍길동 과장님 2
+    # 실제 사건만 (〔사연〕 가상 사건·〔임의〕 사건 빼고): 나 1, 와이프 2, 홍길동 과장님 2 — 바로 '실제로 있었던 일'
     assert [(e["when_text"], e["story"]) for e in rows] == [
         ("2024.05", "새 아파트 입주"), ("2023.06", "첫째 임신 소식"),
         ("2025.10", "숙소 오버부킹에 항의해 더 좋은 호텔로 옮김"), ("2025.01", "과장 승진"), ("2025.08", "회식에서 노래")]
-    assert all(e["user_confirmed"] == 0 for e in rows)
+    assert all(e["user_confirmed"] == 1 for e in rows)
     assert rows[0]["about_person_id"] is None and rows[0]["people"] == "나"
     assert rows[1]["about_person_id"] == person(conn, "와이프")["id"] and rows[1]["people"] == "와이프"
-    assert story.candidate_experiences(conn) == []                         # 확인 전에는 쓰지 않음
+    assert len(story.candidate_experiences(conn, "SBS")) == 5                 # 검수 없이 바로 사연 재료
+    page = client.get("/experiences").get_data(as_text=True)
+    assert "5건을 사연처럼 풀어 쓰기 시작했습니다" in page and "사연처럼 풀어 쓰는 중" in page
 
     # 다시 눌러도 중복으로 만들지 않고, 인물 화면에 '경험 있음'이 뜬다
     client.post("/people/events-to-experiences", data={"csrf_token": token})
@@ -279,18 +287,19 @@ def test_move_all_real_events_then_confirm_one_by_one(client, conn):
     me = client.get(f"/people/{person(conn, '예시아빠')['id']}").get_data(as_text=True)
     assert "경험 있음" in me and "새 아파트 입주" in me.split("로 적은 실제 경험")[1]   # 내 화면에 내 경험이 보임
 
-    page = client.get("/experiences?only=events").get_data(as_text=True)
-    assert "확인 전입니다" in page and page.count('name="eid"') == 5 and "와이프 이야기" in page
-    # 체크한 것만 확인한다. 보관함에서 옮긴 경험은 여기서 확인되지 않는다 (열어서 고치고 확인)
-    lib = conn.execute("SELECT id FROM story_library WHERE code = 'R003'").fetchone()[0]
-    client.post(f"/library/{lib}/to-experience", data={"csrf_token": token})
-    from_lib = conn.execute("SELECT id FROM experiences WHERE from_library_id = ?", (lib,)).fetchone()[0]
-    client.post("/experiences/confirm", data={"csrf_token": token, "eid": [str(rows[2]["id"]), str(rows[3]["id"]),
-                                                                             str(from_lib)]})
-    confirmed = [e["id"] for e in conn.execute("SELECT id FROM experiences WHERE user_confirmed = 1 ORDER BY id")]
-    assert confirmed == [rows[2]["id"], rows[3]["id"]]
-    assert [e["id"] for e in story.candidate_experiences(conn, "SBS")] == confirmed
-    assert "확인했습니다" in client.get("/experiences").get_data(as_text=True)
+
+def test_earlier_unconfirmed_events_get_confirmed(client, conn, monkeypatch):
+    from radio_helper.quizbot import answerer
+
+    load(conn)
+    monkeypatch.setattr(answerer, "get_api_key", lambda: None)
+    people.events_to_experiences(conn)
+    conn.execute("UPDATE experiences SET user_confirmed = 0")          # 0.12 에서 '확인 전'으로 옮긴 것
+    conn.commit()
+    token = csrf(client, "/people")
+    client.post("/people/events-to-experiences", data={"csrf_token": token})
+    assert conn.execute("SELECT COUNT(*) FROM experiences WHERE user_confirmed = 1").fetchone()[0] == 5
+    assert "Claude API 키를 설정 화면에 저장하면" in client.get("/experiences").get_data(as_text=True)
 
 
 def test_move_one_persons_events(client, conn):

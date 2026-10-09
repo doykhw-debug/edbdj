@@ -5,7 +5,8 @@
 - 인물 관계도 파일(character-map.md)에서 인물 카드·실제 사건(연표)을 가져온다.
   〔사연〕 태그의 가상 사건은 인물 카드에 넣지 않는다.
 - 사연 로그(.jsonl)는 '사연 보관함'에 넣는다. 원본 사연을 각색한 가상 사연(fiction)은 그대로는 보내지 않는다.
-- 인물의 실제 사건은 '확인 전' 경험으로 한 번에 옮길 수 있고, 사용자가 사건마다 확인해야 사연에 쓴다.
+- 인물의 실제 사건(대화·통화로 확인한 연표)은 '실제로 있었던 일'로 확인된 경험으로 한 번에 옮긴다.
+  옮긴 사건은 quizbot/enrich.py 가 사실은 그대로 두고 사연처럼 풀어 쓴다.
 """
 
 from __future__ import annotations
@@ -216,9 +217,10 @@ def event_key(person_id: int, ev: dict) -> str:
 
 def events_to_experiences(conn: sqlite3.Connection, person_id: int | None = None,
                           dry_run: bool = False) -> tuple[int, int]:
-    """인물 관계도의 실제 사건(대화·통화 등으로 확인한 연표)을 '확인 전' 경험으로 한 번에 옮긴다.
+    """인물 관계도의 실제 사건(대화·통화 등으로 확인한 연표)을 '실제로 있었던 일'로 확인된 경험으로 한 번에 옮긴다.
 
-    이미 옮겼거나 같은 시기·내용으로 만든 경험이 있으면 건너뛴다. 사용자가 사건마다 확인해야 사연에 쓴다.
+    관계도 연표는 사용자가 대화·통화로 확인한 실제 사건이라 사건마다 따로 검수하지 않는다(사용자 요청).
+    가상(〔사연〕)·임의 사건은 옮기지 않고, 이미 옮겼거나 같은 시기·내용으로 만든 경험이 있으면 건너뛴다.
     (새로 만든 수, 건너뛴 수). dry_run 이면 세기만 한다."""
     people = conn.execute("SELECT * FROM people" + (" WHERE id = ?" if person_id else "") + " ORDER BY sort, id",
                           (person_id,) if person_id else ()).fetchall()
@@ -240,7 +242,7 @@ def events_to_experiences(conn: sqlite3.Connection, person_id: int | None = None
             if not dry_run:
                 conn.execute(
                     """INSERT INTO experiences (label, when_text, people, story, quote_kind, about_person_id, from_event,
-                           user_confirmed, created_at, updated_at) VALUES (?, ?, ?, ?, 'none', ?, ?, 0, ?, ?)""",
+                           user_confirmed, created_at, updated_at) VALUES (?, ?, ?, ?, 'none', ?, ?, 1, ?, ?)""",
                     (text[:60], ev.get("when") or "", "나" if about is None else (p["alias"] or ""), text, about, key,
                      db.now(), db.now()))
             moved.add(key)
@@ -248,6 +250,14 @@ def events_to_experiences(conn: sqlite3.Connection, person_id: int | None = None
     if not dry_run:
         conn.commit()
     return added, skipped
+
+
+def confirm_moved_events(conn: sqlite3.Connection) -> int:
+    """예전에 '확인 전'으로 옮긴 관계도 사건도 확인된 경험으로 바꾼다."""
+    n = conn.execute("UPDATE experiences SET user_confirmed = 1, updated_at = ? "
+                     "WHERE from_event IS NOT NULL AND user_confirmed = 0", (db.now(),)).rowcount
+    conn.commit()
+    return n
 
 
 def events_left(conn: sqlite3.Connection, person_id: int | None = None) -> int:

@@ -179,6 +179,76 @@ STORY_SYSTEM = f"""당신은 라디오(SBS·MBC·KBS 등) 녹취를 듣고, 청�
 - 다른 청취자의 사연·글을 베끼지 않고, 화면의 닉네임·개인정보를 쓰지 않습니다."""
 
 
+ENRICH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "story": {"type": "string", "description": "사연처럼 풀어 쓴 '있었던 일' (첫머리 호칭 문구 없이)"},
+                    "highlight": {"type": "string", "description": "이 이야기의 포인트 한 줄"},
+                    "ending": {"type": "string", "description": "마무리 한두 문장 (나의 마음·응원)"},
+                    "added_facts": {"type": "array", "items": {"type": "string"},
+                                    "description": "재료에 없는 사실을 넣었다면 적는다. 원칙상 비어 있어야 한다"},
+                },
+                "required": ["id", "story", "highlight", "ending", "added_facts"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["items"],
+    "additionalProperties": False,
+}
+
+ENRICH_SYSTEM = """당신은 청취자 본인('나')의 실제 사건 기록(한 줄)을 라디오 사연 재료로 풀어 쓰는 도우미입니다.
+사건은 모두 실제로 있었던 일이며, 사연처럼 읽히도록 살을 붙이되 사실은 바꾸거나 지어내지 않습니다.
+
+살을 붙일 때 쓸 수 있는 것:
+- 주어진 사건 한 줄(바꾸면 안 되는 사실)과 시기
+- 그 인물에 대해 확인된 정보(관계·나이·직업·성격·취미 등 재료에 적힌 것)
+- 그 일을 겪거나 전해 들은 나의 마음(반가움, 뿌듯함, 웃음, 짠함, 응원하는 마음 등)과 그 사람에게 건네고 싶은 말
+- 재료 안에서 자연스럽게 이어지는 배경 설명(예: 재료에 '회사원'이면 바쁜 회사 생활 속에서)
+
+쓰지 않는 것:
+- 재료에 없는 새 사건·장면·장소·날짜·숫자·인물·결말, 큰따옴표 직접 인용(대사)
+- 질병·사고·사망·돈 문제·가족 갈등처럼 재료에 없는 민감 소재
+- 실명·회사명·학교명·연락처·주소. 사람은 정해 준 호칭으로만 부르고, ○○로 가려진 부분은 그대로 둡니다.
+
+형식:
+- 화자는 언제나 나입니다. 주인공이 다른 사람이면 내가 그 사람 이야기를 전하는 형식이지만,
+  "제 와이프 이야기인데요" 같은 첫머리 문구는 쓰지 않습니다(보낼 때 따로 붙입니다).
+- story: 공백 포함 250~450자, 존댓말 사연체(~했어요/~더라고요), 시간 순서로 자연스럽게.
+- highlight: 이 이야기에서 듣는 사람이 웃거나 공감할 포인트 한 줄.
+- ending: 나의 마음이나 응원으로 마무리하는 한두 문장 (새 사실 없이).
+- 재료에 없는 사실을 넣었다면 added_facts 에 빠짐없이 적습니다. 정해 준 문체를 따릅니다.
+- 받은 사건마다 같은 id 로 하나씩 돌려줍니다."""
+
+
+def build_enrich_message(profile: dict, items: list[dict]) -> str:
+    lines = ["[보내는 사람]", f"- 문체: {profile.get('tone') or '담백하고 따뜻함'}", "", "[실제 사건]"]
+    for it in items:
+        lines.append(f"#{it['id']} 주인공: {it.get('about') or '나'}" + (f" (나와의 관계: {it['relation']})"
+                                                                     if it.get("relation") else ""))
+        lines.append(f"  - 시기: {it.get('when') or '모름'}")
+        lines.append(f"  - 사건(바꾸면 안 되는 사실): {it['event']}")
+        for fact in it.get("facts") or []:
+            lines.append(f"  - 확인된 정보: {fact}")
+    return "\n".join(lines)
+
+
+def parse_enriched(text: str) -> list[dict]:
+    data = json.loads(text)
+    out = []
+    for it in data.get("items") or []:
+        out.append({"id": int(it.get("id") or 0), "story": (it.get("story") or "").strip(),
+                    "highlight": (it.get("highlight") or "").strip(), "ending": (it.get("ending") or "").strip(),
+                    "added_facts": [f for f in (it.get("added_facts") or []) if f and f.strip()]})
+    return out
+
+
 def build_story_message(program: str, transcript: str, profile: dict, experiences: list[dict]) -> str:
     lines = [f"프로그램: {program}", "",
              "[보내는 사람]",
@@ -372,6 +442,14 @@ class ClaudeAnswerer:
             return parse_gifts(text)
         except (ValueError, TypeError, AttributeError) as e:
             raise AnswererError(f"분석 결과를 읽지 못했습니다: {e}")
+
+    def enrich_events(self, profile: dict, items: list[dict]) -> list[dict]:
+        """실제 사건 한 줄들을 사연 재료로 풀어 쓴다. [{id, story, highlight, ending, added_facts}]"""
+        text = self._call(ENRICH_SYSTEM, build_enrich_message(profile, items), ENRICH_SCHEMA)
+        try:
+            return parse_enriched(text)
+        except (ValueError, TypeError, AttributeError) as e:
+            raise AnswererError(f"풀어 쓴 결과를 읽지 못했습니다: {e}")
 
     def analyze_story(self, program: str, transcript: str, profile: dict,
                       experiences: list[dict], images=()) -> "StoryAnalysis":
