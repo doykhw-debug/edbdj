@@ -338,3 +338,41 @@ def test_bulk_import_library_as_unconfirmed(client, conn):
                                                   "about_person_id": str(e["about_person_id"] or ""),
                                                   "quote_kind": "none", "user_confirmed": "1"})
     assert [x["id"] for x in story.candidate_experiences(conn, "SBS")] == [e["id"]]
+
+
+def test_review_ten_at_a_time(client, conn):
+    load(conn)
+    for i in range(23):                             # 보관함 3편 + 더 가져온 것처럼 20편
+        conn.execute("INSERT INTO story_library (code, title, body, kind, created_at, updated_at) "
+                     "VALUES (?, ?, ?, 'fiction', ?, ?)", (f"X{i:03d}", f"제목 {i}", f"본문 {i}", db.now(), db.now()))
+    conn.commit()
+    people.library_to_experiences(conn)
+    ids = [r[0] for r in conn.execute("SELECT id FROM experiences ORDER BY id")]
+    assert len(ids) == 26
+    token = csrf(client, "/experiences")
+
+    page = client.get("/experiences/review").get_data(as_text=True)
+    assert page.count('name="ids"') == 10 and "남은 26건" in page and "다음 10개" in page and "보관함 R001" in page
+    first = ids[:10]
+    form = {"csrf_token": token, "src": "library", "ids": [str(i) for i in first]}
+    for i in first:                                  # 화면에 있는 값 그대로 보냄 + 일부만 고치고 체크
+        e = conn.execute("SELECT * FROM experiences WHERE id = ?", (i,)).fetchone()
+        form.update({f"label_{i}": e["label"], f"when_text_{i}": e["when_text"], f"story_{i}": e["story"]})
+    form[f"story_{first[0]}"] = "실제 있었던 대로 고친 이야기"
+    form[f"ok_{first[0]}"] = "1"
+    form[f"ok_{first[1]}"] = "1"
+    r = client.post("/experiences/review", data=form)
+    assert r.headers["Location"].endswith(f"after={first[-1]}")
+    assert [r[0] for r in conn.execute("SELECT id FROM experiences WHERE user_confirmed = 1 ORDER BY id")] == first[:2]
+    assert conn.execute("SELECT story FROM experiences WHERE id = ?", (first[0],)).fetchone()[0] == "실제 있었던 대로 고친 이야기"
+    assert story.candidate_experiences(conn, "SBS")[0]["story"] == "실제 있었던 대로 고친 이야기"
+
+    nxt = client.get(r.headers["Location"]).get_data(as_text=True)
+    assert "2건 확인" in nxt and "1건 고침" in nxt and "8건은 확인 전으로 남김" in nxt
+    assert f'value="{ids[10]}"' in nxt and f'value="{first[2]}"' not in nxt   # 다음 10개 (남긴 것은 건너뜀)
+    last = client.get(f"/experiences/review?after={ids[-1]}").get_data(as_text=True)
+    assert "끝까지 봤습니다" in last and "24건" in last and "처음부터 다시 보기" in last
+    # 본문을 비워 보내도 원래 글은 지우지 않는다
+    client.post("/experiences/review", data={"csrf_token": token, "src": "library", "ids": [str(ids[20])],
+                                             f"label_{ids[20]}": "", f"when_text_{ids[20]}": "", f"story_{ids[20]}": ""})
+    assert conn.execute("SELECT story FROM experiences WHERE id = ?", (ids[20],)).fetchone()[0]

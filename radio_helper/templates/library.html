@@ -10,9 +10,10 @@
 <form method="post" action="{{ url_for('library_to_experiences') }}" class="panel actions" style="margin-top:0">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <button class="secondary">보관함 사연 {{ not_moved }}편 → 경험으로 모두 가져오기 (확인 전)</button>
-  <span class="muted">'확인 전' 경험으로 들어갑니다. 하나씩 열어 실제와 다른 부분을 고치고 '실제로 있었던 일'을 체크한 것만 보냅니다.</span>
+  <span class="muted">'확인 전' 경험으로 들어갑니다. 10개씩 보면서 실제와 다른 부분을 고치고 체크한 것만 보냅니다.</span>
 </form>
 {% endif %}
+<p><a class="btn secondary" href="{{ url_for('experiences_review') }}">가져온 사연 10개씩 보고 확인하기 →</a></p>
 <form method="get" class="panel actions" style="margin-top:0">
   <select name="person" style="width:auto"><option value="">모든 인물</option>
     {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if person == p.id }}>{{ p.name }}{{ ' (' ~ p.alias ~ ')' if p.alias and p.alias != p.name }}</option>{% endfor %}</select>

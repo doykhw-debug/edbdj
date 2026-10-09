@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}10개씩 확인 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>확인 전 경험 10개씩 보기 <span class="muted">{{ '보관함에서 가져온 것' if src == 'library' else '확인 전 전체' }} · 남은 {{ left }}건</span></h1>
+<p class="muted">글을 읽고 실제와 다른 부분은 바로 고치세요. <b>실제로 있었던 일 맞음</b>을 체크한 것만 사연으로 보냅니다.
+  체크하지 않은 것은 '확인 전'으로 남고, 나중에 처음부터 다시 볼 수 있습니다.
+  <a href="{{ url_for('experiences') }}">← 실제 경험</a> ·
+  {% if src == 'library' %}<a href="{{ url_for('experiences_review', src='all') }}">확인 전 전체 보기</a>
+  {% else %}<a href="{{ url_for('experiences_review') }}">보관함에서 가져온 것만</a>{% endif %}</p>
+
+{% if rows %}
+<form method="post" action="{{ url_for('experiences_review_save') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="src" value="{{ src }}">
+  {% for e in rows %}
+  <div class="panel">
+    <input type="hidden" name="ids" value="{{ e.id }}">
+    <div class="actions" style="margin-top:0;justify-content:space-between">
+      <span><b>#{{ e.id }}</b>{% if e.lib_code %} · 보관함 {{ e.lib_code }}{% endif %}
+        · {{ (e.about_alias ~ ' 이야기') if e.about_alias else '내 이야기' }}
+        <a class="muted" href="{{ url_for('experience_edit', eid=e.id) }}" target="_blank" rel="noopener">자세히 고치기 ↗</a></span>
+      <label class="inline" style="font-size:16px"><input type="checkbox" name="ok_{{ e.id }}" value="1"> <b>실제로 있었던 일 맞음</b></label>
+    </div>
+    <div class="row">
+      <div><label>짧은 이름</label><input type="text" name="label_{{ e.id }}" value="{{ e.label or '' }}"></div>
+      <div><label>언제</label><input type="text" name="when_text_{{ e.id }}" value="{{ e.when_text or '' }}"></div>
+    </div>
+    <label>있었던 일</label>
+    <textarea name="story_{{ e.id }}" rows="6">{{ e.story }}</textarea>
+  </div>
+  {% endfor %}
+  <div class="actions" style="position:sticky;bottom:0;background:var(--bg);padding:10px 0">
+    <button>체크한 것 확인 · 고친 것 저장 → {{ '다음 10개' if later else '마치기' }}</button>
+    <span class="muted">이 화면 {{ rows|length }}건 · 뒤에 {{ later }}건 더</span>
+  </div>
+</form>
+{% else %}
+<div class="panel">
+  {% if left %}<p>끝까지 봤습니다. 확인 전으로 남은 것이 {{ left }}건 있습니다.
+    <a class="btn secondary" href="{{ url_for('experiences_review', src=src) }}">처음부터 다시 보기</a></p>
+  {% else %}<p>확인할 경험이 없습니다.</p>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

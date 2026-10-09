@@ -38,8 +38,9 @@
 {% endif %}
 {% if pending_library %}
 <div class="flash warn">보관함에서 가져온 사연 <b>{{ pending_library }}편</b>이 확인 전이라 보내지 않습니다.
+  <a class="btn" style="padding:3px 12px" href="{{ url_for('experiences_review') }}">10개씩 보고 확인하기</a>
   {% if only != 'library' %}<a href="{{ url_for('experiences', only='library') }}">확인 전 보관함 사연만 보기</a> · {% endif %}
-  하나씩 열어 실제와 다른 부분을 고치고 '실제로 있었던 일'을 체크하면 그때부터 보냅니다.</div>
+  보면서 실제와 다른 부분을 고치고 '실제로 있었던 일 맞음'을 체크한 것부터 보냅니다.</div>
 {% endif %}
 {% if only in ('events', 'library') %}<p><a href="{{ url_for('experiences') }}">← 모든 경험 보기</a></p>{% endif %}
 <form method="post" action="{{ url_for('experiences_confirm') }}" class="panel table-wrap">

@@ -249,6 +249,10 @@ def cmd_stt_test(conn) -> int:
     """
     from . import live
 
+    lock = config.instance_lock(live.STT_TEST_LOCK)   # 화면이 '진행 중'인지 '꺼짐'인지 알 수 있게 잡고 있는다
+    if lock is None:
+        say("받아쓰기 테스트가 이미 진행 중입니다.")
+        return 0
     result = {"at": db.now(), "running": True, "ok": False, "phase": "녹음 장치 여는 중", "steps": [],
               "text": "", "level": None}
 

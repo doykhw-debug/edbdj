@@ -136,10 +136,20 @@ def create_app(data_dir: str | None = None) -> Flask:
         else:
             send_item = {"name": "보내는 방법", "ok": False, "url": url_for("home"),
                          "detail": f"{channel}은(는) 채팅 앱이 정해지지 않았습니다 — '문자'를 고르거나 채널에 앱을 지정하세요"}
+        heard = live.stt_from_listening(c)
+        if stt.get("ok"):
+            stt_detail = "성공 " + stt.get("at", "")[5:16]
+        elif heard:
+            stt_detail = f"청취 중 받아쓰기 확인됨 (마지막 {heard[5:16]})"
+        elif stt.get("running") and not stt.get("stuck"):
+            stt_detail = f"진행 중 — {stt.get('phase') or ''}".rstrip(" —")
+        elif stt.get("stuck"):
+            stt_detail = "도중에 멈춤 — 첫 화면에서 다시 해 보세요"
+        else:
+            stt_detail = "실패 — 결과 확인" if stt else "PC 소리 10초를 받아써 보기"
         return [
-            {"name": "받아쓰기 테스트", "ok": bool(stt.get("ok")), "url": url_for("home") + "#stt",
-             "detail": "PC 소리 10초를 받아써 보기" if not stt else
-             ("성공 " + stt.get("at", "")[5:16] if stt.get("ok") else "진행 중" if stt.get("running") else "실패 — 결과 확인")},
+            {"name": "받아쓰기 테스트", "ok": bool(stt.get("ok") or heard), "url": url_for("home") + "#stt",
+             "detail": stt_detail},
             {"name": "Claude API 키", "ok": bool(get_api_key()), "url": url_for("quizbot"),
              "detail": "퀴즈·사연 분석에 필요"},
             send_item,
@@ -427,6 +437,51 @@ def create_app(data_dir: str | None = None) -> Flask:
             ev["log"] = log_tail(db.get_setting(g.conn, enrich.LOG_KEY) or "", 1500)
         return render_template("experiences.html", rows=rows, only=only, pending_events=pending_events,
                                pending_library=pending_library, enrich_left=ev["left"], enrich_status=ev)
+
+    REVIEW_PAGE = 10
+
+    def review_where(src: str) -> str:
+        return ("e.user_confirmed = 0" + (" AND e.from_library_id IS NOT NULL" if src == "library" else ""))
+
+    @app.get("/experiences/review")
+    def experiences_review():
+        """확인 전 경험을 10개씩 펼쳐 보고, 그 자리에서 고치고, 맞는 것만 체크해 다음 10개로 넘긴다."""
+        src = "all" if request.args.get("src") == "all" else "library"
+        after = request.args.get("after", 0, type=int)
+        rows = g.conn.execute(
+            f"""SELECT e.*, p.alias AS about_alias, l.code AS lib_code, l.origin AS lib_origin FROM experiences e
+                LEFT JOIN people p ON p.id = e.about_person_id LEFT JOIN story_library l ON l.id = e.from_library_id
+                WHERE {review_where(src)} AND e.id > ? ORDER BY e.id LIMIT ?""", (after, REVIEW_PAGE)).fetchall()
+        left = g.conn.execute(f"SELECT COUNT(*) FROM experiences e WHERE {review_where(src)}").fetchone()[0]
+        later = g.conn.execute(f"SELECT COUNT(*) FROM experiences e WHERE {review_where(src)} AND e.id > ?",
+                               (rows[-1]["id"] if rows else after,)).fetchone()[0]
+        return render_template("experiences_review.html", rows=rows, src=src, after=after, left=left, later=later,
+                               page_size=REVIEW_PAGE)
+
+    @app.post("/experiences/review")
+    def experiences_review_save():
+        src = "all" if form("src") == "all" else "library"
+        ids = [int(x) for x in request.form.getlist("ids") if x.isdigit()]
+        confirmed = edited = 0
+        for eid in ids:
+            e = g.conn.execute("SELECT * FROM experiences WHERE id = ? AND user_confirmed = 0", (eid,)).fetchone()
+            if e is None:
+                continue
+            values = {k: (request.form.get(f"{k}_{eid}") or "").strip() for k in ("label", "when_text", "story")}
+            values["story"] = values["story"] or e["story"]          # 본문을 지우면 원래 글을 둔다
+            if any((e[k] or "") != values[k] for k in values):
+                g.conn.execute("UPDATE experiences SET label = ?, when_text = ?, story = ?, updated_at = ? WHERE id = ?",
+                               (values["label"], values["when_text"], values["story"], db.now(), eid))
+                edited += 1
+            if request.form.get(f"ok_{eid}"):
+                g.conn.execute("UPDATE experiences SET user_confirmed = 1, updated_at = ? WHERE id = ?", (db.now(), eid))
+                confirmed += 1
+        g.conn.commit()
+        if confirmed:
+            db.log(g.conn, "record", f"경험 {confirmed}건을 '실제로 있었던 일'로 확인 (10개씩 확인, 사용자)")
+        flash(f"{confirmed}건 확인" + (f" · {edited}건 고침" if edited else "")
+              + (f" · {len(ids) - confirmed}건은 확인 전으로 남김(나중에 다시 볼 수 있음)" if len(ids) > confirmed else "") + ".")
+        return redirect(url_for("experiences_review", src=src, after=max(ids) if ids else 0))
 
     @app.post("/experiences/confirm")
     def experiences_confirm():

@@ -471,3 +471,56 @@ def test_stt_test_warns_when_quiet(conn, monkeypatch):
     rec = json.loads(db.get_setting(conn, "quizbot.stt_test"))["steps"][1]
     assert rec["ok"] and "소리가 작습니다" in rec["detail"] and "음소거" in rec["detail"]
     assert cli.level_advice(60, audio.QUIET_LEVEL) == "" and "들리지 않습니다" in cli.level_advice(0, 25)
+
+
+# ── 받아쓰기 테스트 '진행 중'이 풀리지 않던 문제 ─────────────────────────
+def test_stt_test_stuck_when_process_gone(conn):
+    from radio_helper.quizbot import config as qconfig
+
+    now = datetime.now()
+    started = (now - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M:%S")
+    db.set_setting(conn, "quizbot.stt_test", json.dumps({"at": started, "running": True, "phase": "음성 인식 준비 중",
+                                                        "steps": []}))
+    assert live.view_model(conn, now)["stt_test"]["stuck"] is True                 # 실행기가 없다 → 멈춤
+    lock = qconfig.instance_lock(live.STT_TEST_LOCK)                               # 실행기가 돌고 있으면
+    try:
+        assert live.view_model(conn, now)["stt_test"]["stuck"] is False
+    finally:
+        lock.close()
+    just = now.strftime("%Y-%m-%d %H:%M:%S")
+    db.set_setting(conn, "quizbot.stt_test", json.dumps({"at": just, "running": True, "steps": []}))
+    assert live.view_model(conn, now)["stt_test"]["stuck"] is False                # 막 눌렀음 (실행기 뜨는 중)
+
+
+def test_stt_test_refuses_second_run(conn, capsys):
+    from radio_helper.quizbot import __main__ as cli
+    from radio_helper.quizbot import config as qconfig
+
+    lock = qconfig.instance_lock(live.STT_TEST_LOCK)
+    try:
+        assert cli.cmd_stt_test(conn) == 0 and "이미 진행 중" in capsys.readouterr().out
+    finally:
+        lock.close()
+
+
+def test_setup_item_ok_when_listening_already_transcribes(client, conn):
+    def item():
+        page = client.get("/").get_data(as_text=True)
+        return page.rsplit("받아쓰기 테스트</a>", 1)[1][:200]     # 준비 상태 목록의 항목 (요약 줄 말고)
+
+    old = (datetime.now() - timedelta(minutes=40)).strftime("%Y-%m-%d %H:%M:%S")
+    db.set_setting(conn, "quizbot.stt_test", json.dumps({"at": old, "running": True, "steps": []}))
+    assert "도중에 멈춤" in item()
+    db.set_setting(conn, "quizbot.stt_test", json.dumps({"at": db.now(), "running": True, "phase": "음성 인식 준비 중 (모델 내려받기)",
+                                                        "steps": []}))
+    from radio_helper.quizbot import config as qconfig
+    lock = qconfig.instance_lock(live.STT_TEST_LOCK)
+    try:
+        assert "진행 중 — 음성 인식 준비 중 (모델 내려받기)" in item()
+    finally:
+        lock.close()
+    conn.execute("INSERT INTO transcripts (broadcast_date, at, text) VALUES ('2026-10-09', ?, '오늘의 퀴즈 나갑니다')",
+                 (db.now(),))
+    conn.commit()
+    assert "청취 중 받아쓰기 확인됨" in item()
+    assert "badge ok\">OK</span>" in client.get("/").get_data(as_text=True).rsplit("받아쓰기 테스트</a>", 1)[0][-160:]

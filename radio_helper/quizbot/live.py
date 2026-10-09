@@ -120,6 +120,25 @@ def _age_seconds(stamp: str, now: datetime) -> float | None:
 
 
 LAUNCH_GRACE_SECONDS = 90  # '청취 시작'을 누른 뒤 실행기가 첫 신호를 보내기까지 기다리는 시간
+STT_TEST_LOCK = "stt-test"
+STT_TEST_GRACE = 30        # 받아쓰기 테스트를 누른 직후 실행기가 아직 안 떴어도 '꺼짐'으로 보지 않는 시간
+
+
+def stt_test_alive() -> bool:
+    """받아쓰기 테스트 실행기가 지금 돌고 있는지 (실행기가 잡고 있는 잠금으로 확인)."""
+    lock = config.instance_lock(STT_TEST_LOCK)
+    if lock is None:
+        return True
+    lock.close()
+    return False
+
+
+def stt_from_listening(conn: sqlite3.Connection, now: datetime | None = None, days: int = 7) -> str | None:
+    """청취 중에 실제로 받아쓴 말이 있으면 마지막 시각 (받아쓰기가 되는 PC라는 뜻)."""
+    since = ((now or datetime.now()) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    row = conn.execute("SELECT MAX(at) FROM transcripts WHERE at >= ? AND TRIM(COALESCE(text, '')) != ''",
+                       (since,)).fetchone()
+    return row[0] if row and row[0] else None
 
 STATUS_TEXT = {"collecting": "수집 중", "starting": "준비 중", "launching": "시작하는 중", "stalled": "응답 없음",
                "off": "꺼짐"}
@@ -161,7 +180,8 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
     stt_test = _json_setting(conn, "quizbot.stt_test")
     if stt_test and stt_test.get("running"):
         age = _age_seconds(stt_test.get("at"), now)
-        stt_test["stuck"] = age is not None and age > 600  # 10분 넘게 진행 중이면 도중에 꺼진 것
+        # 실행기가 꺼졌거나(잠금이 풀림) 30분 넘게 진행 중이면 도중에 꺼진 것 (모델 내려받기는 몇 분 걸릴 수 있음)
+        stt_test["stuck"] = age is None or age > 1800 or (age > STT_TEST_GRACE and not stt_test_alive())
     return {
         "status": status,
         "status_text": STATUS_TEXT[status],
