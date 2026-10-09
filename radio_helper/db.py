@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -286,14 +288,113 @@ def now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+DB_NAME = "radio_helper.sqlite3"
+PROGRAM_ROOT = Path(__file__).resolve().parent.parent
+_adopt_checked = False
+ADOPTED_FROM: Path | None = None   # 이번 실행에서 예전 폴더 데이터를 옮겨 왔으면 그 위치
+
+
+def home_data_dir() -> Path:
+    """데이터를 두는 고정 위치. 프로그램 폴더 밖이라 업데이트 파일을 어디에 풀어도 그대로 남는다.
+
+    윈도우: C:\\Users\\<이름>\\AppData\\Local\\RadioHelper"""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return base / "RadioHelper"
+
+
 def data_dir() -> Path:
-    d = Path(os.environ.get("RADIO_HELPER_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
+    env = os.environ.get("RADIO_HELPER_DATA_DIR")
+    d = Path(env) if env else home_data_dir()
     d.mkdir(parents=True, exist_ok=True)
+    if not env:
+        _adopt_old_data(d)
     return d
 
 
+def _user_rows(path: Path) -> int:
+    """사용자가 넣은 데이터 수 (경험·인물·사연·퀴즈 기록). 처음 만든 빈 데이터는 0."""
+    try:
+        c = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+        try:
+            n = 0
+            for table in ("experiences", "people", "story_library", "quizzes", "story_posts", "submissions"):
+                try:
+                    n += c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                except sqlite3.Error:
+                    pass
+            return n
+        finally:
+            c.close()
+    except sqlite3.Error:
+        return 0
+
+
+def old_data_candidates(roots: list[Path]) -> list[Path]:
+    """예전 위치(프로그램 폴더의 data)와, 같은 곳에 풀어 둔 다른 업데이트 폴더들의 data."""
+    found: list[Path] = []
+    for root in roots:
+        for pattern in (f"data/{DB_NAME}", f"*/data/{DB_NAME}", f"*/*/data/{DB_NAME}"):
+            try:
+                found += [p for p in root.glob(pattern) if p.is_file()]
+            except OSError:
+                pass
+    unique = []
+    for p in found:
+        if p.resolve() not in {u.resolve() for u in unique}:
+            unique.append(p)
+    return unique
+
+
+def best_old_db(roots: list[Path]) -> Path | None:
+    """데이터가 들어 있는 것 중 가장 최근에 쓴 것."""
+    scored = [(p.stat().st_mtime, p) for p in old_data_candidates(roots) if _user_rows(p) > 0]
+    return max(scored)[1] if scored else None
+
+
+def adopt_old_data(target_dir: Path, roots: list[Path]) -> Path | None:
+    """고정 위치에 데이터가 아직 없으면 예전 폴더의 데이터를 복사해 온다. 복사한 원본 위치를 돌려준다."""
+    target = target_dir / DB_NAME
+    if target.exists():
+        return None
+    src = best_old_db(roots)
+    if src is None:
+        return None
+    s, t = sqlite3.connect(str(src), timeout=10), sqlite3.connect(str(target))
+    try:
+        s.backup(t)   # 쓰는 중이어도 깨지지 않게 SQLite 백업으로 복사
+    finally:
+        s.close()
+        t.close()
+    for sub in ("inspect",):
+        old = src.parent / sub
+        if old.is_dir():
+            shutil.copytree(old, target_dir / sub, dirs_exist_ok=True)
+    (target_dir / "옮겨온_데이터.txt").write_text(f"{now()} 에 이 위치로 옮겨 온 데이터의 원래 위치:\n{src}\n",
+                                                  encoding="utf-8")
+    return src
+
+
+def _adopt_old_data(d: Path) -> None:
+    global _adopt_checked, ADOPTED_FROM
+    if _adopt_checked:
+        return
+    _adopt_checked = True
+    home = Path.home()
+    # 이 프로그램 폴더 → 같은 곳에 풀어 둔 다른 업데이트 폴더 → 내려받기·바탕 화면·문서
+    roots = [PROGRAM_ROOT, PROGRAM_ROOT.parent] + [
+        home / name for name in ("Downloads", "Desktop", "Documents", "다운로드", "바탕 화면")
+        if (home / name).is_dir() and (home / name) != PROGRAM_ROOT.parent]
+    try:
+        ADOPTED_FROM = adopt_old_data(d, roots)
+    except (OSError, sqlite3.Error):
+        ADOPTED_FROM = None
+
+
 def db_path() -> Path:
-    return data_dir() / "radio_helper.sqlite3"
+    return data_dir() / DB_NAME
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:

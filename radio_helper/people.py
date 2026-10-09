@@ -252,6 +252,38 @@ def events_to_experiences(conn: sqlite3.Connection, person_id: int | None = None
     return added, skipped
 
 
+def library_to_experience(conn: sqlite3.Connection, item) -> tuple[int, bool]:
+    """보관함 사연 한 편을 '확인 전' 경험으로 옮긴다. (경험 번호, 새로 만들었나). 사용자가 고치고 확인해야 보낸다."""
+    moved = conn.execute("SELECT id FROM experiences WHERE from_library_id = ?", (item["id"],)).fetchone()
+    if moved:
+        return moved["id"], False
+    person = conn.execute("SELECT id, alias, side FROM people WHERE id = ?", (item["person_id"],)).fetchone() \
+        if item["person_id"] else None
+    about = person["id"] if person and person["side"] != "self" else None
+    body = (item["body"] or "").strip()
+    intro = (item["intro"] or "").strip().rstrip(".,")
+    if intro and body.startswith(intro):   # '제 와이프 이야기인데요'는 원고를 만들 때 다시 붙인다
+        body = body[len(intro):].lstrip(" ,.\n")
+    cur = conn.execute(
+        """INSERT INTO experiences (label, when_text, people, story, highlight, quote_kind, song, about_person_id,
+               from_library_id, user_confirmed, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, 'none', ?, ?, ?, 0, ?, ?)""",
+        ((item["title"] or "")[:60], item["event_date"] or "", (person["alias"] if about else "나") or "",
+         body, item["summary"] or "", item["song"] or "", about, item["id"], db.now(), db.now()))
+    return cur.lastrowid, True
+
+
+def library_to_experiences(conn: sqlite3.Connection) -> tuple[int, int]:
+    """보관함 사연을 모두 '확인 전' 경험으로 가져온다 (이미 옮긴 것은 건너뜀). (가져온 수, 건너뛴 수)"""
+    added = skipped = 0
+    for item in conn.execute("SELECT * FROM story_library ORDER BY code, id").fetchall():
+        _eid, created = library_to_experience(conn, item)
+        added += created
+        skipped += not created
+    conn.commit()
+    return added, skipped
+
+
 def confirm_moved_events(conn: sqlite3.Connection) -> int:
     """예전에 '확인 전'으로 옮긴 관계도 사건도 확인된 경험으로 바꾼다."""
     n = conn.execute("UPDATE experiences SET user_confirmed = 1, updated_at = ? "

@@ -413,14 +413,20 @@ def create_app(data_dir: str | None = None) -> Flask:
                          + (SELECT COUNT(*) FROM story_posts sp WHERE sp.experience_id = e.id
                             AND sp.status IN ('entered','posted','unknown')) AS used
                FROM experiences e LEFT JOIN people p ON p.id = e.about_person_id"""
-            + (" WHERE e.from_event IS NOT NULL AND e.user_confirmed = 0" if only == "events" else "")
+            + (" WHERE e.from_event IS NOT NULL AND e.user_confirmed = 0" if only == "events" else
+               " WHERE e.from_library_id IS NOT NULL AND e.user_confirmed = 0" if only == "library" else "")
             + " ORDER BY e.id DESC").fetchall()
         from .quizbot import enrich
 
         pending_events = g.conn.execute(
             "SELECT COUNT(*) FROM experiences WHERE from_event IS NOT NULL AND user_confirmed = 0").fetchone()[0]
+        pending_library = g.conn.execute(
+            "SELECT COUNT(*) FROM experiences WHERE from_library_id IS NOT NULL AND user_confirmed = 0").fetchone()[0]
+        ev = enrich.view(g.conn)
+        if ev["state"] in ("stalled", "done") or ev.get("error"):
+            ev["log"] = log_tail(db.get_setting(g.conn, enrich.LOG_KEY) or "", 1500)
         return render_template("experiences.html", rows=rows, only=only, pending_events=pending_events,
-                               enrich_left=len(enrich.pending(g.conn)), enrich_status=enrich.load_status(g.conn))
+                               pending_library=pending_library, enrich_left=ev["left"], enrich_status=ev)
 
     @app.post("/experiences/confirm")
     def experiences_confirm():
@@ -1184,7 +1190,10 @@ def create_app(data_dir: str | None = None) -> Flask:
             "FROM story_library l "
             "LEFT JOIN people p ON p.id = l.person_id" + (" WHERE " + " AND ".join(where) if where else "")
             + " ORDER BY l.code, l.id", params).fetchall()
+        not_moved = g.conn.execute("SELECT COUNT(*) FROM story_library l WHERE NOT EXISTS "
+                                   "(SELECT 1 FROM experiences e WHERE e.from_library_id = l.id)").fetchone()[0]
         return render_template("library.html", rows=rows, people=people_options(), person=person, kind=kind, q=q,
+                               not_moved=not_moved,
                                counts={k: g.conn.execute("SELECT COUNT(*) FROM story_library WHERE kind = ?",
                                                          (k,)).fetchone()[0] for k in ("fiction", "real")})
 
@@ -1199,28 +1208,30 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.post("/library/<int:lid>/to-experience")
     def library_to_experience(lid):
         """보관함 사연 하나를 '확인 전' 실제 경험으로 옮긴다. 사용자가 실제와 다른 부분을 고치고 확인해야 쓰인다."""
+        from . import people as people_mod
+
         item = one("SELECT * FROM story_library WHERE id = ?", lid)
-        moved = g.conn.execute("SELECT id FROM experiences WHERE from_library_id = ?", (lid,)).fetchone()
-        if moved:
-            return redirect(url_for("experience_edit", eid=moved["id"]))
-        person = g.conn.execute("SELECT id, alias, side FROM people WHERE id = ?", (item["person_id"],)).fetchone() \
-            if item["person_id"] else None
-        about = person["id"] if person and person["side"] != "self" else None
-        body = (item["body"] or "").strip()
-        intro = (item["intro"] or "").strip().rstrip(".,")
-        if intro and body.startswith(intro):   # '제 와이프 이야기인데요'는 원고를 만들 때 다시 붙인다
-            body = body[len(intro):].lstrip(" ,.\n")
-        cur = g.conn.execute(
-            """INSERT INTO experiences (label, when_text, people, story, highlight, quote_kind, song, about_person_id,
-                   from_library_id, user_confirmed, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, 'none', ?, ?, ?, 0, ?, ?)""",
-            ((item["title"] or "")[:60], item["event_date"] or "", (person["alias"] if about else "나") or "",
-             body, item["summary"] or "", item["song"] or "", about, lid, db.now(), db.now()))
+        eid, created = people_mod.library_to_experience(g.conn, item)
+        if not created:
+            return redirect(url_for("experience_edit", eid=eid))
         g.conn.commit()
-        db.log(g.conn, "record", f"사연 보관함 {item['code'] or lid} → 경험 #{cur.lastrowid} (확인 전)")
+        db.log(g.conn, "record", f"사연 보관함 {item['code'] or lid} → 경험 #{eid} (확인 전)")
         flash("경험으로 옮겼습니다. 실제로 있었던 일과 다른 부분을 고친 뒤, 맞을 때만 '실제로 있었던 일'을 체크하고 저장하세요. "
               "체크하기 전에는 보내지 않습니다.", "warn")
-        return redirect(url_for("experience_edit", eid=cur.lastrowid))
+        return redirect(url_for("experience_edit", eid=eid))
+
+    @app.post("/library/to-experiences")
+    def library_to_experiences():
+        """보관함 사연을 모두 '확인 전' 경험으로 가져온다. 사용자가 하나씩 열어 고치고 확인한 것만 보낸다."""
+        from . import people as people_mod
+
+        added, skipped = people_mod.library_to_experiences(g.conn)
+        if added:
+            db.log(g.conn, "record", f"사연 보관함 {added}편 → 확인 전 경험 (일괄 가져오기)")
+        flash((f"보관함 사연 {added}편을 '확인 전' 경험으로 가져왔습니다" if added else "새로 가져올 보관함 사연이 없습니다")
+              + (f" (이미 옮긴 {skipped}편은 건너뜀)" if skipped else "")
+              + ". 하나씩 열어 실제와 다른 부분을 고치고 '실제로 있었던 일'을 체크한 것만 보냅니다.", "warn")
+        return redirect(url_for("experiences", only="library"))
 
     @app.post("/quizbot/tool")
     def quizbot_tool():
@@ -1413,19 +1424,22 @@ def start_enrich(conn) -> str:
         return ""
     if not get_api_key():
         return f"사연처럼 풀어 쓰기({left}건)는 Claude API 키를 설정 화면에 저장하면 시작할 수 있습니다. 그전에도 한 줄 그대로 사연 재료로 씁니다."
-    status = enrich.load_status(conn)
-    if status.get("running") and not _stale(status.get("at")):
-        return f"사연처럼 풀어 쓰는 중입니다 ({status.get('done', 0) + status.get('kept', 0)}/{status.get('total', left)})."
-    enrich.save_status(conn, running=True, done=0, kept=0, total=left)
-    launch_quizbot(["enrich"])
-    return f"{left}건을 사연처럼 풀어 쓰기 시작했습니다 (Claude API, 몇 분). 끝난 사건부터 바로 사연에 씁니다."
+    v = enrich.view(conn)
+    if v["state"] == "running":
+        return f"사연처럼 풀어 쓰는 중입니다 ({v['progress']}/{v.get('total', left)})."
+    enrich.save_status(conn, running=True, done=0, kept=0, total=left, started=db.now())
+    db.set_setting(conn, enrich.LOG_KEY, launch_quizbot(["enrich"]))
+    return f"{left}건을 사연처럼 풀어 쓰기 시작했습니다 (Claude API, 8건씩 · 첫 숫자가 바뀌는 데 1~2분). 끝난 사건부터 바로 사연에 씁니다."
 
 
-def _stale(at: str | None, minutes: int = 30) -> bool:
-    try:
-        return (datetime.now() - datetime.strptime(at or "", "%Y-%m-%d %H:%M:%S")).total_seconds() > minutes * 60
-    except ValueError:
-        return True
+def log_tail(name: str, chars: int = 2500) -> str:
+    """data/logs 의 실행 기록 끝부분 (꺼졌을 때 원인 확인용)."""
+    if not re.fullmatch(r"quizbot_[0-9_a-f]+\.log", name or ""):
+        return ""
+    path = db.data_dir() / "logs" / name
+    if not path.exists():
+        return ""
+    return f"[{name}]\n" + path.read_text(encoding="utf-8", errors="replace")[-chars:]
 
 
 def launch_quizbot(args: list[str]) -> str:

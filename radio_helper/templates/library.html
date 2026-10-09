@@ -6,6 +6,13 @@
 <div class="flash warn">원본 사연을 각색해 인물에게 붙인 <b>가상 사연</b>은 그대로는 보내지 않고, 사연 초안(AI)의 재료로도 쓰지 않습니다.
   인물에게 실제로 비슷한 일이 있었다면 사연을 열어 <b>실제 있었던 일로 옮기기</b> → 실제와 다르게 적힌 부분을 고치고 '실제로 있었던 일'을 체크하면
   <a href="{{ url_for('experiences') }}">실제 경험</a>으로 보냅니다 (같은 방송국에는 한 번만).</div>
+{% if not_moved %}
+<form method="post" action="{{ url_for('library_to_experiences') }}" class="panel actions" style="margin-top:0">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button class="secondary">보관함 사연 {{ not_moved }}편 → 경험으로 모두 가져오기 (확인 전)</button>
+  <span class="muted">'확인 전' 경험으로 들어갑니다. 하나씩 열어 실제와 다른 부분을 고치고 '실제로 있었던 일'을 체크한 것만 보냅니다.</span>
+</form>
+{% endif %}
 <form method="get" class="panel actions" style="margin-top:0">
   <select name="person" style="width:auto"><option value="">모든 인물</option>
     {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if person == p.id }}>{{ p.name }}{{ ' (' ~ p.alias ~ ')' if p.alias and p.alias != p.name }}</option>{% endfor %}</select>

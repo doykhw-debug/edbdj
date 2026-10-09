@@ -310,3 +310,31 @@ def test_move_one_persons_events(client, conn):
     client.post("/people/events-to-experiences", data={"csrf_token": token, "person": str(wife)})
     assert conn.execute("SELECT COUNT(*) FROM experiences").fetchone()[0] == 2
     assert people.events_left(conn) == 3
+
+
+def test_bulk_import_library_as_unconfirmed(client, conn):
+    load(conn)
+    token = csrf(client, "/library")
+    r1 = conn.execute("SELECT id FROM story_library WHERE code = 'R001'").fetchone()[0]
+    client.post(f"/library/{r1}/to-experience", data={"csrf_token": token})        # 하나는 미리 옮겨 둠
+    assert "보관함 사연 2편 → 경험으로 모두 가져오기" in client.get("/library").get_data(as_text=True)
+
+    r = client.post("/library/to-experiences", data={"csrf_token": token})
+    assert r.headers["Location"].endswith("/experiences?only=library")
+    rows = conn.execute("SELECT * FROM experiences WHERE from_library_id IS NOT NULL ORDER BY id").fetchall()
+    assert len(rows) == 3 and all(e["user_confirmed"] == 0 for e in rows)
+    assert story.candidate_experiences(conn) == []                                  # 확인 전에는 보내지 않음
+    page = client.get("/experiences?only=library").get_data(as_text=True)
+    assert "보관함 사연 2편을" in page and "경험으로 가져왔습니다" in page and "이미 옮긴 1편은 건너뜀" in page
+    assert "보관함에서 가져온 사연 <b>3편</b>" in page and 'name="eid"' not in page   # 목록에서 한꺼번에 확인하지 않음
+    assert "경험으로 모두 가져오기" not in client.get("/library").get_data(as_text=True)
+
+    # 다시 눌러도 중복으로 만들지 않는다
+    client.post("/library/to-experiences", data={"csrf_token": token})
+    assert conn.execute("SELECT COUNT(*) FROM experiences WHERE from_library_id IS NOT NULL").fetchone()[0] == 3
+    # 열어서 고치고 확인한 것만 보낸다
+    e = rows[2]
+    client.post(f"/experiences/{e['id']}", data={"csrf_token": token, "story": "고친 이야기",
+                                                  "about_person_id": str(e["about_person_id"] or ""),
+                                                  "quote_kind": "none", "user_confirmed": "1"})
+    assert [x["id"] for x in story.candidate_experiences(conn, "SBS")] == [e["id"]]

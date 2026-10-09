@@ -14,11 +14,15 @@ import json
 import sqlite3
 from typing import Callable
 
+from datetime import datetime
+
 from .. import checks, db, generator
-from . import story
+from . import config, story
 
 BATCH = 8
 STATUS_KEY = "stories.enrich"
+LOG_KEY = "stories.enrich_log"
+START_GRACE = 30   # 시작 직후 이 초 동안은 실행기가 아직 안 떴어도 '멈춤'으로 보지 않는다
 SKIP_DETAIL_TAGS = {"임의", "사연"}
 SKIP_DETAIL_KEYS = ("연락처", "전화", "주소", "이메일", "실명", "계좌")
 MIN_STORY = 80
@@ -73,13 +77,39 @@ def load_status(conn: sqlite3.Connection) -> dict:
         return {}
 
 
+def process_alive() -> bool:
+    """풀어 쓰기 실행기가 지금 돌고 있는지 (실행기가 잡고 있는 잠금으로 확인)."""
+    lock = config.instance_lock("enrich")
+    if lock is None:
+        return True
+    lock.close()
+    return False
+
+
+def view(conn: sqlite3.Connection, now: datetime | None = None, alive: Callable[[], bool] = process_alive) -> dict:
+    """화면용 상태: state = idle(할 것 없음·대기) / running(진행 중) / stalled(실행기가 꺼짐) / done(끝)."""
+    status, left = load_status(conn), len(pending(conn))
+    state = "idle"
+    if status.get("running"):
+        try:
+            age = ((now or datetime.now()) - datetime.strptime(status.get("at", ""), "%Y-%m-%d %H:%M:%S")).total_seconds()
+        except ValueError:
+            age = 1e9
+        state = "running" if alive() or age < START_GRACE else "stalled"
+    elif status.get("total") and not left:
+        state = "done"
+    return {**status, "state": state, "left": left,
+            "progress": (status.get("done") or 0) + (status.get("kept") or 0)}
+
+
 def run(conn: sqlite3.Connection, enrich: Callable[[dict, list[dict]], list[dict]],
         say: Callable[[str], None] = lambda _m: None) -> tuple[int, int]:
     """남은 사건을 BATCH 개씩 풀어 쓴다. (풀어 쓴 수, 원래 한 줄로 둔 수)"""
     todo = pending(conn)
     total, done, kept, error = len(todo), 0, 0, ""
     profile = story.masked_profile(conn)
-    save_status(conn, running=True, done=0, kept=0, total=total)
+    started = load_status(conn).get("started") or db.now()
+    save_status(conn, running=True, done=0, kept=0, total=total, started=started)
     for start in range(0, total, BATCH):
         batch = todo[start:start + BATCH]
         try:
@@ -87,7 +117,9 @@ def run(conn: sqlite3.Connection, enrich: Callable[[dict, list[dict]], list[dict
         except Exception as e:  # 한 묶음이 실패해도 다음 묶음은 계속한다 (다음 실행 때 다시 시도)
             error = str(e)[:150]
             say(f"[오류] {type(e).__name__}: {error}")
-            save_status(conn, running=True, done=done, kept=kept, total=total, error=error)
+            save_status(conn, running=True, done=done, kept=kept, total=total, started=started, error=error)
+            if "API 키" in error or "권한" in error:
+                break   # 키·권한 문제는 다음 묶음도 똑같이 실패한다
             continue
         for exp in batch:
             out = results.get(exp["id"]) or {}
@@ -105,9 +137,9 @@ def run(conn: sqlite3.Connection, enrich: Callable[[dict, list[dict]], list[dict
                      f"{exp['when_text'] or ''} {exp['story'] or ''}".strip(), db.now(), db.now(), exp["id"]))
                 done += 1
         conn.commit()
-        save_status(conn, running=True, done=done, kept=kept, total=total)
+        save_status(conn, running=True, done=done, kept=kept, total=total, started=started)
         say(f"… {min(start + BATCH, total)}/{total} (풀어 씀 {done} · 원래 한 줄 {kept})")
-    save_status(conn, running=False, done=done, kept=kept, total=total,
+    save_status(conn, running=False, done=done, kept=kept, total=total, started=started,
                 **({"error": error + " — 못 한 사건은 다음에 다시 시도합니다"} if error else {}))
     db.log(conn, "record", f"관계도 사건 사연처럼 풀어 쓰기: {done}건 완료, {kept}건은 원래 한 줄 유지")
     return done, kept

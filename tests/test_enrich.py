@@ -98,3 +98,80 @@ def test_parse_enriched():
     out = answerer.parse_enriched('{"items": [{"id": 3, "story": " 글 ", "highlight": "", "ending": "끝",'
                                   ' "added_facts": ["", " "]}]}')
     assert out == [{"id": 3, "story": "글", "highlight": "", "ending": "끝", "added_facts": []}]
+
+
+class FakeAnthropic:
+    """anthropic.Anthropic 대신: 받은 요청을 기록하고, 구조화 출력(JSON)처럼 답한다."""
+    requests = []
+
+    def __init__(self, **kw):
+        self.beta = self
+        self.messages = self
+
+    def create(self, **kw):
+        FakeAnthropic.requests.append(kw)
+        ids = [int(line[1:].split()[0]) for line in kw["messages"][0]["content"].splitlines() if line.startswith("#")]
+        items = [{"id": i, "story": LONG, "highlight": "포인트", "ending": "응원합니다.", "added_facts": []} for i in ids]
+        block = type("Block", (), {"type": "text", "text": json.dumps({"items": items}, ensure_ascii=False)})()
+        return type("Response", (), {"stop_reason": "end_turn", "content": [block]})()
+
+
+def test_cli_runs_whole_path_with_claude_call(conn, monkeypatch):
+    import anthropic
+
+    moved(conn)
+    FakeAnthropic.requests = []
+    monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropic)
+    monkeypatch.setattr(answerer, "get_api_key", lambda: "sk-test")
+    assert cli.cmd_enrich(conn) == 0
+    req = FakeAnthropic.requests[0]
+    assert req["model"] == "claude-opus-5-5" and req["fallbacks"] == "default"
+    assert req["output_config"]["format"]["schema"] == answerer.ENRICH_SCHEMA and req["system"] == answerer.ENRICH_SYSTEM
+    assert conn.execute("SELECT COUNT(*) FROM experiences WHERE enriched_at IS NOT NULL AND enrich_note IS NULL "
+                        "AND story = ?", (LONG.strip(),)).fetchone()[0] == 5
+    v = enrich.view(conn, alive=lambda: False)
+    assert (v["state"], v["progress"], v["total"], v["left"]) == ("done", 5, 5, 0)
+
+
+def test_view_running_and_stalled(conn):
+    from datetime import datetime, timedelta
+
+    moved(conn)
+    enrich.save_status(conn, running=True, done=0, kept=0, total=5)
+    now = datetime.now()
+    assert enrich.view(conn, now, alive=lambda: True)["state"] == "running"
+    assert enrich.view(conn, now, alive=lambda: False)["state"] == "running"            # 막 시작함 (실행기 뜨는 중)
+    assert enrich.view(conn, now + timedelta(minutes=2), alive=lambda: False)["state"] == "stalled"
+    assert enrich.process_alive() is False
+    lock = enrich.config.instance_lock("enrich")                                       # 실행기가 잠금을 잡으면 진행 중
+    try:
+        assert enrich.process_alive() is True
+    finally:
+        lock.close()
+
+
+def test_experiences_page_shows_stalled_with_log(client, conn, monkeypatch):
+    moved(conn)
+    enrich.save_status(conn, running=True, done=8, kept=0, total=136, at="2026-10-01 10:00:00")
+    logs = db.data_dir() / "logs"
+    logs.mkdir(exist_ok=True)
+    (logs / "quizbot_20261009_100000_abcd.log").write_text("Traceback ...\nAnswererError: 인터넷 연결 오류", encoding="utf-8")
+    db.set_setting(conn, enrich.LOG_KEY, "quizbot_20261009_100000_abcd.log")
+    page = client.get("/experiences").get_data(as_text=True)
+    assert "멈춤" in page and "8/136에서" in page and "인터넷 연결 오류" in page and "다시 시작 (5건 남음)" in page
+
+
+def test_stops_early_on_bad_key(conn):
+    load(conn)
+    for i in range(20):
+        conn.execute("INSERT INTO experiences (story, from_event, user_confirmed, created_at, updated_at) "
+                     "VALUES (?, ?, 1, ?, ?)", (f"사건 {i}", f"0|2025.01|사건 {i}", db.now(), db.now()))
+    conn.commit()
+    calls = []
+
+    def bad_key(profile, items):
+        calls.append(1)
+        raise answerer.AnswererError("Claude API 키가 없거나 올바르지 않습니다.")
+
+    enrich.run(conn, bad_key)
+    assert len(calls) == 1 and "API 키" in enrich.load_status(conn)["error"]

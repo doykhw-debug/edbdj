@@ -151,6 +151,9 @@ def main() -> None:
     print("   브라우저가 저절로 안 열리면 위 주소를 Ctrl+클릭하거나 주소창에 입력하세요.")
     print(" 이 검은 창을 닫으면 관리 화면과 청취·퀴즈 참여가 멈춥니다.")
     print(" 켜 둔 채로 최소화하세요. 끝낼 때는 이 창에서 Ctrl+C.")
+    print(f" 데이터 위치: {db.data_dir()}  (업데이트 파일을 어디에 풀어도 그대로 남음)")
+    if db.ADOPTED_FROM:
+        print(f" 예전 폴더의 경험·사연 데이터를 옮겨 왔습니다: {db.ADOPTED_FROM.parent}")
     print("=" * 60)
     conn = db.connect()
     try:
