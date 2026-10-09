@@ -206,7 +206,9 @@ def test_import_pages_and_people_screens(client, conn):
     lid = conn.execute("SELECT id FROM story_library WHERE code = 'R001'").fetchone()[0]
     item = client.get(f"/library/{lid}").get_data(as_text=True)
     assert "가상(각색) 사연" in item and "네이트판 001" in item
-    assert "<form" not in item.split("</nav>")[1]          # 보내기·전송 버튼이 없다
+    after_nav = item.split("</nav>")[1]
+    assert after_nav.count("<form") == 1 and "실제 있었던 일로 옮기기" in after_nav   # 옮기기만 있고
+    assert "<button>보내기" not in after_nav and "전송" not in after_nav                # 보내기·전송 버튼은 없다
     assert "가상 사연 둘" in client.get(f"/library?person={pid}").get_data(as_text=True)
     assert "가상 사연 하나" not in client.get(f"/library?person={pid}").get_data(as_text=True)
 
@@ -216,3 +218,37 @@ def test_fiction_never_used_as_story_material(conn):
     # 보관함 사연은 실제 경험이 아니므로 사연 초안(AI)의 재료 목록에 없다
     assert story.candidate_experiences(conn) == []
     db.log(conn, "test", "ok")
+
+
+def test_move_library_story_to_unconfirmed_experience(client, conn):
+    load(conn)
+    token = csrf(client, "/library")
+    r1 = conn.execute("SELECT id FROM story_library WHERE code = 'R001'").fetchone()[0]
+    r3 = conn.execute("SELECT id FROM story_library WHERE code = 'R003'").fetchone()[0]
+
+    r = client.post(f"/library/{r1}/to-experience", data={"csrf_token": token})
+    e = conn.execute("SELECT * FROM experiences WHERE from_library_id = ?", (r1,)).fetchone()
+    assert r.headers["Location"].endswith(f"/experiences/{e['id']}")
+    assert (e["user_confirmed"], e["about_person_id"], e["people"]) == (0, None, "나")   # 주인공(나) 이야기
+    assert e["story"] == "본문입니다." and e["when_text"] == "2025.03" and e["song"] == "가수 - 노래"
+    assert "각색 사연" in client.get(f"/experiences/{e['id']}").get_data(as_text=True)
+    # 다시 눌러도 하나만 만든다
+    client.post(f"/library/{r1}/to-experience", data={"csrf_token": token})
+    assert conn.execute("SELECT COUNT(*) FROM experiences WHERE from_library_id = ?", (r1,)).fetchone()[0] == 1
+
+    client.post(f"/library/{r3}/to-experience", data={"csrf_token": token})
+    wife = conn.execute("SELECT * FROM experiences WHERE from_library_id = ?", (r3,)).fetchone()
+    assert wife["about_person_id"] == person(conn, "와이프")["id"] and wife["people"] == "와이프"
+
+    # 확인 전에는 사연 재료로 쓰지 않는다
+    assert story.candidate_experiences(conn) == []
+    lib = client.get("/library").get_data(as_text=True)
+    assert lib.count("경험·확인 전") == 2
+    assert "확인 전 · 보내지 않음" in client.get(f"/library/{r1}").get_data(as_text=True)
+
+    # 사용자가 고치고 '실제로 있었던 일'을 체크하면 쓴다
+    client.post(f"/experiences/{wife['id']}", data={"csrf_token": token, "story": "고친 실제 이야기",
+                                                     "about_person_id": str(wife["about_person_id"]),
+                                                     "quote_kind": "none", "user_confirmed": "1"})
+    assert [x["id"] for x in story.candidate_experiences(conn, "SBS")] == [wife["id"]]
+    assert "경험·확인함" in client.get("/library").get_data(as_text=True)

@@ -308,6 +308,7 @@ _ADDED_COLUMNS = {
     "experiences": [
         ("gorilla_line", "TEXT"),                       # 공감로그용 한 줄 (사용자가 직접 씀, 200자 이내)
         ("about_person_id", "INTEGER"),                 # 누구 이야기인가 (화자는 늘 나, 비면 내 이야기)
+        ("from_library_id", "INTEGER"),                 # 사연 보관함에서 옮긴 경험 (사용자가 고치고 확인해야 씀)
     ],
     "quiz_schedules": [
         ("story_enabled", "INTEGER NOT NULL DEFAULT 1"),         # 사연·주제 모집도 듣기

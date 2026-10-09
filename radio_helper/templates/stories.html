@@ -54,7 +54,7 @@
 </div>
 
 <div class="panel table-wrap">
-  <h2>보낸 사연·처리 기록</h2>
+  <h2>보낸 사연·처리 기록 <a class="btn secondary" style="font-size:14px;margin-left:8px" href="{{ url_for('stories_sent') }}">보낸 사연 목록 (방송국별) →</a></h2>
   <table>
     <tr><th>#</th><th>프로그램 · 주제</th><th>보낸 글</th><th>경험</th><th>상태</th></tr>
     {% for p in recent %}
@@ -66,7 +66,7 @@
         <br><span class="muted">{{ p.sent_at or p.updated_at }}</span></td></tr>
     {% else %}<tr><td colspan="5" class="muted">없음</td></tr>{% endfor %}
   </table>
-  <p class="muted">한 경험은 한 번만 씁니다. 공감로그로 보낸 경험은 게시판 원고로 다시 제출하지 않습니다.</p>
+  <p class="muted">한 번 보낸 경험은 같은 방송국(SBS·MBC·KBS)에 다시 보내지 않습니다. 다른 방송국에는 보낼 수 있습니다.</p>
 </div>
 
 <div class="panel">

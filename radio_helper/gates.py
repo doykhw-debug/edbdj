@@ -127,6 +127,7 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
         result.blockers.append("원고가 승인되지 않았습니다. 사용자가 확인한 원고만 제출 대상입니다.")
     if not draft["fact_confirmed"]:
         result.blockers.append("원고의 사건·인물·결과가 실제와 같다는 확인이 없습니다.")
+    # 게시판은 SBS 뿐이다. 같은 방송국에 한 번 보낸 경험은 다시 보내지 않는다 (다른 방송국은 가능)
     active = conn.execute(
         "SELECT s.id, c.title AS corner_title, s.post_status FROM submissions s "
         "JOIN corners c ON c.id = s.corner_id "
@@ -136,10 +137,14 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
     for s in active:
         result.blockers.append(
             f"같은 경험이 이미 제출 이력 #{s['id']} ({s['corner_title']}, {STATUS_LABELS.get(s['post_status'], s['post_status'])})에 있습니다. "
-            "한 경험은 한 곳에만 보내고, 결과 불명이면 다시 보내지 않습니다.")
-    for sp in conn.execute("SELECT id, program FROM story_posts WHERE experience_id = ? "
+            "같은 방송국(SBS)에는 다시 보내지 않고, 결과 불명이어도 다시 보내지 않습니다.")
+    from .quizbot.story import post_broadcaster
+
+    for sp in conn.execute("SELECT * FROM story_posts WHERE experience_id = ? "
                            "AND status IN ('entered','posted','unknown')", (draft["experience_id"],)):
-        result.blockers.append(f"같은 경험을 고릴라 공감로그 사연 #{sp['id']} ({sp['program']})로 이미 보냈습니다.")
+        if post_broadcaster(conn, sp) == "SBS":
+            result.blockers.append(f"같은 경험을 SBS 사연 #{sp['id']} ({sp['program']})로 이미 보냈습니다. "
+                                   "같은 방송국에는 다시 보내지 않습니다.")
     result.blockers += [f.message for f in findings if f.level == checks.BLOCK]
     result.warnings += [f.message for f in findings if f.level == checks.WARN]
     return result

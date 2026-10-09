@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}보낸 사연 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>보낸 사연 <span class="muted">앱 채팅 · 문자 · 게시판</span></h1>
+<p class="muted">한 번 보낸 사연(경험)은 <b>같은 방송국</b>에 다시 보내지 않습니다. 다른 방송국에는 보낼 수 있습니다.
+보냈는지 모르는 글(결과 불명)도 보낸 것으로 봅니다. <a href="{{ url_for('stories') }}">← 사연</a></p>
+
+<div class="panel">
+  <div class="board-counts" style="margin-top:0">
+    <a href="{{ url_for('stories_sent') }}"><span class="badge {{ 'on' if not who }}">전체 {{ total }}</span></a>
+    {% for b, n in counts %}
+    <a href="{{ url_for('stories_sent', b=b) }}"><span class="badge info {{ 'on' if b == who }}">{{ b }} {{ n }}</span></a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="panel table-wrap">
+  <h2>보낸 글 {% if who %}<span class="muted">{{ who }}</span>{% endif %}</h2>
+  <table>
+    <tr><th>보낸 때</th><th>방송국 · 프로그램</th><th>보낸 글</th><th>경험</th><th>상태</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td style="white-space:nowrap">{{ (r.at or '')[:16] }}</td>
+      <td><b>{{ r.broadcaster }}</b><br><span class="muted">{{ r.where }}</span><br><span class="badge">{{ r.how }}</span></td>
+      <td>{% if r.topic %}<span class="muted">{{ r.topic }}</span><br>{% endif %}{{ r.text }}</td>
+      <td>{% if r.exp_id %}<a href="{{ url_for('experience_edit', eid=r.exp_id) }}">#{{ r.exp_id }} {{ r.exp_label or '' }}</a>
+          {% else %}<span class="muted">직접 쓴 글</span>{% endif %}</td>
+      <td><span class="badge {{ 'ok' if r.ok else 'warn' }}">{{ r.status }}</span></td>
+    </tr>
+    {% else %}<tr><td colspan="5" class="muted">아직 보낸 사연이 없습니다.</td></tr>{% endfor %}
+  </table>
+</div>
+
+<div class="panel table-wrap">
+  <h2>경험별로 보낸 방송국</h2>
+  <p class="muted">✓ 는 이미 보낸 방송국(다시 안 보냄), 빈칸은 아직 보낼 수 있는 방송국입니다. '실제로 있었던 일'로 확인한 경험만 나옵니다.</p>
+  <table>
+    <tr><th>경험</th>{% for b in columns %}<th style="text-align:center">{{ b }}</th>{% endfor %}</tr>
+    {% for e in matrix %}
+    <tr><td><a href="{{ url_for('experience_edit', eid=e.id) }}">#{{ e.id }} {{ e.label }}</a></td>
+      {% for b in columns %}<td style="text-align:center">{% if b in e.sent %}<span class="badge ok">✓</span>{% endif %}</td>{% endfor %}</tr>
+    {% else %}<tr><td colspan="{{ columns | length + 1 }}" class="muted">확인한 실제 경험이 없습니다.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

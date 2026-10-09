@@ -1,6 +1,7 @@
 """사연·주제 모집 → 내 실제 경험으로 공감로그 글 만들기 (확인 후 전송).
 
-- 사용자가 '실제로 있었던 일'로 확인한 경험만 쓴다. 이미 다른 곳에 보낸 경험은 쓰지 않는다.
+- 사용자가 '실제로 있었던 일'로 확인한 경험만 쓴다. 한 번 보낸 경험은 같은 방송국(SBS·MBC·KBS)에 다시 보내지 않는다.
+  (다른 방송국에는 보낼 수 있다)
 - Claude 에 보내기 전 '공개하지 않을 단어'와 경험별 '가릴 내용'을 ○○로 가린다.
 - 사용자가 직접 쓴 한 줄은 허용했을 때 자동으로 보낸다. AI 초안은 '사연 자동 전송'을 켜고 검사 경고가
   하나도 없을 때만 바로 보내고, 경고가 있으면 확인 대기로 남긴다.
@@ -42,18 +43,37 @@ def about_of(conn: sqlite3.Connection, exp) -> str | None:
     return row["alias"] or None
 
 
-def used_experience_ids(conn: sqlite3.Connection) -> set[int]:
-    used = {r[0] for r in conn.execute(
-        f"SELECT experience_id FROM story_posts WHERE experience_id IS NOT NULL AND status IN ({','.join('?' * len(ACTIVE))})",
-        ACTIVE)}
-    used |= {r[0] for r in conn.execute(
-        "SELECT experience_id FROM submissions WHERE post_status IN ('filled', 'posted', 'unknown')")}
-    return used
+def post_broadcaster(conn: sqlite3.Connection, post) -> str:
+    """공감로그·문자 사연이 간 방송국. 채널을 적지 않던 예전 기록은 프로그램의 채널로 본다."""
+    from . import config
+
+    channel = post["channel"] if "channel" in post.keys() else None
+    if not channel:
+        row = conn.execute("SELECT channel FROM programs WHERE title = ?", (post["program"],)).fetchone()
+        channel = row["channel"] if row else None
+    return config.broadcaster_of(channel)
 
 
-def candidate_experiences(conn: sqlite3.Connection) -> list[dict]:
-    """Claude 에 보낼 경험 목록 (확인됨·미사용, 가릴 단어는 ○○)."""
-    used = used_experience_ids(conn)
+def sent_broadcasters(conn: sqlite3.Connection) -> dict[int, set[str]]:
+    """경험 → 이미 보냈거나 보내려고 줄 세운(보냈는지 모르는 것 포함) 방송국들. 게시판은 SBS 뿐."""
+    out: dict[int, set[str]] = {}
+    for r in conn.execute(
+            f"SELECT * FROM story_posts WHERE experience_id IS NOT NULL AND status IN ({','.join('?' * len(ACTIVE))})",
+            ACTIVE):
+        out.setdefault(r["experience_id"], set()).add(post_broadcaster(conn, r))
+    for r in conn.execute("SELECT experience_id FROM submissions WHERE post_status IN ('filled', 'posted', 'unknown')"):
+        out.setdefault(r[0], set()).add("SBS")
+    return out
+
+
+def used_experience_ids(conn: sqlite3.Connection, broadcaster: str | None = None) -> set[int]:
+    """broadcaster 에 이미 보낸 경험. broadcaster 를 안 주면 어디로든 한 번이라도 보낸 경험."""
+    return {eid for eid, where in sent_broadcasters(conn).items() if broadcaster is None or broadcaster in where}
+
+
+def candidate_experiences(conn: sqlite3.Connection, broadcaster: str | None = None) -> list[dict]:
+    """Claude 에 보낼 경험 목록 (확인됨·이 방송국에 아직 안 보냄, 가릴 단어는 ○○)."""
+    used = used_experience_ids(conn, broadcaster)
     out = []
     for e in conn.execute("SELECT * FROM experiences WHERE user_confirmed = 1 ORDER BY id"):
         if e["id"] in used:

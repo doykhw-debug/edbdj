@@ -3,8 +3,9 @@
 {% block content %}
 <h1>사연 보관함 <span class="muted">가상 {{ counts.fiction }}편 · 실제 {{ counts.real }}편</span></h1>
 <p><a href="{{ url_for('people_page') }}">← 인물</a></p>
-<div class="flash warn">원본 사연을 각색해 인물에게 붙인 <b>가상 사연</b>은 읽기용입니다. 실제로 있었던 일이 아니라서 이 프로그램은 라디오로 보내지 않고,
-  사연 초안(AI)의 재료로도 쓰지 않습니다. 보내는 사연은 <a href="{{ url_for('experiences') }}">실제 경험</a>에서 만듭니다.</div>
+<div class="flash warn">원본 사연을 각색해 인물에게 붙인 <b>가상 사연</b>은 그대로는 보내지 않고, 사연 초안(AI)의 재료로도 쓰지 않습니다.
+  인물에게 실제로 비슷한 일이 있었다면 사연을 열어 <b>실제 있었던 일로 옮기기</b> → 실제와 다르게 적힌 부분을 고치고 '실제로 있었던 일'을 체크하면
+  <a href="{{ url_for('experiences') }}">실제 경험</a>으로 보냅니다 (같은 방송국에는 한 번만).</div>
 <form method="get" class="panel actions" style="margin-top:0">
   <select name="person" style="width:auto"><option value="">모든 인물</option>
     {% for p in people %}<option value="{{ p.id }}" {{ 'selected' if person == p.id }}>{{ p.name }}{{ ' (' ~ p.alias ~ ')' if p.alias and p.alias != p.name }}</option>{% endfor %}</select>
@@ -22,7 +23,8 @@
       <td>{% if s.person_id %}<a href="{{ url_for('person_page', pid=s.person_id) }}">{{ s.person_name }}</a>{% else %}{{ s.person_label or '' }}{% endif %}</td>
       <td class="muted">{{ s.event_date or '' }}</td>
       <td class="muted">{{ s.timing or '' }}</td>
-      <td>{% if s.kind == 'fiction' %}<span class="badge warn">가상</span>{% else %}<span class="badge ok">실제</span>{% endif %}</td></tr>
+      <td>{% if s.kind == 'fiction' %}<span class="badge warn">가상</span>{% else %}<span class="badge ok">실제</span>{% endif %}
+        {% if s.moved == 1 %}<br><span class="badge ok">경험·확인함</span>{% elif s.moved == 0 %}<br><span class="badge">경험·확인 전</span>{% endif %}</td></tr>
     {% else %}<tr><td colspan="6" class="muted">없음 — <a href="{{ url_for('import_page') }}">가져오기</a>에서 사연 로그(.jsonl)를 넣으세요.</td></tr>{% endfor %}
   </table>
 </div>

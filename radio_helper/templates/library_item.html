@@ -4,8 +4,21 @@
 <h1>{{ s.code }} {{ s.title }}</h1>
 <p><a href="{{ url_for('library') }}">← 사연 보관함</a>{% if s.person_id %} · <a href="{{ url_for('person_page', pid=s.person_id) }}">{{ s.person_name }}</a>{% endif %}</p>
 {% if s.kind == 'fiction' %}
-<div class="flash warn"><b>가상(각색) 사연</b>{% if s.origin %} — 원본: {{ s.origin }}{% endif %}. 실제로 있었던 일이 아니라서 이 프로그램은 보내지 않습니다.</div>
+<div class="flash warn"><b>가상(각색) 사연</b>{% if s.origin %} — 원본: {{ s.origin }}{% endif %}. 이대로는 보내지 않습니다.</div>
 {% endif %}
+<div class="panel">
+  {% if moved %}
+  <p>경험 <a href="{{ url_for('experience_edit', eid=moved.id) }}">#{{ moved.id }}</a>로 옮겼습니다 —
+    {% if moved.user_confirmed %}<span class="badge ok">실제로 있었던 일로 확인함</span>{% else %}<span class="badge warn">확인 전 · 보내지 않음</span>{% endif %}</p>
+  {% else %}
+  <form method="post" action="{{ url_for('library_to_experience', lid=s.id) }}" class="actions" style="margin-top:0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="secondary">실제 있었던 일로 옮기기</button>
+    <span class="muted">이 인물에게 실제로 비슷한 일이 있었을 때만 쓰세요. 경험으로 복사되며, 실제와 다른 부분을 고치고
+      '실제로 있었던 일'을 체크해야 사연으로 보냅니다.</span>
+  </form>
+  {% endif %}
+</div>
 <div class="panel">
   <div class="row3 muted">
     <div>인물: {{ s.person_alias or s.person_label or '' }}</div>

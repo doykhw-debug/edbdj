@@ -895,6 +895,14 @@ def create_app(data_dir: str | None = None) -> Flask:
         else:
             source = "ai" if message == post["message"] else "edited"
         warnings = story.message_checks(g.conn, message, exp, source)
+        if exp is not None:
+            here = story.post_broadcaster(g.conn, post)
+            for other in g.conn.execute("SELECT * FROM story_posts WHERE experience_id = ? AND id != ? "
+                                        "AND status IN ('entered','posted','unknown')", (exp["id"], pid)):
+                if story.post_broadcaster(g.conn, other) == here:
+                    warnings.append({"level": "block", "message": f"이 경험은 {here}에 이미 보냈습니다 (사연 #{other['id']}, "
+                                                                  f"{other['program']}). 같은 방송국에는 다시 보내지 않습니다."})
+                    break
         g.conn.execute("UPDATE story_posts SET message = ?, source = ?, warnings = ?, updated_at = ? WHERE id = ?",
                        (message, source, json.dumps(warnings, ensure_ascii=False), db.now(), pid))
         if story.has_block(warnings):
@@ -947,6 +955,45 @@ def create_app(data_dir: str | None = None) -> Flask:
         }
         return render_template("stories.html", pending=[(p, json.loads(p["warnings"] or "[]")) for p in pending],
                                recent=recent, counts=counts)
+
+    @app.get("/stories/sent")
+    def stories_sent():
+        """보낸 사연 목록: 앱 채팅·문자·게시판으로 보낸 글을 방송국별로, 경험마다 보낸 방송국을 한눈에."""
+        from .quizbot import story
+
+        who = request.args.get("b", "")
+        rows = []
+        for sp in g.conn.execute(
+                """SELECT sp.*, e.label AS exp_label FROM story_posts sp LEFT JOIN experiences e ON e.id = sp.experience_id
+                   WHERE sp.status IN ('entered', 'posted', 'unknown')"""):
+            rows.append({"at": sp["sent_at"] or sp["updated_at"], "broadcaster": story.post_broadcaster(g.conn, sp),
+                         "where": " · ".join(x for x in (sp["channel"], sp["program"]) if x),
+                         "how": qconfig.app_label(sp["sent_via"]) if sp["sent_via"] in qconfig.CHAT_APPS
+                         else ("문자" if sp["sent_via"] == "sms" else "앱 채팅"),
+                         "status": quiz.ENTRY_LABELS.get(sp["status"], sp["status"]), "ok": sp["status"] == "posted",
+                         "topic": sp["topic"], "text": sp["message"], "exp_id": sp["experience_id"],
+                         "exp_label": sp["exp_label"]})
+        for sub in g.conn.execute(
+                """SELECT s.*, c.program, c.title AS corner_title, e.label AS exp_label FROM submissions s
+                   JOIN corners c ON c.id = s.corner_id LEFT JOIN experiences e ON e.id = s.experience_id
+                   WHERE s.post_status IN ('filled', 'posted', 'unknown')"""):
+            rows.append({"at": sub["updated_at"], "broadcaster": "SBS", "where": sub["program"],
+                         "how": f"게시판 · {sub['corner_title']}", "status": STATUS_LABELS.get(sub["post_status"],
+                                                                                        sub["post_status"]),
+                         "ok": sub["post_status"] == "posted", "topic": sub["title"] or "", "text": sub["body"] or "",
+                         "exp_id": sub["experience_id"], "exp_label": sub["exp_label"]})
+        rows.sort(key=lambda r: r["at"] or "", reverse=True)
+        order = list(qconfig.BROADCASTERS)
+        counts = [(b, sum(1 for r in rows if r["broadcaster"] == b))
+                  for b in sorted({r["broadcaster"] for r in rows}, key=lambda b: (order.index(b) if b in order else 9, b))]
+        shown = [r for r in rows if not who or r["broadcaster"] == who]
+        used = story.sent_broadcasters(g.conn)
+        others = sorted({b for where in used.values() for b in where} - set(qconfig.BROADCASTERS))
+        columns = list(qconfig.BROADCASTERS) + others
+        matrix = [{"id": e["id"], "label": e["label"] or (e["story"] or "")[:30], "sent": used.get(e["id"], set())}
+                  for e in g.conn.execute("SELECT * FROM experiences WHERE user_confirmed = 1 ORDER BY id")]
+        return render_template("stories_sent.html", rows=shown, total=len(rows), counts=counts, who=who,
+                               columns=columns, matrix=matrix)
 
     @app.get("/inspect-image/<name>")
     def inspect_image(name):
@@ -1084,7 +1131,9 @@ def create_app(data_dir: str | None = None) -> Flask:
             where.append("(l.title LIKE ? OR l.body LIKE ? OR l.summary LIKE ?)")
             params += [f"%{q}%"] * 3
         rows = g.conn.execute(
-            "SELECT l.*, p.name AS person_name, p.alias AS person_alias FROM story_library l "
+            "SELECT l.*, p.name AS person_name, p.alias AS person_alias, "
+            "(SELECT MAX(user_confirmed) FROM experiences e WHERE e.from_library_id = l.id) AS moved "
+            "FROM story_library l "
             "LEFT JOIN people p ON p.id = l.person_id" + (" WHERE " + " AND ".join(where) if where else "")
             + " ORDER BY l.code, l.id", params).fetchall()
         return render_template("library.html", rows=rows, people=people_options(), person=person, kind=kind, q=q,
@@ -1095,7 +1144,35 @@ def create_app(data_dir: str | None = None) -> Flask:
     def library_item(lid):
         item = one("SELECT l.*, p.name AS person_name, p.alias AS person_alias FROM story_library l "
                    "LEFT JOIN people p ON p.id = l.person_id WHERE l.id = ?", lid)
-        return render_template("library_item.html", s=item)
+        moved = g.conn.execute("SELECT id, user_confirmed FROM experiences WHERE from_library_id = ? ORDER BY id LIMIT 1",
+                               (lid,)).fetchone()
+        return render_template("library_item.html", s=item, moved=moved)
+
+    @app.post("/library/<int:lid>/to-experience")
+    def library_to_experience(lid):
+        """보관함 사연 하나를 '확인 전' 실제 경험으로 옮긴다. 사용자가 실제와 다른 부분을 고치고 확인해야 쓰인다."""
+        item = one("SELECT * FROM story_library WHERE id = ?", lid)
+        moved = g.conn.execute("SELECT id FROM experiences WHERE from_library_id = ?", (lid,)).fetchone()
+        if moved:
+            return redirect(url_for("experience_edit", eid=moved["id"]))
+        person = g.conn.execute("SELECT id, alias, side FROM people WHERE id = ?", (item["person_id"],)).fetchone() \
+            if item["person_id"] else None
+        about = person["id"] if person and person["side"] != "self" else None
+        body = (item["body"] or "").strip()
+        intro = (item["intro"] or "").strip().rstrip(".,")
+        if intro and body.startswith(intro):   # '제 와이프 이야기인데요'는 원고를 만들 때 다시 붙인다
+            body = body[len(intro):].lstrip(" ,.\n")
+        cur = g.conn.execute(
+            """INSERT INTO experiences (label, when_text, people, story, highlight, quote_kind, song, about_person_id,
+                   from_library_id, user_confirmed, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 'none', ?, ?, ?, 0, ?, ?)""",
+            ((item["title"] or "")[:60], item["event_date"] or "", (person["alias"] if about else "나") or "",
+             body, item["summary"] or "", item["song"] or "", about, lid, db.now(), db.now()))
+        g.conn.commit()
+        db.log(g.conn, "record", f"사연 보관함 {item['code'] or lid} → 경험 #{cur.lastrowid} (확인 전)")
+        flash("경험으로 옮겼습니다. 실제로 있었던 일과 다른 부분을 고친 뒤, 맞을 때만 '실제로 있었던 일'을 체크하고 저장하세요. "
+              "체크하기 전에는 보내지 않습니다.", "warn")
+        return redirect(url_for("experience_edit", eid=cur.lastrowid))
 
     @app.post("/quizbot/tool")
     def quizbot_tool():
