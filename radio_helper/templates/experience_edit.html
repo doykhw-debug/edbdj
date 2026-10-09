@@ -3,6 +3,10 @@
 {% block content %}
 {% set e = e or {} %}
 <h1>{{ '경험 #' ~ eid if eid else '새 경험' }}</h1>
+{% if e.from_event %}
+<div class="flash">인물 관계도의 실제 사건에서 옮긴 경험입니다. 기억나는 장면·말·결말을 덧붙이면 사연이 더 살아납니다.
+  실제와 같으면 '실제로 있었던 일'을 체크하고 저장하세요.</div>
+{% endif %}
 {% if e.from_library_id %}
 <div class="flash warn">사연 보관함의 <a href="{{ url_for('library_item', lid=e.from_library_id) }}">각색 사연</a>에서 옮긴 경험입니다.
   실제로 있었던 일과 다르게 적힌 부분(시기·장소·대사·결말)을 고친 뒤, 실제와 같을 때만 '실제로 있었던 일'을 체크하세요.</div>

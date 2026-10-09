@@ -4,8 +4,8 @@
   관계 호칭으로 시작해 쓴다. 사연과 AI 요청에는 실명 대신 '호칭'만 쓴다.
 - 인물 관계도 파일(character-map.md)에서 인물 카드·실제 사건(연표)을 가져온다.
   〔사연〕 태그의 가상 사건은 인물 카드에 넣지 않는다.
-- 사연 로그(.jsonl)는 '사연 보관함'에 넣는다. 원본 사연을 각색한 가상 사연(fiction)은 읽기용이며,
-  실제로 있었던 일이 아니므로 이 프로그램은 보내지 않는다.
+- 사연 로그(.jsonl)는 '사연 보관함'에 넣는다. 원본 사연을 각색한 가상 사연(fiction)은 그대로는 보내지 않는다.
+- 인물의 실제 사건은 '확인 전' 경험으로 한 번에 옮길 수 있고, 사용자가 사건마다 확인해야 사연에 쓴다.
 """
 
 from __future__ import annotations
@@ -204,6 +204,55 @@ def import_people(conn: sqlite3.Connection, people: list[Person]) -> tuple[int, 
             added += 1
     conn.commit()
     return added, updated
+
+
+# ── 실제 사건 → 경험 ──────────────────────────────────────────────────
+SKIP_EVENT_TAGS = {"사연", "임의"}   # 가상 사건·근거 없는 사건은 옮기지 않는다 (가져올 때도 이미 뺌)
+
+
+def event_key(person_id: int, ev: dict) -> str:
+    return f"{person_id}|{ev.get('when') or ''}|{(ev.get('text') or '').strip()}"
+
+
+def events_to_experiences(conn: sqlite3.Connection, person_id: int | None = None,
+                          dry_run: bool = False) -> tuple[int, int]:
+    """인물 관계도의 실제 사건(대화·통화 등으로 확인한 연표)을 '확인 전' 경험으로 한 번에 옮긴다.
+
+    이미 옮겼거나 같은 시기·내용으로 만든 경험이 있으면 건너뛴다. 사용자가 사건마다 확인해야 사연에 쓴다.
+    (새로 만든 수, 건너뛴 수). dry_run 이면 세기만 한다."""
+    people = conn.execute("SELECT * FROM people" + (" WHERE id = ?" if person_id else "") + " ORDER BY sort, id",
+                          (person_id,) if person_id else ()).fetchall()
+    moved = {r[0] for r in conn.execute("SELECT from_event FROM experiences WHERE from_event IS NOT NULL")}
+    added = skipped = 0
+    for p in people:
+        about = None if p["side"] == "self" else p["id"]
+        made = {(r["when_text"] or "", (r["label"] or "")[:30]) for r in conn.execute(
+            "SELECT when_text, label FROM experiences WHERE " +
+            ("about_person_id IS NULL" if about is None else "about_person_id = ?"), () if about is None else (about,))}
+        for ev in json.loads(p["events"] or "[]"):
+            text = (ev.get("text") or "").strip()
+            if not text or ev.get("tag") in SKIP_EVENT_TAGS:
+                continue
+            key = event_key(p["id"], ev)
+            if key in moved or ((ev.get("when") or ""), text[:30]) in made:
+                skipped += 1
+                continue
+            if not dry_run:
+                conn.execute(
+                    """INSERT INTO experiences (label, when_text, people, story, quote_kind, about_person_id, from_event,
+                           user_confirmed, created_at, updated_at) VALUES (?, ?, ?, ?, 'none', ?, ?, 0, ?, ?)""",
+                    (text[:60], ev.get("when") or "", "나" if about is None else (p["alias"] or ""), text, about, key,
+                     db.now(), db.now()))
+            moved.add(key)
+            added += 1
+    if not dry_run:
+        conn.commit()
+    return added, skipped
+
+
+def events_left(conn: sqlite3.Connection, person_id: int | None = None) -> int:
+    """아직 경험으로 옮기지 않은 실제 사건 수."""
+    return events_to_experiences(conn, person_id, dry_run=True)[0]
 
 
 # ── 사연 로그 읽기 ────────────────────────────────────────────────────

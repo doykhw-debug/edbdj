@@ -5,15 +5,27 @@
 <p class="muted">제목과 완성된 글은 쓰지 않아도 됩니다. 실제 있었던 일을 편하게 적으면 됩니다. 처음에는 서로 다른 경험 3건이면 충분합니다.</p>
 <div class="actions" style="margin-bottom:12px"><a class="btn" href="{{ url_for('experience_edit') }}">+ 경험 추가</a>
   <a class="btn secondary" href="{{ url_for('import_page') }}">가져오기 (파일)</a></div>
-<div class="panel table-wrap">
+{% if pending_events %}
+<div class="flash warn">인물 관계도 실제 사건에서 옮긴 경험 <b>{{ pending_events }}건</b>이 확인 전입니다.
+  {% if only != 'events' %}<a href="{{ url_for('experiences', only='events') }}">확인 전 사건만 보기</a> · {% endif %}
+  사건마다 내용이 맞는지 보고 체크한 뒤 아래 <b>체크한 사건 확인</b>을 누르세요. 확인한 것만 사연에 씁니다.</div>
+{% endif %}
+{% if only == 'events' %}<p><a href="{{ url_for('experiences') }}">← 모든 경험 보기</a></p>{% endif %}
+<form method="post" action="{{ url_for('experiences_confirm') }}" class="panel table-wrap">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="only" value="{{ only }}">
 <table>
-  <tr><th>#</th><th>경험</th><th>사실 확인</th><th>제출 이력</th><th>수정일</th></tr>
+  <tr><th>#</th><th>경험</th><th>사실 확인{% if pending_events %}<br><label class="inline" style="font-weight:normal">
+    <input type="checkbox" onclick="document.querySelectorAll('input[name=eid]').forEach(c => c.checked = this.checked)"> 모두 체크</label>{% endif %}</th>
+    <th>제출 이력</th><th>수정일</th></tr>
   {% for e in rows %}
   <tr>
     <td>{{ e.id }}</td>
     <td><a href="{{ url_for('experience_edit', eid=e.id) }}">{{ e.label or (e.story[:40] ~ ('…' if e.story|length > 40 else '')) }}</a>
-      {% if e.when_text %}<br><span class="muted">{{ e.when_text }}</span>{% endif %}</td>
-    <td>{% if e.user_confirmed %}<span class="badge ok">실제 있었던 일</span>{% else %}<span class="badge warn">미확인</span>{% endif %}</td>
+      <br><span class="muted">{{ e.when_text or '' }}{% if e.about_alias %} · {{ e.about_alias }} 이야기{% endif %}</span>
+      {% if e.from_event %}<span class="badge">관계도 사건</span>{% elif e.from_library_id %}<span class="badge">보관함에서 옮김</span>{% endif %}</td>
+    <td>{% if e.user_confirmed %}<span class="badge ok">실제 있었던 일</span>
+      {% elif e.from_event %}<label class="inline"><input type="checkbox" name="eid" value="{{ e.id }}"> 실제 있었던 일 맞음</label>
+      {% else %}<span class="badge warn">미확인</span>{% endif %}</td>
     <td>{% if e.used %}<span class="badge info">사용함 {{ e.used }}</span>{% else %}<span class="muted">없음</span>{% endif %}</td>
     <td class="muted">{{ e.updated_at[:10] }}</td>
   </tr>
@@ -21,5 +33,7 @@
   <tr><td colspan="5" class="muted">아직 저장한 경험이 없습니다.</td></tr>
   {% endfor %}
 </table>
-</div>
+{% if pending_events %}<div class="actions"><button>체크한 사건 확인 (실제로 있었던 일)</button>
+  <span class="muted">체크하지 않은 사건은 그대로 '확인 전'으로 남고 보내지 않습니다.</span></div>{% endif %}
+</form>
 {% endblock %}

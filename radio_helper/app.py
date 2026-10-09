@@ -406,13 +406,33 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.get("/experiences")
     def experiences():
+        only = request.args.get("only", "")
         rows = g.conn.execute(
-            """SELECT e.*, (SELECT COUNT(*) FROM submissions s WHERE s.experience_id = e.id
+            """SELECT e.*, p.alias AS about_alias, (SELECT COUNT(*) FROM submissions s WHERE s.experience_id = e.id
                             AND s.post_status IN ('filled','posted','unknown'))
                          + (SELECT COUNT(*) FROM story_posts sp WHERE sp.experience_id = e.id
                             AND sp.status IN ('entered','posted','unknown')) AS used
-               FROM experiences e ORDER BY e.id DESC""").fetchall()
-        return render_template("experiences.html", rows=rows)
+               FROM experiences e LEFT JOIN people p ON p.id = e.about_person_id"""
+            + (" WHERE e.from_event IS NOT NULL AND e.user_confirmed = 0" if only == "events" else "")
+            + " ORDER BY e.id DESC").fetchall()
+        pending_events = g.conn.execute(
+            "SELECT COUNT(*) FROM experiences WHERE from_event IS NOT NULL AND user_confirmed = 0").fetchone()[0]
+        return render_template("experiences.html", rows=rows, only=only, pending_events=pending_events)
+
+    @app.post("/experiences/confirm")
+    def experiences_confirm():
+        """관계도 실제 사건에서 옮긴 경험 중 사용자가 하나씩 체크한 것만 '실제로 있었던 일'로 확인한다."""
+        ids = [int(x) for x in request.form.getlist("eid") if x.isdigit()]
+        n = 0
+        for eid in ids:
+            n += g.conn.execute("UPDATE experiences SET user_confirmed = 1, updated_at = ? WHERE id = ? "
+                                "AND from_event IS NOT NULL AND user_confirmed = 0", (db.now(), eid)).rowcount
+        g.conn.commit()
+        if n:
+            db.log(g.conn, "record", f"관계도 실제 사건 경험 {n}건을 '실제로 있었던 일'로 확인 (사용자)")
+        flash(f"{n}건을 '실제로 있었던 일'로 확인했습니다. 이제 사연 재료로 씁니다." if n else "체크한 사건이 없습니다.",
+              "message" if n else "warn")
+        return redirect(url_for("experiences", only=form("only")))
 
     @app.route("/experiences/new", methods=["GET", "POST"])
     @app.route("/experiences/<int:eid>", methods=["GET", "POST"])
@@ -1090,7 +1110,24 @@ def create_app(data_dir: str | None = None) -> Flask:
         own = g.conn.execute("SELECT COUNT(*) FROM experiences WHERE about_person_id IS NULL").fetchone()[0]
         return render_template("people.html", d=people_mod.diagram(rows) if rows else None, groups=groups,
                                sides=people_mod.SIDES, total=len(rows), own_experiences=own,
-                               library_n=g.conn.execute("SELECT COUNT(*) FROM story_library").fetchone()[0])
+                               library_n=g.conn.execute("SELECT COUNT(*) FROM story_library").fetchone()[0],
+                               events_left=people_mod.events_left(g.conn) if rows else 0)
+
+    @app.post("/people/events-to-experiences")
+    def people_events_to_experiences():
+        from . import people as people_mod
+
+        pid = request.form.get("person", type=int)
+        if pid:
+            one("SELECT id FROM people WHERE id = ?", pid)
+        added, skipped = people_mod.events_to_experiences(g.conn, pid)
+        if added:
+            db.log(g.conn, "record", f"관계도 실제 사건 {added}건 → 확인 전 경험")
+            flash(f"실제 사건 {added}건을 '확인 전' 경험으로 옮겼습니다" + (f" (이미 있던 {skipped}건은 건너뜀)" if skipped else "")
+                  + ". 사건마다 내용을 보고 맞는 것만 체크해 확인하세요. 확인한 것만 사연에 씁니다.")
+        else:
+            flash("새로 옮길 실제 사건이 없습니다" + (f" (이미 옮긴 {skipped}건)" if skipped else "") + ".", "warn")
+        return redirect(url_for("experiences", only="events"))
 
     @app.route("/people/<int:pid>", methods=["GET", "POST"])
     def person_page(pid):
@@ -1105,7 +1142,9 @@ def create_app(data_dir: str | None = None) -> Flask:
             g.conn.commit()
             flash("저장했습니다.")
             return redirect(url_for("person_page", pid=pid))
-        exps = g.conn.execute("SELECT * FROM experiences WHERE about_person_id = ? ORDER BY id DESC", (pid,)).fetchall()
+        exps = g.conn.execute(
+            "SELECT * FROM experiences WHERE " + ("about_person_id IS NULL" if p["side"] == "self" else "about_person_id = ?")
+            + " ORDER BY id DESC", () if p["side"] == "self" else (pid,)).fetchall()
         library_rows = g.conn.execute("SELECT id, code, title, event_date, kind FROM story_library WHERE person_id = ? "
                                       "ORDER BY code", (pid,)).fetchall()
         events = json.loads(p["events"] or "[]")
@@ -1113,6 +1152,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         made = {(e["when_text"] or "", (e["label"] or "")[:30]) for e in exps}
         return render_template("person.html", p=p, details=json.loads(p["details"] or "[]"), events=events, made=made,
                                exps=exps, library=library_rows, sides=people_mod.SIDES,
+                               events_left=people_mod.events_left(g.conn, pid),
                                intro=people_mod.intro_for(p["alias"] if p["side"] != "self" else None))
 
     @app.get("/library")

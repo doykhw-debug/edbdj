@@ -20,6 +20,12 @@
 
 <div class="panel">
   <h2>실제 사건 <span class="muted">대화·통화에서 확인한 일 · 경험으로 만들면 '실제로 있었던 일'을 확인한 뒤 사연에 씀</span></h2>
+  {% if events_left %}
+  <form method="post" action="{{ url_for('people_events_to_experiences') }}" class="actions" style="margin:0 0 8px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="person" value="{{ p.id }}">
+    <button class="secondary">이 사람의 실제 사건 {{ events_left }}건 모두 경험으로 옮기기</button>
+  </form>
+  {% endif %}
   {% for ev in events %}
   <div class="event-row">
     <span class="muted" style="min-width:72px">{{ ev.when }}</span>
