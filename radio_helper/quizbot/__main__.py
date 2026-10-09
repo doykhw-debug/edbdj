@@ -36,6 +36,22 @@ def say(msg: str) -> None:
     print(msg, flush=True)
 
 
+def lower_priority() -> bool:
+    """받아쓰기가 CPU 를 많이 써도 라디오 재생(고릴라 앱)이 먼저 돌도록 이 프로세스를 '낮음' 우선순위로 둔다."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel32.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        return bool(kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x4000))  # BELOW_NORMAL_PRIORITY_CLASS
+    except Exception:
+        return False
+
+
 def cmd_run(conn) -> int:
     lock = config.instance_lock("quizbot_run")
     if lock is None:
@@ -360,6 +376,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
+    if args.command in ("run", "stt-test", "gpu-check"):
+        lower_priority()
     if args.command == "gpu-check":
         return cmd_gpu_check()
     conn = db.connect()

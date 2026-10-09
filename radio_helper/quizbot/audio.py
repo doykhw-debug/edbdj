@@ -108,8 +108,20 @@ class LoopbackRecorder:
                 self._stream.stop_stream()
                 self._stream.close()
         finally:
+            self._stream = None
             if self._pa is not None:
                 self._pa.terminate()
+                self._pa = None
+
+    def reopen(self) -> str:
+        """녹음 장치를 닫고 다시 연다. 그사이 기본 스피커가 바뀌었으면(이어폰·블루투스 연결 끊김 등)
+        새 스피커로 녹음한다. 장치 목록은 다시 열어야 새로 읽히므로 소리가 끊겼을 때만 부른다."""
+        try:
+            self.__exit__(None, None, None)
+        except Exception:
+            self._stream = self._pa = None
+        self.__enter__()
+        return self.device_name
 
     def read_chunk(self) -> np.ndarray:
         """chunk_seconds 만큼 모아 돌려준다. 아무 소리도 재생되지 않으면 루프백은 데이터를 주지 않으므로

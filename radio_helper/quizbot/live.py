@@ -14,7 +14,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from .. import db
-from . import config
+from . import config, silence
 from .detector import is_gift_signal, is_quiz_signal, is_story_signal
 
 WEEKDAY = "월화수목금토일"
@@ -223,6 +223,7 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
         "last_chunk": _json_setting(conn, "quizbot.last_chunk") if active else None,
         "stt_test": stt_test,
         "quiz_text": last_quiz_text(conn, now),
+        "silence_text": silence.banner(db.get_setting(conn, "quizbot.silent_since")) if status == "collecting" else "",
     }
 
 

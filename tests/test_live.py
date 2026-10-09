@@ -139,7 +139,7 @@ def test_live_listens_any_channel_and_sends_quiz(conn):
     rows = conn.execute("SELECT DISTINCT channel, program FROM transcripts").fetchall()
     assert [tuple(r) for r in rows] == [("러브FM", "러브FM 방송")]
     assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 12
-    assert recorders[0].on_level == r.report_level  # 녹음 중 소리 크기를 화면에 알린다
+    assert recorders[0].on_level == r.on_second  # 녹음 중 소리 크기를 화면에 알리고 끊김을 살핀다
     assert db.get_setting(conn, "quizbot.level_at")
     chunk = json.loads(db.get_setting(conn, "quizbot.last_chunk"))   # '마지막 녹음' 줄 (말소리가 없어도 갱신)
     assert chunk["text"] == "음악이 흐릅니다" and chunk["level"] > 0

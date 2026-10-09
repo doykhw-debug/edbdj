@@ -15,6 +15,7 @@
   <div class="meter" title="PC에서 나오는 소리 크기"><div id="live-meter" style="width:{{ vm.level }}%"></div></div>
   <div id="live-state" class="muted">{{ vm.state or ('청취 시작을 누르면 PC 소리를 자막으로 바꾸기 시작합니다.' if not vm.active else '') }}</div>
   <div id="last-chunk" class="last-chunk">{{ vm.chunk_text }}</div>
+  <div id="silence" class="flash error" style="margin:0" {{ 'hidden' if not vm.silence_text }}>{{ vm.silence_text }}</div>
   <div id="last-quiz" class="last-quiz" {{ 'hidden' if not vm.quiz_text }}><a href="{{ url_for('quizzes') }}">{{ vm.quiz_text }}</a></div>
   <div id="stalled" class="flash error" style="margin:0;{{ '' if vm.status == 'stalled' else 'display:none' }}">
     듣기 실행기 신호가 없습니다 (꺼졌거나 멈춤). 아래 <b>실행기 기록</b>에서 원인을 확인하고 <b>↻ 다시 시작</b>을 누르세요.
@@ -184,6 +185,8 @@
     el('live-meter').style.width = vm.level + '%';
     el('live-state').textContent = vm.state || '';
     el('last-chunk').textContent = vm.chunk_text || '';
+    el('silence').hidden = !vm.silence_text;
+    el('silence').textContent = vm.silence_text || '';
     el('last-quiz').hidden = !vm.quiz_text;
     el('last-quiz').firstChild.textContent = vm.quiz_text || '';
     el('stalled').style.display = vm.status === 'stalled' ? '' : 'none';

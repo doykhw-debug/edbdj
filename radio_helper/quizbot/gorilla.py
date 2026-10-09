@@ -12,6 +12,11 @@ SBS 고릴라(공감로그)·MBC mini·KBS 콩 모두 같은 방식이다. 설�
   coords : '위치 지정'으로 저장한 입력칸·전송 버튼 위치(창 크기 대비 비율)를 클릭한다. 결과 확인은 못 한다.
 
 전송 중에는 고릴라 창이 잠깐 맨 앞으로 나온다. 끝나면 원래 쓰던 창과 클립보드를 되돌린다.
+
+엉뚱한 곳을 누르지 않게 (라디오가 멈추거나 다른 프로그램에 키가 들어가는 것을 막음)
+  - 누를 자리를 다른 창(자막 창·플레이어 창·다른 프로그램)이 가리고 있으면 누르지 않는다.
+  - 위치 클릭 방식은 창 크기·자리가 위치를 지정할 때와 많이 다르면 누르지 않는다.
+  - 지우기·붙여넣기·Enter 키는 그 창이 맨 앞에 있을 때만 보낸다.
 """
 
 from __future__ import annotations
@@ -35,6 +40,9 @@ TITLE_HINT = re.compile(r"고릴라|gorealra|공감로그|\bmini\b|미니|\bkong
 PROCESS_HINT = re.compile(r"gorealra|gorilla|고릴라|mbcmini|\bmini|kong", re.I)
 CHAT_INPUT_HINT = re.compile(r"공감로그|글쓰기")
 SEND_BUTTON_HINT = re.compile(r"^\s*(전송|보내기|등록)\s*$")
+LAYOUT_TOLERANCE = 0.1   # 창 크기가 위치 지정 때보다 이 비율(그리고 LAYOUT_MIN_PX)보다 많이 달라지면 위치 클릭을 하지 않는다
+LAYOUT_MIN_PX = 40
+FRONT_WAIT_SECONDS = 1.0  # 클릭한 창이 맨 앞으로 올 때까지 기다리는 시간
 
 
 @dataclass
@@ -70,6 +78,36 @@ def judge_result(mode: str, input_after: str | None, text: str, seen_in_chat: bo
     if input_after is not None and text not in input_after:
         return SendResult("entered", "입력칸이 비워져 전송된 것으로 보임 (채팅 목록에서는 확인 못 함)")
     return SendResult("unknown", "전송 후에도 입력칸에 글자가 남아 있거나 확인할 수 없음")
+
+
+def size_changed(saved: str | None, rect: tuple[int, int, int, int]) -> str | None:
+    """위치를 지정할 때 잰 창 크기("너비,높이")와 지금 크기가 많이 다르면 안내 문구. 같거나 모르면 None."""
+    try:
+        sw, sh = (int(float(v)) for v in (saved or "").split(","))
+    except ValueError:
+        return None
+    w, h = rect[2] - rect[0], rect[3] - rect[1]
+    if abs(w - sw) > max(LAYOUT_MIN_PX, sw * LAYOUT_TOLERANCE) or \
+            abs(h - sh) > max(LAYOUT_MIN_PX, sh * LAYOUT_TOLERANCE):
+        return f"창 크기가 위치를 지정할 때({sw}×{sh})와 다릅니다(지금 {w}×{h})"
+    return None
+
+
+def window_moved(saved: str | None, rect: tuple[int, int, int, int]) -> str | None:
+    """영역을 지정할 때 그 자리에 있던 창("왼,위,오른,아래")이 옮겨졌거나 크기가 바뀌었으면 안내 문구."""
+    before = parse_rect(saved)
+    if not before:
+        return None
+    if any(abs(a - b) > LAYOUT_MIN_PX for a, b in zip(before, rect)):
+        return "창이 영역을 지정할 때와 다른 자리·크기에 있습니다"
+    return None
+
+
+def covered_by(info: dict, handle: int | None) -> str | None:
+    """누를 자리(window_at_point 결과)에 대상 창이 아닌 다른 창이 있으면 그 창 설명. 대상 창이면 None."""
+    if not handle or info.get("hwnd") == handle:
+        return None
+    return f"'{(info.get('title') or '제목 없음')[:30]}'({info.get('process') or '프로그램 미확인'})"
 
 
 def is_excluded(title: str, process: str) -> bool:
@@ -133,26 +171,71 @@ def _dpi_aware() -> None:
         pass
 
 
-def window_at_point(x: int, y: int) -> dict:
-    """화면 좌표 (x, y)에 있는 최상위 창 정보 (화면 요소가 안 보이는 앱도 됨)."""
+def _user32():
+    """창 번호(HWND)가 잘리지 않도록 형식을 지정한 user32."""
     import ctypes
     from ctypes import wintypes
 
     user32 = ctypes.windll.user32
     user32.WindowFromPoint.argtypes = [wintypes.POINT]
     user32.WindowFromPoint.restype = wintypes.HWND
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    return user32
+
+
+def window_at_point(x: int, y: int) -> dict:
+    """화면 좌표 (x, y)에 있는 최상위 창 정보 (화면 요소가 안 보이는 앱도 됨)."""
+    from ctypes import wintypes
+
+    _dpi_aware()  # 클릭(pywinauto)과 같은 물리 좌표로 본다
+    user32 = _user32()
     hwnd = user32.WindowFromPoint(wintypes.POINT(x, y))
     root = user32.GetAncestor(hwnd, 2) if hwnd else None  # GA_ROOT
     if not root:
         raise GorillaError("그 위치에서 창을 찾지 못했습니다.")
+    info = window_info(root)
+    info["point"] = (x, y)
+    return info
+
+
+def window_info(root: int) -> dict:
+    """최상위 창 번호 → 제목·프로그램 이름·화면 좌표."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = _user32()
+    h = wintypes.HWND(root)
     rect = wintypes.RECT()
-    user32.GetWindowRect(root, ctypes.byref(rect))
+    user32.GetWindowRect(h, ctypes.byref(rect))
     buf = ctypes.create_unicode_buffer(512)
-    user32.GetWindowTextW(root, buf, 512)
+    user32.GetWindowTextW(h, buf, 512)
     pid = wintypes.DWORD()
-    user32.GetWindowThreadProcessId(root, ctypes.byref(pid))
+    user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
     return {"hwnd": root, "title": buf.value, "process": process_name(pid.value),
-            "rect": (rect.left, rect.top, rect.right, rect.bottom), "point": (x, y)}
+            "rect": (rect.left, rect.top, rect.right, rect.bottom)}
+
+
+def foreground_root() -> int:
+    """지금 맨 앞(키보드 입력을 받는) 최상위 창 번호. 없으면 0."""
+    user32 = _user32()
+    fg = user32.GetForegroundWindow()
+    return (user32.GetAncestor(fg, 2) or fg) if fg else 0  # GA_ROOT
+
+
+def bring_to_front(w) -> None:
+    """set_focus 로 앞으로 오지 않는 창을 윈도우 방식으로 한 번 더 앞으로 가져온다."""
+    handle = getattr(w, "handle", None)
+    if not handle or foreground_root() == handle:
+        return
+    try:
+        from pywinauto.controls.hwndwrapper import HwndWrapper
+
+        HwndWrapper(handle).set_focus()
+    except Exception:
+        pass
 
 
 def window_under_cursor() -> dict:
@@ -333,6 +416,8 @@ def region_settings(target: str, rect: tuple[int, int, int, int], info: dict,
     if target == "window":
         settings.update({
             "gorilla.screen_region": f"{l},{t},{r},{b}",
+            # 누르기 전에 고릴라 창이 그 자리 그대로인지 확인하려고 지금 창 자리를 같이 저장한다
+            "gorilla.region_window": ",".join(str(v) for v in info["rect"]) if win_ok else "",
             "gorilla.input_mode": "coords", "gorilla.send_mode": "coords",
             # 기준이 바뀌었으니 예전 입력칸·버튼 위치는 지운다
             "gorilla.input_x": "", "gorilla.input_y": "", "gorilla.input_rect": "",
@@ -642,28 +727,77 @@ class Gorilla:
         finally:
             win32clipboard.CloseClipboard()
 
-    def _paste(self, text: str) -> None:
+    # ── 엉뚱한 곳을 누르지 않게 ─────────────────────────────────
+    def _check_layout(self, w) -> None:
+        """위치 클릭 전에: 창 크기·자리가 위치를 지정할 때와 같은지. 많이 다르면 저장한 비율 위치가
+        재생·채널 버튼 같은 다른 곳을 가리킬 수 있으므로 누르지 않는다."""
+        if self._region() is not None:
+            problem = window_moved(self.cfg.region_window, self._rect(w))
+        else:
+            problem = size_changed(self.cfg.window_size, self._rect(w))
+        if problem:
+            raise GorillaError(f"{self.cfg.label} {problem}. 엉뚱한 곳(재생·채널 버튼 등)을 누르지 않도록 보내지 "
+                               "않았습니다. 창을 위치 지정 때처럼 두거나 위치(영역)를 다시 지정하세요.")
+
+    def _check_point(self, w, point: tuple[int, int], label: str) -> None:
+        """누를 자리에 정말 그 창이 있는지. 자막 창·플레이어 창·다른 프로그램이 가리고 있으면 누르지 않는다."""
+        other = covered_by(window_at_point(*point), getattr(w, "handle", None))
+        if other:
+            raise GorillaError(f"{self.cfg.label} {label} 자리를 다른 창 {other}이 가리고 있어 누르지 않았습니다. "
+                               "그 창을 옮기거나 위치를 다시 지정하세요.")
+
+    def _check_front(self, w) -> None:
+        """지우기·붙여넣기·Enter 키를 보내기 전에: 그 창이 맨 앞인지. 아니면 맨 앞의 다른 프로그램
+        (편집 프로그램 등)에 키가 들어가므로 보내지 않는다."""
+        handle = getattr(w, "handle", None)
+        if not handle:
+            return
+        deadline = time.monotonic() + FRONT_WAIT_SECONDS
+        while (front := foreground_root()) != handle:
+            if time.monotonic() > deadline:
+                try:
+                    info = window_info(front) if front else {}
+                    who = f" (맨 앞: {covered_by(info, handle)})" if info else ""
+                except Exception:
+                    who = ""
+                raise GorillaError(f"{self.cfg.label} 창이 맨 앞으로 오지 않아 키 입력을 하지 않았습니다{who}. "
+                                   "다른 프로그램에 글자·지우기 키가 들어가는 것을 막았습니다. 다른 창을 잠시 내려 두세요.")
+            time.sleep(0.1)
+
+    def _click(self, w, point: tuple[int, int], label: str) -> None:
+        from pywinauto import mouse
+
+        self._check_point(w, point, label)
+        mouse.click(coords=point)
+
+    @staticmethod
+    def _center(control) -> tuple[int, int]:
+        r = control.rectangle()
+        return (r.left + r.right) // 2, (r.top + r.bottom) // 2
+
+    def _paste(self, w, text: str) -> None:
         from pywinauto.keyboard import send_keys
 
+        self._check_front(w)
         self._clipboard(text)
         send_keys("^a{BACKSPACE}^v", pause=0.05)
 
     def _put_text(self, w, text: str):
         """입력칸에 글자를 넣고 입력칸 객체(uia) 또는 None(coords)을 돌려준다.
         앱이 키 입력으로 글자를 인식하도록 실제 클릭 후 붙여넣기를 먼저 쓴다."""
-        from pywinauto import mouse
-
         if self.cfg.input_mode == "coords":
             if self.cfg.input_x is None or self.cfg.input_y is None:
                 raise GorillaError("입력칸 위치가 지정되지 않았습니다. '입력칸 위치 지정'을 하세요.")
-            mouse.click(coords=fraction_to_point(self._ref_rect(w), self.cfg.input_x, self.cfg.input_y))
+            self._check_layout(w)
+            self._click(w, fraction_to_point(self._ref_rect(w), self.cfg.input_x, self.cfg.input_y), "입력칸")
             time.sleep(0.2)
-            self._paste(text)
+            self._paste(w, text)
             return None
         edit = self._find_input(w)
+        self._check_point(w, self._center(edit), "입력칸")
         edit.click_input()
         time.sleep(0.2)
-        self._paste(text)
+        self._paste(w, text)
         time.sleep(0.2)
         if text not in (self._value(edit) or ""):
             try:
@@ -675,24 +809,26 @@ class Gorilla:
         return edit
 
     def _press_send(self, w) -> None:
-        from pywinauto import mouse
         from pywinauto.keyboard import send_keys
 
         mode = self.cfg.send_mode or "auto"
         if mode == "coords":
             if self.cfg.send_x is None or self.cfg.send_y is None:
                 raise GorillaError("전송 버튼 위치가 지정되지 않았습니다.")
-            mouse.click(coords=fraction_to_point(self._ref_rect(w), self.cfg.send_x, self.cfg.send_y))
+            self._check_layout(w)
+            self._click(w, fraction_to_point(self._ref_rect(w), self.cfg.send_x, self.cfg.send_y), "전송 버튼")
             return
         if mode in ("button", "auto"):
             pattern = re.compile(self.cfg.send_button_name or SEND_BUTTON_HINT.pattern)
             buttons = [b for b in w.descendants(control_type="Button")
                        if pattern.search(b.element_info.name or "") and b.is_visible()]
             if buttons:
+                self._check_point(w, self._center(buttons[-1]), "전송 버튼")
                 buttons[-1].click_input()
                 return
             if mode == "button":
                 raise GorillaError("전송 버튼을 찾지 못했습니다.")
+        self._check_front(w)
         send_keys("{ENTER}")
 
     def _seen_in_chat(self, w, text: str) -> bool:
@@ -705,9 +841,7 @@ class Gorilla:
         return False
 
     def _with_focus(self, fn):
-        import ctypes
-
-        user32 = ctypes.windll.user32
+        user32 = _user32()
         previous = user32.GetForegroundWindow()
         try:
             saved_clip = self._clipboard()
@@ -716,11 +850,12 @@ class Gorilla:
         w = self._window()
         try:
             try:
-                if w.is_minimized():
-                    w.restore()
+                # 최소화돼 있으면 set_focus 가 원래 모양(최대화였으면 최대화)으로 되돌린다.
+                # restore() 를 먼저 부르면 최대화가 풀려 창 크기가 바뀌므로 쓰지 않는다.
                 w.set_focus()
             except Exception:
-                pass  # 일부 앱은 포커스 요청을 거부한다 → 입력칸을 직접 클릭해 앞으로 가져온다
+                pass  # 일부 앱은 포커스 요청을 거부한다 → 아래에서 한 번 더, 그래도 안 되면 입력칸을 직접 클릭
+            bring_to_front(w)
             time.sleep(0.3)
             return fn(w)
         finally:

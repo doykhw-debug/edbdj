@@ -49,6 +49,9 @@ def run_window() -> None:
 
     chunk_line = tk.Label(root, text="", anchor="w", fg="#9ca3af", bg="#111827", font=("Malgun Gothic", 9))
     chunk_line.pack(fill="x", padx=10)
+    silence_line = tk.Label(root, text="", anchor="w", justify="left", wraplength=w - 30, fg="#f87171", bg="#111827",
+                            font=("Malgun Gothic", 10, "bold"))
+    silence_line.pack(fill="x", padx=10)
     quiz_line = tk.Label(root, text="", anchor="w", justify="left", wraplength=w - 30, fg="#facc15", bg="#111827",
                          font=("Malgun Gothic", 10, "bold"))
     quiz_line.pack(fill="x", padx=10)
@@ -83,6 +86,7 @@ def run_window() -> None:
         chunk_line.configure(text=live.chunk_text(vm["last_chunk"])
                              or ("실행기 신호 없음 — 관리 화면 첫 화면을 확인하세요" if vm["status"] == "stalled" else vm["state"]))
         meter.coords(bar, 0, 0, int(120 * vm["level"] / 100), 10)
+        silence_line.configure(text=vm.get("silence_text") or "")
         quiz_line.configure(text=vm.get("quiz_text") or "")
         lines = caption_lines(vm) or [("아직 받아쓴 말이 없습니다. 진행자가 말하면 여기에 나옵니다.", "#9ca3af")]
         for lb, (text, fg) in zip(labels, lines + [("", "#ffffff")] * (4 - len(lines))):

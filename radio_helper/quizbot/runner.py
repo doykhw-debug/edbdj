@@ -19,7 +19,7 @@ from difflib import SequenceMatcher
 from typing import Callable, Protocol
 
 from .. import db, quiz
-from . import config, live, story
+from . import config, live, silence, story
 from . import sms as sms_mod
 from . import answerer as answerer_mod
 from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
@@ -198,6 +198,56 @@ class Runner:
         db.set_setting(self.conn, "quizbot.level_at", stamp)
         db.set_setting(self.conn, "quizbot.heartbeat", stamp)
 
+    # ── 소리 끊김 감시 ───────────────────────────────────────────
+    def on_second(self, level: int) -> None:
+        """녹음 중 약 1초마다: 소리 크기 표시 + 끊김 감시."""
+        self.report_level(level)
+        self.watch_level(self.deps.now(), level)
+
+    def watch_level(self, now: datetime, level: int) -> None:
+        watch = getattr(self, "silence", None)
+        if watch is None:
+            return
+        since = watch.silent_since or now
+        got = watch.feed(now, level)
+        if got:
+            self._silence_events.append((got[0], got[1], since))
+
+    def touch(self, what: str) -> None:
+        """도우미가 채팅 앱 창을 건드린 일을 남긴다 (소리가 끊기면 '직전에 한 일'로 함께 기록)."""
+        watch = getattr(self, "silence", None)
+        if watch is not None:
+            watch.touch(self.deps.now(), what)
+
+    def speaker_check(self, recorder) -> str:
+        """녹음 장치를 다시 열어 기본 스피커가 바뀌었는지 본다 (바뀌었으면 새 장치로 녹음)."""
+        reopen = getattr(recorder, "reopen", None)
+        if reopen is None:
+            return ""
+        before = getattr(recorder, "device_name", "")
+        try:
+            after = reopen()
+        except Exception as e:
+            return f" 녹음 장치를 다시 열지 못했습니다({type(e).__name__}: {str(e)[:80]}) — 스피커 연결을 확인하세요."
+        return silence.speaker_note(before, after)
+
+    def handle_silence(self, recorder, now: datetime) -> None:
+        events, self._silence_events = self._silence_events, []
+        for kind, quiet, since in events:
+            if kind == "cut":
+                notes = self.speaker_check(recorder)
+                if live.stt_test_alive():
+                    notes += " (받아쓰기 테스트가 함께 돌고 있었습니다.)"
+                self.event(silence.cut_message(since, quiet, self.silence.touches_before(since), notes))
+                db.set_setting(self.conn, "quizbot.silent_since", since.strftime("%Y-%m-%d %H:%M:%S"))
+            else:
+                self.event(silence.back_message(quiet))
+                db.set_setting(self.conn, "quizbot.silent_since", "")
+        if self.silence.due_recheck(now):
+            note = self.speaker_check(recorder)
+            if note:
+                self.event("소리 끊김 중 확인:" + note)
+
     def run_forever(self, idle_seconds: int = 5) -> None:
         self.state("시작함")
         while not self.should_stop():
@@ -289,10 +339,13 @@ class Runner:
         current, silent, chunks, slow = None, 0, 0, 0
         self.shots: list[tuple[str, bytes]] = []   # 키워드가 들린 뒤 찍은 채팅창 사진 (녹취와 교차 분석)
         self._shot_error = False
+        self.silence, self._silence_events = silence.SilenceWatch(), []
+        db.set_setting(self.conn, "quizbot.silent_since", "")
         self.state("녹음 장치 여는 중")
         with self.deps.recorder_factory(chunk_seconds) as recorder:
-            if hasattr(recorder, "on_level"):
-                recorder.on_level = self.report_level  # 녹음 중 1초마다 소리 크기를 화면에 알린다
+            per_second = hasattr(recorder, "on_level")
+            if per_second:
+                recorder.on_level = self.on_second  # 녹음 중 1초마다 소리 크기를 화면에 알리고 끊김을 살핀다
             if getattr(recorder, "device_name", ""):
                 self.event(f"녹음 시작 — {recorder.device_name}")
             while keep_going(self.deps.now()) and not self.should_stop():
@@ -317,9 +370,12 @@ class Runner:
                 now = self.deps.now()
                 level = rms(audio)
                 self.report_level(live.level_percent(level))
+                if not per_second:
+                    self.watch_level(now, live.level_percent(level))
+                self.handle_silence(recorder, now)
                 if level < SILENCE_RMS:
                     silent += 1
-                    if silent == SILENT_CHUNKS_WARN:
+                    if silent == SILENT_CHUNKS_WARN and not self.silence.heard:  # 듣다가 끊긴 것은 위에서 따로 남긴다
                         db.log(self.conn, "quizbot", "소리가 들리지 않습니다. 고릴라 재생·음소거·기본 스피커를 확인하세요.")
                 else:
                     silent = 0
@@ -366,6 +422,7 @@ class Runner:
                     self.shots = []   # 다음 키워드가 들리면 새로 모은다
                 self.process_approved(session)
                 self.retry_held(session, gorilla_ok)
+        db.set_setting(self.conn, "quizbot.silent_since", "")
         db.log(self.conn, "quizbot", f"{current or session['program']} 듣기 끝 · 분석 {min(self.analyses, max_analyses)}회")
 
     def record_chunk(self, now: datetime, level: int, took: float, text: str, first: bool = False) -> None:
@@ -394,6 +451,7 @@ class Runner:
                 self.event(f"{config.app_label(app)} 채팅창을 읽지 못했습니다 (녹취만으로 분석): {type(e).__name__}: {str(e)[:80]}")
             return
         if data:
+            self.touch(f"{config.app_label(app)} 채팅창 사진(읽기만)")
             self.shots.append((now.strftime("%H:%M:%S"), data))
             if len(self.shots) > keep:
                 self.shots = self.shots[:1] + self.shots[-(keep - 1):] if keep > 1 else self.shots[-1:]
@@ -736,6 +794,11 @@ class Runner:
             f"updated_at = ? WHERE id = ? AND {status_col} = 'pending'",
             (db.now(), "sms" if route == "sms" else app, how, *((text,) if sent_text else ()), db.now(), item_id))
         self.conn.commit()
+        if route != "sms":
+            cfg = getattr(self.chat_sender(app), "cfg", None)
+            how_clicked = "" if cfg is None else \
+                " (위치 클릭)" if "coords" in (cfg.input_mode, cfg.send_mode) else " (화면 요소)"
+            self.touch(f"{config.app_label(app)} 채팅 전송{how_clicked}")
         try:
             if route == "sms":
                 result = self.deps.sms.send(number, text)
