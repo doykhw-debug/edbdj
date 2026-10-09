@@ -29,7 +29,7 @@ DRAFT_STATUS = {"draft": "작성 중", "approved": "승인됨", "archived": "보
 SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "manual": "직접 작성"}
 STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀"}
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
-                ("live.captions", "captions"), ("live.witty", "witty"))
+                ("live.captions", "captions"), ("live.witty", "witty"), ("live.choice_always", "choice_always"))
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
 
