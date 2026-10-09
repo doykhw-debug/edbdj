@@ -14,7 +14,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import db, gates, generator, quiz
+from . import db, evidence, gates, generator, quiz
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -712,7 +712,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             """SELECT s.*, c.title AS corner_title, e.label AS exp_label FROM submissions s
                JOIN corners c ON c.id = s.corner_id JOIN experiences e ON e.id = s.experience_id
                ORDER BY s.id DESC""").fetchall()
-        return render_template("submissions.html", rows=rows)
+        return render_template("submissions.html", rows=rows, shots=evidence.counts(g.conn, "submissions"))
 
     @app.post("/submissions/<int:sid>")
     def submission_update(sid):
@@ -744,7 +744,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         return render_template("quizzes.html", rows=[(q, quiz.hold_reasons(q, stopped)) for q in rows],
                                pending=pending, auto=auto, YES_NO_KEYS=list(YES_NO),
                                today=time.strftime("%Y-%m-%d"), programs=[r["title"] for r in on_air],
-                               channels=channel_list())
+                               channels=channel_list(), shots=evidence.counts(g.conn, "quizzes"))
 
     @app.post("/quizzes/new")
     def quiz_new():
@@ -1064,7 +1064,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                          else ("문자" if sp["sent_via"] == "sms" else "앱 채팅"),
                          "status": quiz.entry_label(sp["status"], sp["sent_via"]), "ok": sp["status"] == "posted",
                          "topic": sp["topic"], "text": sp["message"], "exp_id": sp["experience_id"],
-                         "exp_label": sp["exp_label"]})
+                         "exp_label": sp["exp_label"], "ev_t": "story_posts", "ev_id": sp["id"]})
         for sub in g.conn.execute(
                 """SELECT s.*, c.program, c.title AS corner_title, e.label AS exp_label FROM submissions s
                    JOIN corners c ON c.id = s.corner_id LEFT JOIN experiences e ON e.id = s.experience_id
@@ -1073,7 +1073,11 @@ def create_app(data_dir: str | None = None) -> Flask:
                          "how": f"게시판 · {sub['corner_title']}", "status": STATUS_LABELS.get(sub["post_status"],
                                                                                         sub["post_status"]),
                          "ok": sub["post_status"] == "posted", "topic": sub["title"] or "", "text": sub["body"] or "",
-                         "exp_id": sub["experience_id"], "exp_label": sub["exp_label"]})
+                         "exp_id": sub["experience_id"], "exp_label": sub["exp_label"],
+                         "ev_t": "submissions", "ev_id": sub["id"]})
+        shot_counts = {t: evidence.counts(g.conn, t) for t in ("story_posts", "submissions")}
+        for r in rows:
+            r["shots"] = shot_counts[r["ev_t"]].get(r["ev_id"], 0)
         rows.sort(key=lambda r: r["at"] or "", reverse=True)
         order = list(qconfig.BROADCASTERS)
         counts = [(b, sum(1 for r in rows if r["broadcaster"] == b))
@@ -1342,6 +1346,39 @@ def create_app(data_dir: str | None = None) -> Flask:
         if tool == "check":
             return redirect(url_for("quizbot", wait=wait))
         return redirect(url_for("gorilla", app=app_, wait=wait))
+
+    # ── 보낸 증거 사진 ──────────────────────────────────────────
+    @app.get("/evidence")
+    def evidence_page():
+        """퀴즈 정답·사연을 보낼 때 찍어 둔 화면. ?t=quizzes|story_posts|submissions &id=번호 &day=YYYY-MM-DD"""
+        table = request.args.get("t", "")
+        table = table if table in evidence.ITEM_LABELS else ""
+        item_id = request.args.get("id", type=int) if table else None
+        day = request.args.get("day", "")
+        day = day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else ""
+        rows = evidence.listing(g.conn, table or None, item_id, day or None, limit=200 if item_id is None else 50)
+        items = []
+        for r in rows:
+            if r["item_table"] == "submissions":
+                status, link = STATUS_LABELS.get(r["status"], r["status"]), url_for("submissions")
+            else:
+                status = quiz.entry_label(r["status"], r["via"])
+                link = url_for("quizzes") + "#auto" if r["item_table"] == "quizzes" else url_for("stories_sent")
+            items.append({**dict(r), "kind": evidence.ITEM_LABELS.get(r["item_table"], r["item_table"]),
+                          "via_label": "게시판" if r["via"] == "board" else
+                          ("문자" if r["via"] == "sms" else qconfig.app_label(r["via"]) if r["via"] else ""),
+                          "status_label": status, "ok": r["status"] == "posted", "link": link})
+        n, size = evidence.usage(g.conn)
+        return render_template("evidence.html", items=items, table=table, item_id=item_id, day=day,
+                               labels=evidence.ITEM_LABELS, total=n, size_mb=size / 1_000_000,
+                               folder=str(evidence.root()))
+
+    @app.get("/evidence/<int:eid>/image")
+    def evidence_image(eid):
+        path = evidence.file_of(g.conn, eid)
+        if path is None:
+            abort(404)
+        return send_from_directory(path.parent, path.name, max_age=0)
 
     @app.route("/gorilla", methods=["GET", "POST"])
     def gorilla():

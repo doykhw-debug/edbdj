@@ -3,7 +3,8 @@
 {% block content %}
 <h1>보낸 사연 <span class="muted">앱 채팅 · 문자 · 게시판</span></h1>
 <p class="muted">한 번 보낸 사연(경험)은 <b>같은 방송국</b>에 다시 보내지 않습니다. 다른 방송국에는 보낼 수 있습니다.
-보냈는지 모르는 글(결과 불명)도 보낸 것으로 봅니다. <a href="{{ url_for('stories') }}">← 사연</a></p>
+보냈는지 모르는 글(결과 불명)도 보낸 것으로 봅니다. <a href="{{ url_for('stories') }}">← 사연</a> ·
+<a href="{{ url_for('evidence_page') }}">📷 증거 사진 전체</a></p>
 
 <div class="panel">
   <div class="board-counts" style="margin-top:0">
@@ -25,7 +26,8 @@
       <td>{% if r.topic %}<span class="muted">{{ r.topic }}</span><br>{% endif %}{{ r.text }}</td>
       <td>{% if r.exp_id %}<a href="{{ url_for('experience_edit', eid=r.exp_id) }}">#{{ r.exp_id }} {{ r.exp_label or '' }}</a>
           {% else %}<span class="muted">직접 쓴 글</span>{% endif %}</td>
-      <td><span class="badge {{ 'ok' if r.ok else 'warn' }}">{{ r.status }}</span></td>
+      <td><span class="badge {{ 'ok' if r.ok else 'warn' }}">{{ r.status }}</span>
+        {% if r.shots %}<br><a href="{{ url_for('evidence_page', t=r.ev_t, id=r.ev_id) }}">📷 증거 {{ r.shots }}장</a>{% endif %}</td>
     </tr>
     {% else %}<tr><td colspan="5" class="muted">아직 보낸 사연이 없습니다.</td></tr>{% endfor %}
   </table>

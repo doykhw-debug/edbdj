@@ -217,6 +217,20 @@ CREATE TABLE IF NOT EXISTS events (
     message TEXT NOT NULL
 );
 
+-- 보낸 증거 사진: 퀴즈 정답·사연을 채팅 앱·문자로 보내거나 게시판에 입력할 때 찍은 화면 (파일은 데이터 폴더 evidence/)
+CREATE TABLE IF NOT EXISTS evidence (
+    id         INTEGER PRIMARY KEY,
+    item_table TEXT NOT NULL,                     -- quizzes / story_posts / submissions
+    item_id    INTEGER NOT NULL,
+    via        TEXT,                              -- gorilla / mini / kong / sms / board
+    label      TEXT,                              -- 언제 찍었나 (보낸 뒤 고릴라 창, 문자 작성 화면 …)
+    text       TEXT,                              -- 보낸 글
+    status     TEXT,                              -- 찍을 때의 전송 결과
+    file       TEXT NOT NULL,                     -- evidence/ 아래 상대 경로
+    taken_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS evidence_item ON evidence (item_table, item_id);
+
 -- 로컬 모의 글쓰기 화면에 "등록"된 글. 실제 사이트와 무관하다.
 CREATE TABLE IF NOT EXISTS mock_posts (
     id         INTEGER PRIMARY KEY,

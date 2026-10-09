@@ -128,3 +128,8 @@ button.big { font-size: 20px; padding: 14px 28px; border-radius: 12px; }
 .board-counts .badge.on { outline: 2px solid var(--accent); }
 .last-quiz { margin-top: 6px; padding: 6px 10px; border-radius: 8px; background: #fef9c3; font-weight: 600; }
 .last-quiz a { color: #854d0e; text-decoration: none; }
+.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.shot { margin-bottom: 0; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.shot img { width: 100%; max-height: 420px; object-fit: contain; background: #f3f4f6; border-radius: 6px; display: block; }
+.shot-meta { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.shot-text { white-space: pre-wrap; background: #f9fafb; border-radius: 6px; padding: 6px 8px; max-height: 160px; overflow: auto; }

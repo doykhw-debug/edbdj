@@ -218,6 +218,21 @@ def run_inspect(conn, corner, headless: bool = False) -> Path:
     return out
 
 
+def board_evidence(conn, page, sub_id: int, draft, label: str, status: str) -> None:
+    """게시판 화면을 찍어 증거 사진으로 남긴다 (실패해도 입력 작업은 계속)."""
+    from . import evidence
+
+    try:
+        try:
+            page.wait_for_load_state("load", timeout=5000)
+        except Exception:
+            pass
+        shot = page.screenshot(full_page=True, type="jpeg", quality=85)
+    except Exception:
+        return
+    evidence.save(conn, "submissions", sub_id, "board", f"{draft['title']}\n\n{draft['body']}", status, [(label, shot)])
+
+
 def run_fill(conn, draft, corner, headless: bool = False) -> int:
     from playwright.sync_api import sync_playwright
 
@@ -249,6 +264,7 @@ def run_fill(conn, draft, corner, headless: bool = False) -> int:
         )
         conn.commit()
         sub_id = cur.lastrowid
+        board_evidence(conn, page, sub_id, draft, "게시판 입력 완료 (등록 누르기 전)", "filled")
         db.log(conn, "fill", f"원고 #{draft['id']} → {corner['title']} 입력 완료 (제출 이력 #{sub_id}, 등록 미확인)")
         say("입력을 마쳤습니다. 내용을 확인한 뒤 등록 버튼은 직접 누르세요. 이 도구는 누르지 않습니다.")
         say("다 끝나면 브라우저 창을 닫으세요.")
@@ -260,6 +276,7 @@ def run_fill(conn, draft, corner, headless: bool = False) -> int:
                 "UPDATE submissions SET post_status = 'unknown', post_url = ?, note = ?, updated_at = ? WHERE id = ?",
                 (final_url, "글쓰기 화면을 벗어남. 게시판에서 글이 올라갔는지 확인 후 상태를 바꾸세요.", db.now(), sub_id))
             conn.commit()
+            board_evidence(conn, page, sub_id, draft, f"등록 뒤 화면 ({final_url})", "unknown")
             db.log(conn, "fill", f"제출 이력 #{sub_id}: 글쓰기 화면을 벗어남 → 결과 불명(확인 필요)")
             wait_for(page, lambda: False, AFTER_FILL_WAIT_SECONDS)
         try:

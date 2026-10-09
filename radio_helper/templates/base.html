@@ -15,6 +15,7 @@
     <a href="{{ url_for('home') }}" class="{{ 'on' if ep == 'home' }}">{% if listening %}<span class="nav-dot"></span>{% endif %}청취</a>
     <a href="{{ url_for('quizzes') }}" class="{{ 'on' if ep in ('quizzes', 'quiz_new', 'quiz_update', 'quiz_result', 'quizbot_approve', 'quizbot_skip') }}">퀴즈 기록{% if nav_pending.quizzes %} <span class="nav-count">{{ nav_pending.quizzes }}</span>{% endif %}</a>
     <a href="{{ url_for('stories') }}" class="{{ 'on' if ep.startswith(('stor', 'draft', 'submission', 'mock')) or ep == 'dashboard' }}">사연{% if nav_pending.stories %} <span class="nav-count">{{ nav_pending.stories }}</span>{% endif %}</a>
+    <a href="{{ url_for('evidence_page') }}" class="{{ 'on' if ep.startswith('evidence') }}">증거 사진</a>
     <a href="{{ url_for('gifts') }}" class="{{ 'on' if ep == 'gifts' }}">선물 기록</a>
     <a href="{{ url_for('corners') }}" class="{{ 'on' if ep.startswith('corner') }}">코너</a>
     <a href="{{ url_for('programs') }}" class="{{ 'on' if ep.startswith('program') }}">프로그램</a>

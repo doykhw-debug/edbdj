@@ -25,7 +25,7 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import GorillaConfig, localize
 
@@ -49,6 +49,7 @@ FRONT_WAIT_SECONDS = 1.0  # 클릭한 창이 맨 앞으로 올 때까지 기다�
 class SendResult:
     status: str   # posted / entered / unknown / failed
     detail: str
+    shots: list = field(default_factory=list)   # 증거 사진 [(설명, JPEG 바이트)]
 
 
 class GorillaError(RuntimeError):
@@ -935,17 +936,40 @@ class Gorilla:
         except GorillaError as e:
             return SendResult("failed", str(e)), f"전송 테스트 실패: {e}"
 
-    def send(self, text: str) -> SendResult:
-        def run(w):
-            edit = self._put_text(w, text)
-            self._press_send(w)
-            time.sleep(1.5)
-            after = self._value(edit) if edit is not None else None
-            return judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
+    def evidence_image(self, w) -> bytes | None:
+        """증거 사진: 지금 채팅 앱 창 (JPEG). 다른 창에 가려져도 찍히는 창 사진을 먼저, 안 되면 화면에서 그 영역."""
         try:
-            return self._with_focus(run)
+            img = window_image(w.handle) if self._region() is None else None
+            if img is None:
+                from PIL import ImageGrab
+
+                img = ImageGrab.grab(bbox=self._ref_rect(w), all_screens=True)
+            return to_jpeg(img, max_side=1600)
+        except Exception:
+            return None
+
+    def send(self, text: str) -> SendResult:
+        shots = []
+
+        def run(w):
+            label = f"보내지 못했을 때 {self.cfg.label} 창"
+            try:
+                edit = self._put_text(w, text)
+                self._press_send(w)
+                time.sleep(1.5)
+                after = self._value(edit) if edit is not None else None
+                label = f"보낸 뒤 {self.cfg.label} 창"
+                return judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
+            finally:   # 창이 아직 앞에 있을 때 찍는다 (실패해도 그때 화면을 남김)
+                shot = self.evidence_image(w)
+                if shot:
+                    shots.append((label, shot))
+        try:
+            result = self._with_focus(run)
         except GorillaError as e:
-            return SendResult("failed", str(e))
+            result = SendResult("failed", str(e))
+        result.shots = shots
+        return result
 
 
 def dump(report: dict) -> str:

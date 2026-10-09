@@ -8,7 +8,8 @@
 <form method="post" action="{{ url_for('submission_update', sid=s.id) }}" class="panel">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <h2>#{{ s.id }} {{ s.title }}
-    <span class="badge {{ 'ok' if s.post_status == 'posted' else ('bad' if s.post_status == 'failed' else 'warn') }}">{{ POST_STATUS[s.post_status] }}</span></h2>
+    <span class="badge {{ 'ok' if s.post_status == 'posted' else ('bad' if s.post_status == 'failed' else 'warn') }}">{{ POST_STATUS[s.post_status] }}</span>
+    {% if shots.get(s.id) %}<a href="{{ url_for('evidence_page', t='submissions', id=s.id) }}" style="font-size:14px">📷 증거 {{ shots[s.id] }}장</a>{% endif %}</h2>
   <p class="muted">{{ s.corner_title }} · 경험 #{{ s.experience_id }} {{ s.exp_label or '' }} · {{ s.created_at }}{% if s.draft_id %} · <a href="{{ url_for('draft_edit', did=s.draft_id) }}">원고 #{{ s.draft_id }}</a>{% endif %}</p>
   <div class="row">
     <div><label>글 등록</label>

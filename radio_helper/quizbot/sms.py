@@ -20,7 +20,7 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -37,6 +37,7 @@ COST_PER_SMS = 50
 class SendResult:
     status: str
     detail: str
+    shots: list = field(default_factory=list)   # 증거 사진 [(설명, PNG 바이트)]
 
 
 class SmsError(RuntimeError):
@@ -207,12 +208,22 @@ class AdbSms:
         self.shell("uiautomator", "dump", path, timeout=20)
         return self.shell("cat", path)
 
-    def screenshot(self, name: str) -> str | None:
-        if not self.shots_dir or not self.adb:
+    def screen_png(self) -> bytes | None:
+        """지금 휴대폰 화면 (PNG). 못 찍으면 None."""
+        if not self.adb:
             return None
         cmd = [self.adb] + (["-s", self.serial] if self.serial else []) + ["exec-out", "screencap", "-p"]
-        code, data = self.run(cmd, 20)
-        if code != 0 or not data.startswith(b"\x89PNG"):
+        try:
+            code, data = self.run(cmd, 20)
+        except Exception:
+            return None
+        return data if code == 0 and data.startswith(b"\x89PNG") else None
+
+    def screenshot(self, name: str, data: bytes | None = None) -> str | None:
+        if not self.shots_dir:
+            return None
+        data = data or self.screen_png()
+        if not data:
             return None
         self.shots_dir.mkdir(parents=True, exist_ok=True)
         (self.shots_dir / f"{name}.png").write_bytes(data)
@@ -228,6 +239,7 @@ class AdbSms:
 
     # 보내기
     def send(self, number: str, text: str, shot: str | None = None) -> SendResult:
+        """보낸다. 작성 화면(받는 번호·글)과 보낸 뒤 화면을 찍어 결과의 shots 로 돌려준다 (증거 사진)."""
         ok, detail = self.status()
         if not ok:
             return SendResult("failed", detail)
@@ -236,22 +248,30 @@ class AdbSms:
         self.shell("am", "start", "-a", "android.intent.action.SENDTO", "-d", sms_uri(number), "--es", "sms_body", text)
         self.sleep(2.5)
         xml = self.dump()
-        if shot:
-            self.screenshot(shot)
+        shots = []
+        composed = self.screen_png()
+        if composed:
+            shots.append(("문자 작성 화면 (받는 번호·글)", composed))
+            if shot:
+                self.screenshot(shot, composed)
         if self.verify_number and not shows_number(xml, number):
             return SendResult("failed", f"작성 화면에서 받는 번호 {number} 를 확인하지 못해 보내지 않았습니다 "
-                                        "(화면 잠금·다른 앱·번호 저장 이름 확인)")
+                                        "(화면 잠금·다른 앱·번호 저장 이름 확인)", shots)
         point = find_send_button(xml)
         if point is None:
-            return SendResult("failed", "문자 앱의 전송 버튼을 찾지 못해 보내지 않았습니다 (휴대폰 화면 잠금을 풀어 두세요)")
+            return SendResult("failed", "문자 앱의 전송 버튼을 찾지 못해 보내지 않았습니다 (휴대폰 화면 잠금을 풀어 두세요)",
+                              shots)
         self.shell("input", "tap", str(point[0]), str(point[1]))
         self.sleep(2.0)
         try:
             after = compose_text(self.dump())
         except SmsError:
             after = None
-        if shot:
-            self.screenshot(shot + "_sent")
+        sent = self.screen_png()
+        if sent:
+            shots.append(("문자 보낸 뒤 화면", sent))
+            if shot:
+                self.screenshot(shot + "_sent", sent)
         if after is not None and text[:10] and text[:10] in after:
-            return SendResult("unknown", "전송 버튼을 눌렀지만 입력칸에 글이 남아 있음 — 휴대폰 확인 필요")
-        return SendResult("entered", f"휴대폰 문자로 {number} 에 보냄")
+            return SendResult("unknown", "전송 버튼을 눌렀지만 입력칸에 글이 남아 있음 — 휴대폰 확인 필요", shots)
+        return SendResult("entered", f"휴대폰 문자로 {number} 에 보냄", shots)

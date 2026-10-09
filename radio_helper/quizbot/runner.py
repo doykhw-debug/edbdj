@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Callable, Protocol
 
-from .. import db, quiz
+from .. import db, evidence, quiz
 from . import config, live, silence, story
 from . import sms as sms_mod
 from . import answerer as answerer_mod
@@ -817,8 +817,13 @@ class Runner:
             else:
                 result = self.chat_sender(app).send(text)
             status, detail = result.status, result.detail
+            shots = getattr(result, "shots", None) or []
         except Exception as e:  # 보냈는지 알 수 없다 → 결과 불명 유지
             status, detail = "unknown", f"전송 중 오류: {type(e).__name__}: {str(e)[:120]}"
+            shots = []
+        if shots:   # 증거 사진 (보낸 뒤 채팅 앱 창 / 문자 작성·보낸 화면)
+            evidence.save(self.conn, table, item_id, "sms" if route == "sms" else app, text, status, shots)
+            detail += f" · 증거 사진 {len(shots)}장"
         self.conn.execute(f"UPDATE {table} SET {status_col} = ?, note = COALESCE(note || ' / ', '') || ?, "
                           "updated_at = ? WHERE id = ?", (status, detail, db.now(), item_id))
         self.conn.commit()

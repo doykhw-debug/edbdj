@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}증거 사진 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>증거 사진 <span class="muted">보낸 정답·사연의 화면</span></h1>
+<p class="muted">퀴즈 정답이나 사연을 <b>채팅 앱(고릴라·mini·콩)·휴대폰 문자</b>로 보낼 때, <b>게시판</b>에 입력할 때 그 화면을 찍어 둡니다.
+사진은 이 PC의 데이터 폴더에만 남고 어디로도 보내지 않습니다. 사진을 누르면 크게 열립니다.</p>
+
+<div class="panel">
+  <div class="board-counts" style="margin-top:0">
+    <a href="{{ url_for('evidence_page', day=day or None) }}"><span class="badge {{ 'on' if not table }}">전체</span></a>
+    {% for t, label in labels.items() %}
+    <a href="{{ url_for('evidence_page', t=t, day=day or None) }}"><span class="badge info {{ 'on' if t == table }}">{{ label }}</span></a>
+    {% endfor %}
+  </div>
+  <form method="get" action="{{ url_for('evidence_page') }}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+    {% if table %}<input type="hidden" name="t" value="{{ table }}">{% endif %}
+    <label class="inline" style="margin:0;white-space:nowrap">날짜 <input type="date" name="day" value="{{ day }}" style="width:auto"></label>
+    <button type="submit">보기</button>
+    {% if day or item_id %}<a href="{{ url_for('evidence_page', t=table or None) }}">날짜·항목 지우기</a>{% endif %}
+  </form>
+  <p class="muted" style="margin-bottom:0">모두 {{ total }}장 · {{ '%.1f' | format(size_mb) }}MB · 폴더 <code>{{ folder }}</code>
+    {% if item_id %} · <b>{{ labels[table] }} #{{ item_id }}</b>만 보는 중{% endif %}</p>
+</div>
+
+<div class="shots">
+  {% for e in items %}
+  <div class="shot panel">
+    <a href="{{ url_for('evidence_image', eid=e.id) }}" target="_blank" rel="noopener">
+      <img src="{{ url_for('evidence_image', eid=e.id) }}" alt="{{ e.label }}" loading="lazy"></a>
+    <div class="shot-meta">
+      <div><b>{{ e.taken_at }}</b></div>
+      <div><span class="badge">{{ e.kind }} #{{ e.item_id }}</span>
+        {% if e.via_label %}<span class="badge info">{{ e.via_label }}</span>{% endif %}
+        <span class="badge {{ 'ok' if e.ok else 'warn' }}">{{ e.status_label }}</span></div>
+      <div class="muted">{{ e.label }}</div>
+      {% if e.text %}<div class="shot-text">{{ e.text }}</div>{% endif %}
+      <div><a href="{{ e.link }}">기록 보기 →</a></div>
+    </div>
+  </div>
+  {% else %}
+  <div class="panel muted">아직 찍어 둔 사진이 없습니다. 퀴즈 정답·사연을 보내거나 게시판에 입력하면 여기에 쌓입니다.</div>
+  {% endfor %}
+</div>
+{% endblock %}

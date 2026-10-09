@@ -120,6 +120,13 @@ def test_board_story_whole_flow(client, conn, app, monkeypatch):
     assert sub["post_url"] == f"{base}{LIST_PATH}?cornerid=3002&no=1"
     events = " ".join(r[0] for r in conn.execute("SELECT message FROM events"))
     assert "입력 완료" in events and "결과 불명" in events
+    # 증거 사진: 입력을 마친 글쓰기 화면(등록 전) + 등록 뒤 화면(글 주소)
+    shots = conn.execute("SELECT * FROM evidence WHERE item_table = 'submissions' AND item_id = ? ORDER BY id",
+                         (sub["id"],)).fetchall()
+    assert len(shots) == 2 and shots[0]["label"].startswith("게시판 입력 완료") and \
+        shots[1]["label"].startswith("등록 뒤 화면") and [s["status"] for s in shots] == ["filled", "unknown"]
+    assert sub["post_url"] in shots[1]["label"] and TITLE in shots[0]["text"]
+    assert all((db.data_dir() / "evidence" / s["file"]).stat().st_size > 1000 for s in shots)
 
     # 6) 사용자가 글 주소를 확인해 '등록 확인'으로 바꿈 → 보낸 사연 목록에 SBS 게시판으로
     client.post(f"/submissions/{sub['id']}", data={"csrf_token": token, "post_status": "posted",
