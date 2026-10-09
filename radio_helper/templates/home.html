@@ -36,7 +36,7 @@
     </div>
     <div class="toggles" style="margin-top:8px">
       <label class="inline"><input type="checkbox" name="auto_quiz" value="1" {{ 'checked' if options.auto_quiz }}> 퀴즈 정답 자동 전송</label>
-      <label class="inline"><input type="checkbox" name="choice_always" value="1" {{ 'checked' if options.choice_always }}> 보기 있는 단순 퀴즈는 무조건 보내기 <span class="hint">(확신도가 낮아도 가장 그럴듯한 보기)</span></label>
+      <label class="inline"><input type="checkbox" name="quiz_always" value="1" {{ 'checked' if options.quiz_always }}> 퀴즈는 무조건 보내기 <span class="hint">(객관식·주관식 모두, 확신도가 낮아도 가장 그럴듯한 답)</span></label>
       <label class="inline"><input type="checkbox" name="auto_story" value="1" {{ 'checked' if options.auto_story }}> 사연 자동 전송 <span class="hint">(경고 없는 글만)</span></label>
       <label class="inline"><input type="checkbox" name="gift" value="1" {{ 'checked' if options.gift }}> 선물 정보 기록</label>
       <label class="inline"><input type="checkbox" name="witty" value="1" {{ 'checked' if options.witty }}> 기발한 오답 섞기 <span class="hint">(웃긴 포인트가 있을 때만)</span></label>

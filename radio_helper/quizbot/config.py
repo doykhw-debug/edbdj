@@ -42,7 +42,7 @@ DEFAULTS = {
     "live.auto_story": "1",               # 사연: 검사를 모두 통과한 초안은 자동 전송
     "live.gift": "1",                     # 선물 정보 기록
     "live.witty": "1",                    # 퀴즈에 기발한 오답 섞기
-    "live.choice_always": "1",            # 보기가 있는 단순 퀴즈(객관식·OX)는 확신도와 상관없이 정답 후보를 보냄
+    "live.quiz_always": "1",              # 퀴즈는 확신도와 상관없이 정답 후보를 보냄 (객관식·주관식 모두, 틀려도 손해 없음)
     "live.captions": "1",                 # 자막 창 띄우기
     # 분석 (Claude API)
     "quizbot.model": "claude-opus-5-5",

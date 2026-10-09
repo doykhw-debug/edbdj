@@ -275,6 +275,7 @@ def test_full_window_sends_once_and_handles_reannounce_and_reveal(conn):
 
 
 def test_held_when_unsure_then_sent_after_approval(conn):
+    db.set_setting(conn, "live.quiz_always", "0")   # '퀴즈는 무조건 보내기'를 끈 경우의 확신도 기준
     add_schedule(conn)
     script = {2: "오늘의 퀴즈 철수가 좋아하는 과일은"}
     r, clock, _ans, sender = make_runner(conn, script, [analysis(confidence=0.5, gorilla_accepted="unknown")])

@@ -94,16 +94,10 @@ class Deps:
 
 
 # ── 판단 ────────────────────────────────────────────────────────────
-def option_list(options: str | list | None) -> list[str]:
-    if isinstance(options, list):
-        return [o.strip() for o in options if o and o.strip()]
-    return [o.strip() for o in (options or "").split(" / ") if o.strip()]
-
-
-def is_simple_choice(conn: sqlite3.Connection, options, answer: str | None) -> bool:
-    """보기가 둘 이상인 단순 퀴즈(객관식·OX)에 정답 후보가 있으면 True — 설정('단순 퀴즈는 무조건 보내기')이 켜져 있을 때.
-    틀려도 손해가 없으니 확신도가 기준보다 낮아도 가장 그럴듯한 보기를 보낸다."""
-    return config.get(conn, "live.choice_always") == "1" and len(option_list(options)) >= 2 and bool((answer or "").strip())
+def always_send(conn: sqlite3.Connection, answer: str | None) -> bool:
+    """'퀴즈는 무조건 보내기'(기본 켜짐)이고 정답 후보가 있으면 True. 객관식·주관식 모두,
+    틀려도 손해가 없으니 확신도가 기준보다 낮아도 가장 그럴듯한 답을 보낸다."""
+    return config.get(conn, "live.quiz_always") == "1" and bool((answer or "").strip())
 
 
 def decide(conn: sqlite3.Connection, q: sqlite3.Row, schedule: sqlite3.Row | None, now: datetime,
@@ -127,7 +121,7 @@ def decide(conn: sqlite3.Connection, q: sqlite3.Row, schedule: sqlite3.Row | Non
             min_wit = config.get_float(conn, "quizbot.min_wit_score") or 0.7
             if (q["wit_score"] or 0) < min_wit:
                 reasons.append(f"기발한 정도 {q['wit_score'] or 0:.2f} < 기준 {min_wit:.2f}")
-        elif (q["confidence"] or 0) < schedule["min_confidence"] and not is_simple_choice(conn, q["options"], q["answer"]):
+        elif (q["confidence"] or 0) < schedule["min_confidence"] and not always_send(conn, q["answer"]):
             reasons.append(f"확신도 {q['confidence']:.2f} < 기준 {schedule['min_confidence']:.2f}")
         if route == "sms":
             pass
@@ -173,7 +167,7 @@ def choose_answer(res: QuizAnalysis, min_confidence: float, ratio: float, min_wi
     if not (res.witty_answer and res.witty_point) or res.wit_score < min_wit or ratio <= 0:
         return "correct"
     if res.fun_welcome or not res.answer or (res.confidence < min_confidence and not simple):
-        return "witty"   # (보기가 있는 단순 퀴즈는 확신이 낮아도 가장 그럴듯한 보기를 보낸다)
+        return "witty"   # ('무조건 보내기'면 확신이 낮아도 가장 그럴듯한 답을 보낸다)
     return "witty" if roll < ratio else "correct"
 
 
@@ -540,7 +534,7 @@ class Runner:
         return choose_answer(res, schedule["min_confidence"] if schedule is not None else 0.8,
                              ratio if ratio is not None else 0.3,
                              config.get_float(self.conn, "quizbot.min_wit_score") or 0.7, roll,
-                             simple=is_simple_choice(self.conn, res.options, res.answer))
+                             simple=always_send(self.conn, res.answer))
 
     def record_new(self, schedule, w: Window, res: QuizAnalysis, transcript: str) -> int:
         account = db.get_setting(self.conn, "profile.account_label") or "기본"
@@ -758,8 +752,8 @@ class Runner:
         text = q["send_text"] or config.format_message(template, answer)
         how = "사용자 승인 후 전송" if q["approved"] else "자동 전송"
         if not q["approved"] and schedule is not None and q["answer_kind"] != "witty" and \
-                (q["confidence"] or 0) < schedule["min_confidence"]:   # 단순 퀴즈라 기준 미만이어도 보냄
-            how += f" (보기 있는 단순 퀴즈 — 확신도 {q['confidence'] or 0:.2f}여도 보냄)"
+                (q["confidence"] or 0) < schedule["min_confidence"]:   # '무조건 보내기'라 기준 미만이어도 보냄
+            how += f" (무조건 보내기 — 확신도 {q['confidence'] or 0:.2f}여도 보냄)"
         return self.deliver("quizzes", "entry_status", qid, route, q["channel"], text, how, f"퀴즈 #{qid}")
 
     # ── 보내기 (고릴라 채팅 / 휴대폰 문자) ────────────────────────

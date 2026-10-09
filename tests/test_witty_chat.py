@@ -73,7 +73,8 @@ QUIZ = {3: "오늘의 퀴즈 통장에서 금방 사라지는 것은? 정답은 
 
 def test_low_confidence_quiz_sends_witty_answer(conn):
     sender = FakeGorilla()
-    run_quiz(conn, [analysis(confidence=0.5, **WITTY)], QUIZ, sender=sender)
+    # '퀴즈는 무조건 보내기'를 끈 경우: 확신이 낮으면 기발한 오답으로 (켜 두면 가장 그럴듯한 답 — test_simple_quiz)
+    run_quiz(conn, [analysis(confidence=0.5, **WITTY)], QUIZ, sender=sender, quiz_always="0")
     q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
     assert sender.sent == ["제 월급이요"] and q["answer_kind"] == "witty" and q["answer"] == "사과"
     assert any("기발한 오답 '제 월급이요'" in e["message"] for e in conn.execute("SELECT message FROM events"))
@@ -81,7 +82,7 @@ def test_low_confidence_quiz_sends_witty_answer(conn):
 
 def test_witty_toggle_off_keeps_correct_answer(conn):
     sender = FakeGorilla()
-    run_quiz(conn, [analysis(confidence=0.5, **WITTY)], QUIZ, sender=sender, witty="0")
+    run_quiz(conn, [analysis(confidence=0.5, **WITTY)], QUIZ, sender=sender, witty="0", quiz_always="0")
     q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
     assert sender.sent == [] and q["answer_kind"] == "correct" and "확신도" in q["decision"]
 
@@ -112,7 +113,7 @@ def test_hint_raises_confidence_and_sends(conn):
         return analysis(kind="reannouncement", duplicate_of=1, confidence=0.95)
 
     db.set_setting(conn, "quizbot.witty_ratio", "0")
-    run_quiz(conn, [analysis(confidence=0.5), reannounce()], script, n=30, sender=sender)
+    run_quiz(conn, [analysis(confidence=0.5), reannounce()], script, n=30, sender=sender, quiz_always="0")
     q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
     assert sender.sent == ["사과"] and q["confidence"] == 0.95 and q["repeat_count"] == 2
 
