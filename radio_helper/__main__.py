@@ -1,8 +1,11 @@
 """python -m radio_helper  → 로컬 관리 화면 실행 (http://127.0.0.1:5000)"""
 
 import argparse
+import logging
 import sys
 import webbrowser
+
+from werkzeug.serving import run_simple
 
 from . import db
 from .app import create_app, start_runner
@@ -34,9 +37,13 @@ def main() -> None:
     disable_console_quick_edit()
     app = create_app()
     url = f"http://127.0.0.1:{args.port}/"
-    print(f"관리 화면: {url}  (끝내려면 이 창에서 Ctrl+C)")
-    print("이 검은 창을 닫으면 관리 화면과 퀴즈 자동 참여가 멈춥니다. 켜 둔 채로 최소화하세요.")
-    print("아래 빨간 WARNING 문구는 Flask 기본 안내라 무시해도 됩니다.")
+    print("=" * 60)
+    print(" 라디오 참여 도우미가 실행 중입니다. (정상)")
+    print(f" 관리 화면: {url}")
+    print("   브라우저가 저절로 안 열리면 위 주소를 주소창에 입력하세요.")
+    print(" 이 검은 창을 닫으면 관리 화면과 청취·퀴즈 참여가 멈춥니다.")
+    print(" 켜 둔 채로 최소화하세요. 끝낼 때는 이 창에서 Ctrl+C.")
+    print("=" * 60)
     conn = db.connect()
     try:
         listening = qconfig.get(conn, "live.active") == "1"
@@ -49,8 +56,10 @@ def main() -> None:
         conn.close()
     if not args.no_browser:
         webbrowser.open(url)
+    # 개발 서버 시작 안내(빨간 WARNING)와 접속 기록은 오류처럼 보여 감춘다. 오류·경고는 그대로 보인다.
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
     # 이 PC에서만 접속 가능하도록 127.0.0.1 에만 연다.
-    app.run(host="127.0.0.1", port=args.port, debug=False)
+    run_simple("127.0.0.1", args.port, app, threaded=True)
 
 
 if __name__ == "__main__":
