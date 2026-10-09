@@ -11,8 +11,11 @@ from .. import db
 DEFAULTS = {
     # 녹음·인식
     "quizbot.chunk_seconds": "10",
-    "quizbot.whisper_model": "small",
-    "quizbot.whisper_device": "cpu",      # cpu 권장. 그래픽카드(cuda)는 CUDA 라이브러리가 없으면 실행기가 말없이 꺼진다
+    "quizbot.whisper_model": "auto",      # auto: 그래픽카드 large-v3 / CPU large-v3-turbo (코어 16개 미만 small)
+    "quizbot.whisper_device": "auto",     # auto: 별도 프로세스로 그래픽카드를 점검해 통과하면 그래픽카드, 아니면 CPU
+    "quizbot.whisper_beam": "5",          # 받아쓰기 후보 수 (느리면 1)
+    "quizbot.stt_overlap": "3",           # 겹쳐 듣기: 조각 끝 이 초 안에서 시작한 말은 다음 조각과 이어서 받아씀 (0=끔)
+    "quizbot.stt_hints": "",              # 음성 인식 단어 힌트 (자주 틀리는 이름을 쉼표로)
     "quizbot.context_seconds": "180",     # 분석에 넘기는 최근 녹취 길이
     "quizbot.settle_seconds": "40",       # 퀴즈 신호 뒤 문제를 끝까지 듣고 분석하기까지 기다리는 시간
     "quizbot.cooldown_seconds": "60",
@@ -77,8 +80,11 @@ DEFAULTS = {
 
 LABELS = {
     "quizbot.chunk_seconds": "녹음 단위(초)",
-    "quizbot.whisper_model": "음성 인식 모델 (tiny/base/small/medium)",
-    "quizbot.whisper_device": "음성 인식 장치 (cpu 권장 / cuda)",
+    "quizbot.whisper_model": "음성 인식 모델 (auto / large-v3 / large-v3-turbo / medium / small / base)",
+    "quizbot.whisper_device": "음성 인식 장치 (auto 권장 / cpu / cuda)",
+    "quizbot.whisper_beam": "받아쓰기 후보 수 (1~5, 느리다는 안내가 뜨면 1)",
+    "quizbot.stt_overlap": "겹쳐 듣기(초, 0=끔)",
+    "quizbot.stt_hints": "음성 인식 단어 힌트 (자주 틀리는 이름을 쉼표로)",
     "quizbot.context_seconds": "분석에 쓰는 최근 녹취(초)",
     "quizbot.settle_seconds": "퀴즈 신호 후 대기(초)",
     "quizbot.cooldown_seconds": "분석 간 최소 간격(초)",
@@ -164,6 +170,21 @@ def localize(app: str, message: str) -> str:
 SBS_CHANNELS = ("파워FM", "러브FM", "고릴라M")
 
 
+BROADCASTERS = ("SBS", "MBC", "KBS")
+
+
+def broadcaster_of(channel: str | None) -> str:
+    """채널 → 방송국 (SBS·MBC·KBS). 모르는 채널은 채널 이름 그대로."""
+    name = (channel or "").strip()
+    upper = name.upper()
+    if not name or name in SBS_CHANNELS or upper.startswith("SBS"):
+        return "SBS"   # 채널을 적지 않던 예전 기록은 모두 SBS(고릴라)
+    for b in ("MBC", "KBS"):
+        if upper.startswith(b):
+            return b
+    return name
+
+
 def chat_app(conn: sqlite3.Connection, channel: str | None) -> str | None:
     """채널의 채팅 앱: '채널=번호=앱'으로 정했으면 그것, 아니면 이름으로 (SBS→고릴라, MBC→mini, KBS→콩)."""
     if not channel:
@@ -202,6 +223,24 @@ def get_int(conn: sqlite3.Connection, key: str) -> int:
         return int(float(get(conn, key)))
     except ValueError:
         return int(DEFAULTS[key])
+
+
+STT_MIGRATED = "meta.stt_auto_migrated"
+
+
+def migrate_stt_defaults(conn: sqlite3.Connection) -> bool:
+    """예전 기본값(small · cpu)을 쓰던 PC는 업데이트 후 처음 한 번만 auto 로 바꾼다. 직접 고른 다른 값은 그대로."""
+    if db.get_setting(conn, STT_MIGRATED) == "1":
+        return False
+    changed = False
+    for key, old in (("quizbot.whisper_model", "small"), ("quizbot.whisper_device", "cpu")):
+        if db.get_setting(conn, key) == old:
+            db.set_setting(conn, key, "auto")
+            changed = True
+    db.set_setting(conn, STT_MIGRATED, "1")
+    if changed:
+        db.log(conn, "quizbot", "음성 인식 설정을 자동(auto)으로 바꿨습니다 — 예전 기본값(small · CPU)을 쓰던 경우만")
+    return changed
 
 
 def get_float(conn: sqlite3.Connection, key: str) -> float | None:

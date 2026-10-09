@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -25,10 +26,27 @@ from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
 from .audio import rms
 from .detector import Detector, TranscriptBuffer, is_gift_signal, is_story_signal
 from .schedule import Window, active_window, next_window
+from .stt import build_hints
 
 SILENCE_RMS = 0.002
 SILENT_CHUNKS_WARN = 4
 SIMILAR_QUESTION = 0.85  # 짧은 한국어 문장은 0.6이면 다른 문제도 같다고 본다
+
+
+def stt_hints(conn: sqlite3.Connection, program: str) -> str:
+    """음성 인식 단어 힌트: 사용자 힌트 + 듣는 프로그램의 진행자·코너 이름 + 방송 낱말·초성 자음 이름."""
+    names: list[str] = []
+    row = conn.execute("SELECT host FROM programs WHERE title = ?", (program,)).fetchone()
+    if row and row["host"]:
+        names += [h.strip() for h in re.split(r"[,·/]", row["host"]) if h.strip() and "요일별" not in h]
+    for r in conn.execute("SELECT title FROM corners WHERE program = ? ORDER BY is_target DESC, id LIMIT 12",
+                          (program,)):
+        if r["title"].startswith("(이름 확인 필요)"):
+            continue
+        title = re.sub(r"\[[^\]]*\]|\([^)]*\)", "", r["title"]).strip(" -~!,.")
+        if 1 < len(title) <= 20:
+            names.append(title)
+    return build_hints(names, config.get(conn, "quizbot.stt_hints"))
 def app_hold(app: str) -> str:
     return f"대기: {config.app_label(app)} 창을 찾지 못함 — 찾으면 보냄"
 
@@ -244,12 +262,16 @@ class Runner:
             label = config.app_label(config.chat_app(self.conn, session["channel"]))
             db.log(self.conn, "quizbot", f"{label} 창을 찾지 못했습니다 — 듣기·자막은 계속하고, 보낼 글은 {label} 창을 찾으면 보냅니다.")
 
+        config.migrate_stt_defaults(self.conn)
         model = config.get(self.conn, "quizbot.whisper_model")
-        self.state(f"음성 인식 모델 불러오는 중 ({config.get(self.conn, 'quizbot.whisper_device')} · {model}, "
-                   "처음 한 번은 내려받기로 몇 분 걸릴 수 있음)")
+        self.state(f"음성 인식 준비 중 ({config.get(self.conn, 'quizbot.whisper_device')} · {model}, "
+                   "처음 한 번은 그래픽카드 점검과 모델 내려받기 약 1.6~3GB로 몇 분 걸릴 수 있음)")
         transcriber = self.deps.transcriber_factory(model, session["program"])
         if getattr(transcriber, "label", None):
-            self.event(f"음성 인식 준비 완료 ({transcriber.label}, {transcriber.load_seconds:.1f}초)")
+            note = getattr(transcriber, "device_note", "")
+            self.event(f"음성 인식 준비 완료 ({transcriber.label}, {transcriber.load_seconds:.1f}초"
+                       + (f" · {note}" if note else "") + ")")
+        transcribe = getattr(transcriber, "feed", None) or transcriber.transcribe  # 겹쳐 듣기가 되면 feed
         chunk_seconds = config.get_int(self.conn, "quizbot.chunk_seconds")
         context = config.get_int(self.conn, "quizbot.context_seconds")
         buffer = TranscriptBuffer()
@@ -277,8 +299,10 @@ class Runner:
                 session, w = get_session(self.deps.now())
                 program = session["program"]
                 if program != current:
-                    # 프로그램이 바뀌면 프로그램당 분석 상한을 새로 센다
+                    # 프로그램이 바뀌면 프로그램당 분석 상한을 새로 세고, 음성 인식 힌트(진행자·코너)를 바꾼다
                     current, self.analyses, self.story_analyses, self.gift_analyses = program, 0, 0, 0
+                    if hasattr(transcriber, "set_context"):
+                        transcriber.set_context(program, stt_hints(self.conn, program))
                 if not wait_for_gorilla and (self.deps.now() - gorilla_checked).total_seconds() >= 60:
                     gorilla_checked, was_ok = self.deps.now(), gorilla_ok
                     gorilla_ok = self.chat_ok(session["channel"])
@@ -300,14 +324,14 @@ class Runner:
                 else:
                     silent = 0
                 started = time.monotonic()
-                text = transcriber.transcribe(audio)
+                text = transcribe(audio)
                 took = time.monotonic() - started
                 chunks += 1
                 self.record_chunk(now, live.level_percent(level), took, text, first=chunks == 1)
                 slow = slow + 1 if took > chunk_seconds * 1.5 else 0
                 if slow == 3:
                     self.event(f"받아쓰기가 녹음보다 느립니다 ({took:.0f}초/{chunk_seconds}초). "
-                               "고릴라·인식 설정에서 음성 인식 모델을 base 로 바꾸면 빨라집니다.")
+                               "고릴라·인식 설정에서 '받아쓰기 후보 수'를 1로 줄이세요. 그래도 느리면 모델을 small 로.")
                 if text:
                     buffer.add(now, text)
                     self.conn.execute(
@@ -545,7 +569,7 @@ class Runner:
     # ── 사연·주제 모집 ───────────────────────────────────────────
     def analyze_story(self, schedule, w: Window, transcript: str, images=()) -> int | None:
         program = schedule["program"]
-        exps = story.candidate_experiences(self.conn)
+        exps = story.candidate_experiences(self.conn, config.broadcaster_of(schedule["channel"]))
         if not exps:
             return None  # 쓸 수 있는 실제 경험이 없으면 유료 분석을 하지 않는다
         self.story_analyses += 1
@@ -752,13 +776,25 @@ def shared_input_lock(wait_seconds: int = 20):
         cm.__exit__(None, None, None)
 
 
+def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
+    """설정대로 음성 인식기를 만든다. 장치 auto 는 그래픽카드를 별도 프로세스로 점검한 뒤 고른다."""
+    from . import gpu
+    from .stt import WhisperTranscriber
+
+    device, note = gpu.choose_device(conn, config.get(conn, "quizbot.whisper_device"))
+    tr = WhisperTranscriber(model, program, device, beam_size=config.get_int(conn, "quizbot.whisper_beam"),
+                            overlap_seconds=config.get_int(conn, "quizbot.stt_overlap"),
+                            hints=stt_hints(conn, program))
+    tr.device_note = note
+    return tr
+
+
 def build_real_deps(conn: sqlite3.Connection) -> Deps:
     """윈도우에서 실제로 쓰는 구성."""
     from .answerer import ClaudeAnswerer
     from .audio import LoopbackRecorder
     from .gorilla import Gorilla
     from .sms import AdbSms
-    from .stt import WhisperTranscriber
 
     def notify(_message: str) -> None:
         try:
@@ -771,8 +807,7 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
     return Deps(
         notify=notify,
         recorder_factory=lambda chunk: LoopbackRecorder(chunk),
-        transcriber_factory=lambda model, program: WhisperTranscriber(
-            model, program, config.get(conn, "quizbot.whisper_device")),
+        transcriber_factory=lambda model, program: make_transcriber(conn, model, program),
         answerer=ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort")),
         sender=Gorilla(config.GorillaConfig.load(conn, "gorilla")),
         chat_senders={app: Gorilla(config.GorillaConfig.load(conn, app)) for app in config.CHAT_APPS},

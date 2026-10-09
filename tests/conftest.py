@@ -5,6 +5,14 @@ import pytest
 from radio_helper import db
 
 
+@pytest.fixture(autouse=True)
+def no_gpu_probe(monkeypatch):
+    """테스트 중에는 그래픽카드 점검 프로세스를 띄우지 않는다 (점검 실패로 고정)."""
+    from radio_helper.quizbot import gpu
+
+    monkeypatch.setattr(gpu, "probe", lambda timeout=0: (False, "테스트: 그래픽카드 점검 안 함"))
+
+
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("RADIO_HELPER_DATA_DIR", str(tmp_path))

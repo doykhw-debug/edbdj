@@ -332,8 +332,10 @@ class FakeLoopback:
 
 
 class FakeWhisper:
-    def __init__(self, model, program, device):
-        self.label, self.load_seconds = f"{device.upper()} · {model}", 0.1
+    def __init__(self, model, program, device, **kw):
+        from radio_helper.quizbot.stt import resolve_model
+
+        self.label, self.load_seconds = f"{device.upper()} · {resolve_model(model, device, 8)}", 0.1
 
     def transcribe(self, audio):
         return "네 오늘의 퀴즈 나갑니다"
@@ -349,7 +351,8 @@ def test_stt_test_command_records_each_step(conn, monkeypatch):
     t = json.loads(db.get_setting(conn, "quizbot.stt_test"))
     assert t["ok"] and not t["running"] and t["text"] == "네 오늘의 퀴즈 나갑니다"
     assert [s["name"] for s in t["steps"]] == ["녹음 장치", "10초 녹음", "음성 인식 모델", "받아쓰기"]
-    assert "CPU · small" in t["steps"][2]["detail"]   # 기본은 CPU (그래픽카드 라이브러리 문제로 꺼지는 것 방지)
+    # 장치 auto: 그래픽카드 점검(테스트에서는 실패로 고정)에 떨어지면 CPU, 코어가 적으면 small
+    assert "CPU · small" in t["steps"][2]["detail"] and "그래픽카드 점검 실패" in t["steps"][2]["detail"]
 
     monkeypatch.setattr(audio, "LoopbackRecorder", lambda s: FakeLoopback(s, fail=True))
     assert cli.cmd_stt_test(conn) == 1
@@ -446,7 +449,8 @@ def test_transcriber_boosts_before_recognition():
             return [], None
 
     tr = object.__new__(stt.WhisperTranscriber)
-    tr.model, tr.prompt = FakeModel(), ""
+    tr.model, tr.beam_size, tr._has_hotwords = FakeModel(), 1, False
+    tr.set_context("", "")
     tr.transcribe(np.full(32_000, 0.01, dtype=np.float32))
     assert heard and heard[0] > 0.4
 

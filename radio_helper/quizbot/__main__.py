@@ -276,12 +276,17 @@ def cmd_stt_test(conn) -> int:
         level = live.level_percent(rms(audio))
         result["level"] = level
         step("10초 녹음", level > 0, f"소리 크기 {level}/100" + level_advice(level, QUIET_LEVEL))
-        from .stt import WhisperTranscriber
+        from . import stt
 
+        config.migrate_stt_defaults(conn)
         model, device = config.get(conn, "quizbot.whisper_model"), config.get(conn, "quizbot.whisper_device")
-        phase(f"음성 인식 모델 불러오는 중 ({device} · {model}, 처음 한 번은 내려받기로 몇 분)")
-        tr = WhisperTranscriber(model, "", device)
-        step("음성 인식 모델", True, f"{tr.label} · {tr.load_seconds:.1f}초")
+        phase(f"음성 인식 준비 중 ({device} · {model}, 처음 한 번은 그래픽카드 점검과 모델 내려받기로 몇 분)")
+        from . import gpu
+
+        device, note = gpu.choose_device(conn, device)
+        tr = stt.WhisperTranscriber(model, "", device, beam_size=config.get_int(conn, "quizbot.whisper_beam"),
+                                    hints=stt.build_hints((), config.get(conn, "quizbot.stt_hints")))
+        step("음성 인식 모델", True, f"{tr.label} · {tr.load_seconds:.1f}초 · {note}")
         phase("받아쓰는 중")
         started = time.monotonic()
         text = tr.transcribe(audio)
@@ -300,15 +305,39 @@ def cmd_stt_test(conn) -> int:
     return 0 if result["ok"] else 1
 
 
+def cmd_gpu_check() -> int:
+    """그래픽카드로 받아쓰기가 되는지 시험한다. 실행기와 다른 프로세스에서 돌려, 라이브러리 문제로 꺼져도 영향이 없게 한다."""
+    import numpy as np
+
+    from .stt import add_nvidia_dll_dirs
+
+    add_nvidia_dll_dirs()
+    import ctranslate2
+
+    if ctranslate2.get_cuda_device_count() < 1:
+        print("NO_CUDA_DEVICE", flush=True)
+        return 2
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel("tiny", device="cuda", compute_type="float16")
+    segments, _info = model.transcribe(np.zeros(16_000, dtype=np.float32), language="ko")
+    list(segments)
+    print("GPU_OK", flush=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
     ap.add_argument("command", choices=["run", "captions", "check", "stt-test", "auto-setup", "inspect-gorilla",
-                                        "select", "calibrate", "send-test", "chat-test", "sms-check", "sms-test"])
+                                        "select", "calibrate", "send-test", "chat-test", "sms-check", "sms-test",
+                                        "gpu-check"])
     ap.add_argument("target", nargs="?", choices=["window", "input", "send", "chat"])
     ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
+    if args.command == "gpu-check":
+        return cmd_gpu_check()
     conn = db.connect()
     db.init_db(conn)
     try:

@@ -1,0 +1,4 @@
+# NVIDIA 그래픽카드로 음성 인식할 때 필요한 라이브러리 (약 1GB)
+# start_windows.bat 이 NVIDIA 그래픽카드(nvidia-smi)가 있을 때만 설치한다. 없거나 점검에 실패하면 CPU로 돈다.
+nvidia-cublas-cu12; sys_platform == "win32"
+nvidia-cudnn-cu12==9.*; sys_platform == "win32"
