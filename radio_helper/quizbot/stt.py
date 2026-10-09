@@ -28,7 +28,9 @@ class WhisperTranscriber:
     def transcribe(self, audio: np.ndarray) -> str:
         if audio is None or len(audio) < 16_000:  # 1초 미만
             return ""
+        from .audio import boost_quiet
+
         segments, _info = self.model.transcribe(
-            audio, language="ko", beam_size=1, vad_filter=True,
+            boost_quiet(audio), language="ko", beam_size=1, vad_filter=True,
             condition_on_previous_text=False, initial_prompt=self.prompt)
         return " ".join(seg.text.strip() for seg in segments).strip()

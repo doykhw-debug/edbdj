@@ -230,6 +230,17 @@ def cmd_sms_test(conn) -> int:
     return 0 if result.status == "entered" else 1
 
 
+def level_advice(level: int, quiet: int) -> str:
+    """녹음된 소리 크기에 따른 안내. 윈도우 음소거는 녹음에 영향이 없고, 앱 안 볼륨은 그대로 줄어든다."""
+    if level <= 0:
+        return (" — 소리가 들리지 않습니다. 고릴라가 재생 중인지, 고릴라 앱 안 볼륨이 0이 아닌지, "
+                "기본 스피커(이어폰)가 맞는지 확인하세요")
+    if level < quiet:
+        return (" — 소리가 작습니다. 받아쓰기 전에 자동으로 키우지만, 고릴라 앱 안 볼륨과 윈도우 '볼륨 믹서'의 "
+                "고릴라 볼륨은 최대로 두세요. 소리를 듣기 싫으면 볼륨을 내리지 말고 스피커 음소거를 쓰세요")
+    return ""
+
+
 def cmd_stt_test(conn) -> int:
     """받아쓰기 테스트: 녹음 장치 → 10초 녹음 → 모델 불러오기 → 받아쓰기. 단계마다 화면에 남긴다.
 
@@ -256,7 +267,7 @@ def cmd_stt_test(conn) -> int:
 
     save()
     try:
-        from .audio import LoopbackRecorder, rms
+        from .audio import QUIET_LEVEL, LoopbackRecorder, rms
 
         with LoopbackRecorder(10) as rec:
             step("녹음 장치", True, rec.device_name)
@@ -264,8 +275,7 @@ def cmd_stt_test(conn) -> int:
             audio = rec.read_chunk()
         level = live.level_percent(rms(audio))
         result["level"] = level
-        step("10초 녹음", level > 0, f"소리 크기 {level}/100" + (
-            "" if level > 0 else " — 소리가 들리지 않습니다. 고릴라 재생·음소거·기본 스피커(이어폰)를 확인하세요"))
+        step("10초 녹음", level > 0, f"소리 크기 {level}/100" + level_advice(level, QUIET_LEVEL))
         from .stt import WhisperTranscriber
 
         model, device = config.get(conn, "quizbot.whisper_model"), config.get(conn, "quizbot.whisper_device")

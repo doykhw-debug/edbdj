@@ -414,3 +414,56 @@ def test_stalled_listener_shows_log_and_restarts(client, conn, data_dir, monkeyp
     token = csrf(client, "/")
     client.post("/listen/start", data={"csrf_token": token, "channel": "파워FM"})
     assert launched[0] == ["run"] and db.get_setting(conn, "quizbot.run_log") == "quizbot_new.log"
+
+
+# ── PC 볼륨이 작을 때: 받아쓰기 전에 키우기 · 소리 작음 안내 ─────────────────
+def test_boost_quiet_audio():
+    import numpy as np
+
+    from radio_helper.quizbot import audio
+
+    t = np.linspace(0, 1, 16_000, endpoint=False)
+    quiet = (0.01 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    assert abs(float(np.abs(audio.boost_quiet(quiet)).max()) - 0.5) < 0.01          # 작은 소리 → 키움
+    loud = (0.8 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    assert audio.boost_quiet(loud) is loud                                             # 큰 소리는 그대로
+    hiss = (0.0005 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    assert audio.boost_quiet(hiss) is hiss                                             # 잡음 수준은 키우지 않음
+    tiny = (0.002 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    assert abs(float(np.abs(audio.boost_quiet(tiny)).max()) - 0.2) < 0.01             # 최대 100배까지만
+
+
+def test_transcriber_boosts_before_recognition():
+    import numpy as np
+
+    from radio_helper.quizbot import stt
+
+    heard = []
+
+    class FakeModel:
+        def transcribe(self, audio, **kw):
+            heard.append(float(np.abs(audio).max()))
+            return [], None
+
+    tr = object.__new__(stt.WhisperTranscriber)
+    tr.model, tr.prompt = FakeModel(), ""
+    tr.transcribe(np.full(32_000, 0.01, dtype=np.float32))
+    assert heard and heard[0] > 0.4
+
+
+def test_stt_test_warns_when_quiet(conn, monkeypatch):
+    import numpy as np
+
+    from radio_helper.quizbot import __main__ as cli
+    from radio_helper.quizbot import audio, stt
+
+    class QuietLoopback(FakeLoopback):
+        def read_chunk(self):
+            return np.full(160_000, 0.003, dtype=np.float32)
+
+    monkeypatch.setattr(audio, "LoopbackRecorder", lambda s: QuietLoopback(s))
+    monkeypatch.setattr(stt, "WhisperTranscriber", FakeWhisper)
+    assert cli.cmd_stt_test(conn) == 0
+    rec = json.loads(db.get_setting(conn, "quizbot.stt_test"))["steps"][1]
+    assert rec["ok"] and "소리가 작습니다" in rec["detail"] and "음소거" in rec["detail"]
+    assert cli.level_advice(60, audio.QUIET_LEVEL) == "" and "들리지 않습니다" in cli.level_advice(0, 25)

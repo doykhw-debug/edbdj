@@ -29,6 +29,23 @@ def to_mono_16k(pcm16: bytes, channels: int, rate: int) -> np.ndarray:
     return samples
 
 
+QUIET_LEVEL = 25         # 소리 크기(0~100) 이 아래면 '작음'으로 알린다 (약 -45dB)
+BOOST_TARGET = 0.5       # 받아쓰기 전에 키울 목표 크기 (최대치의 절반, -6dB)
+BOOST_MAX_GAIN = 100.0   # 최대 100배(+40dB)까지만 키운다
+BOOST_FLOOR = 0.001      # 이보다 작으면(-60dB) 잡음뿐이라 키우지 않는다
+
+
+def boost_quiet(samples: np.ndarray) -> np.ndarray:
+    """PC 볼륨이 작아 작게 녹음된 소리를 받아쓰기 전에 키운다. 이미 충분히 크면 그대로 둔다."""
+    if samples is None or len(samples) == 0:
+        return samples
+    peak = float(np.percentile(np.abs(samples), 99.9))  # 툭 튀는 잡음 한두 개는 무시
+    if peak < BOOST_FLOOR or peak >= BOOST_TARGET:
+        return samples
+    gain = min(BOOST_MAX_GAIN, BOOST_TARGET / peak)
+    return np.clip(samples * gain, -1.0, 1.0).astype(np.float32)
+
+
 def rms(samples: np.ndarray) -> float:
     if samples is None or len(samples) == 0:
         return 0.0
