@@ -597,10 +597,11 @@ def test_calibration_uses_window_under_mouse():
     info = {"title": "공감로그", "process": "gorealra.exe", "rect": (100, 100, 500, 900), "point": (300, 820)}
     st = gorilla.calibration_settings("input", info)
     assert (st["gorilla.input_x"], st["gorilla.input_y"]) == ("0.5", "0.9")
-    assert st["gorilla.input_mode"] == "coords" and st["gorilla.process_name"] == "gorealra.exe"
+    assert st["gorilla.input_mode"] == "screen" and st["gorilla.process_name"] == "gorealra.exe"
+    assert st["gorilla.input_point"] == "300,820" and st["gorilla.point_window"] == "100,100,500,900"  # 모니터 기준
     assert st["gorilla.window_size"] == "400,800" and st["gorilla.window_title"] == "공감로그"
     st = gorilla.calibration_settings("send", info)
-    assert st["gorilla.send_mode"] == "coords" and "gorilla.input_mode" not in st
+    assert st["gorilla.send_mode"] == "screen" and "gorilla.input_mode" not in st
     with pytest.raises(gorilla.GorillaError):
         gorilla.calibration_settings("input", {"title": "고릴라·인식 설정 · 라디오 참여 도우미 - Aside",
                                                "process": "aside.exe", "rect": (0, 0, 10, 10), "point": (5, 5)})
@@ -620,10 +621,13 @@ def test_region_settings_relative_to_window():
     st, msg = gorilla.region_settings("input", (800, 880, 1200, 940), chat, None)
     assert st["gorilla.input_rect"] == "0.1562,0.9263,0.7812,0.9895"
     assert (float(st["gorilla.input_x"]), float(st["gorilla.input_y"])) == (0.4688, 0.9579)
-    assert st["gorilla.input_mode"] == "coords" and st["gorilla.process_name"] == "gorealra.exe"
-    assert st["gorilla.window_size"] == "640,950" and "입력칸" in msg
+    assert st["gorilla.input_mode"] == "screen" and st["gorilla.process_name"] == "gorealra.exe"
+    assert st["gorilla.input_point"] == "1000,910" and st["gorilla.point_window"] == "700,0,1340,950"
+    assert st["gorilla.window_size"] == "640,950" and "입력칸" in msg and "(1000, 910)" in msg
     st, _ = gorilla.region_settings("send", (1230, 870, 1330, 945), chat, None)
-    assert st["gorilla.send_mode"] == "coords" and "gorilla.input_mode" not in st
+    assert st["gorilla.send_mode"] == "screen" and st["gorilla.send_point"] == "1280,907" and "gorilla.input_mode" not in st
+    st, _ = gorilla.region_settings("chat", (720, 60, 1320, 800), chat, None)
+    assert st["gorilla.chat_screen"] == "720,60,1320,800" and "gorilla.input_mode" not in st
 
 
 def test_region_settings_window_region_and_errors():
@@ -638,8 +642,11 @@ def test_region_settings_window_region_and_errors():
     st, _ = gorilla.region_settings("window", (700, 0, 1340, 950), app, None)
     assert st["gorilla.screen_region"] == "700,0,1340,950" and st["gorilla.input_x"] == ""
     region = tuple(int(v) for v in gorilla.parse_rect(st["gorilla.screen_region"]))
-    st2, msg = gorilla.region_settings("input", (800, 880, 1200, 940), browser, region)  # 영역 기준이면 창 정보와 무관
-    assert st2["gorilla.input_rect"] == "0.1562,0.9263,0.7812,0.9895" and "영역" in msg
+    assert st["gorilla.input_point"] == "" and st["gorilla.send_point"] == ""    # 예전 모니터 위치도 지움
+    with pytest.raises(gorilla.GorillaError):                                   # 영역 기준이어도 브라우저 위는 안 됨
+        gorilla.region_settings("input", (800, 880, 1200, 940), browser, region)
+    st2, msg = gorilla.region_settings("input", (800, 880, 1200, 940), app, region)
+    assert st2["gorilla.input_rect"] == "0.1562,0.9263,0.7812,0.9895" and st2["gorilla.input_point"] == "1000,910"
     with pytest.raises(gorilla.GorillaError):
         gorilla.region_settings("send", (1500, 100, 1600, 150), app, region)  # 영역 밖
 

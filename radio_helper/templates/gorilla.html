@@ -16,7 +16,8 @@
     세 앱은 원리가 같고, 앱마다 따로 한 번씩 맞추면 됩니다.</p>
   <ol>
     <li><b>입력칸 영역 지정</b> — 버튼을 누르면 화면이 어두워집니다. {{ label }}의 <b>채팅 입력칸</b>{% if app == 'gorilla' %}('공감로그 글쓰기' 칸){% endif %}을 마우스로 끌어 네모로 그리세요. 손을 떼면 저장됩니다.
-      네모가 놓인 창을 {{ label }} 창으로 기억하고, 창 안에서의 위치(비율)로 저장하므로 창을 옮겨도 됩니다.</li>
+      네모 가운데의 <b>모니터 화면 위치</b>를 그대로 저장해 그 자리를 누릅니다 (채팅 창이 플레이어 옆에 따로 떠도 됩니다).
+      {{ label }} 창을 옮기면 다시 지정하세요.</li>
     <li><b>전송 버튼 영역 지정</b> — 같은 방법으로 <b>'전송' 버튼</b>을 네모로 그리세요.</li>
     <li><b>전송 테스트</b> — 입력칸에 <b>'{{ tm }}'</b>를 넣고 <b>전송까지 실제로 누릅니다</b>. {{ label }} 채팅에 올라오면 설정 완료입니다.
       (보낼 글은 아래 설정값 '전송 테스트로 실제로 보낼 글'에서 바꿀 수 있습니다)</li>
@@ -24,6 +25,10 @@
       퀴즈·사연 키워드가 들리면 그때부터 이 부분을 10초마다 찍어 녹취와 함께 분석합니다 (받아쓰기 오류 보완). 읽기만 하고 아무것도 누르지 않습니다.
       {% if values[app ~ '.chat_rect'] %}<span class="badge ok">지정됨</span>{% else %}<span class="badge">미지정 — 녹취만으로 분석</span>{% endif %}</li>
   </ol>
+  {% if values[app ~ '.input_mode'] == 'coords' and not coords.input_point %}
+  <div class="flash warn">위치를 이제 <b>모니터 화면 기준</b>으로 저장합니다. 지금 저장된 위치는 예전 방식(창 안 비율)이라
+    채팅 창이 따로 뜨는 앱에서는 엉뚱한 창을 누를 수 있습니다. <b>① 입력칸 영역 지정</b>과 <b>② 전송 버튼 영역 지정</b>을 한 번씩 다시 해 주세요.</div>
+  {% endif %}
   <div class="actions">
     {% for tool, tlabel in [('select-input', '① 입력칸 영역 지정'), ('select-send', '② 전송 버튼 영역 지정')] %}
     <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="{{ tool }}"><button {{ 'disabled' if stopped }}>{{ tlabel }}</button></form>
@@ -50,7 +55,7 @@
       {% if rects.send %}<rect x="{{ rects.send[0]*100 }}" y="{{ rects.send[1]*140 }}" width="{{ (rects.send[2]-rects.send[0])*100 }}" height="{{ (rects.send[3]-rects.send[1])*140 }}" fill="#18794e33" stroke="#18794e" stroke-width="1.5"/>{% endif %}
     </svg>
     <div class="muted">
-      <div><b>기준</b>: {{ '지정한 화면 영역 ' ~ (region|map('int')|join(', ')) if region else label ~ ' 창 (' ~ (values[app ~ '.process_name'] or '프로그램 미확인') ~ ')' }}</div>
+      <div><b>기준</b>: {% if values[app ~ '.input_mode'] == 'screen' or values[app ~ '.send_mode'] == 'screen' %}모니터 화면 좌표 (그 자리의 {{ label }} 창을 누름){% else %}{{ '지정한 화면 영역 ' ~ (region|map('int')|join(', ')) if region else label ~ ' 창 (' ~ (values[app ~ '.process_name'] or '프로그램 미확인') ~ ')' }}{% endif %}</div>
       <div><span style="color:#2554c7">■</span> 입력칸 {{ '저장됨' if rects.input else '미지정' }}</div>
       <div><span style="color:#18794e">■</span> 전송 버튼 {{ '저장됨' if rects.send else '미지정 (Enter 키로 전송)' }}</div>
     </div>
@@ -73,7 +78,8 @@
     <pre class="box">{{ last_tool[1] }}</pre>
   {% endif %}
   <p class="muted">현재 설정: 프로그램 {{ values[app ~ '.process_name'] or '(미지정)' }} · 입력 {{ values[app ~ '.input_mode'] }} · 전송 {{ values[app ~ '.send_mode'] }}
-    {% if coords.input_x %} · 입력칸 위치 {{ coords.input_x }}, {{ coords.input_y }}{% endif %}{% if coords.send_x %} · 전송 버튼 위치 {{ coords.send_x }}, {{ coords.send_y }}{% endif %}</p>
+    {% if values[app ~ '.input_mode'] == 'screen' and coords.input_point %} · 입력칸 모니터 위치 ({{ coords.input_point }}){% elif coords.input_x %} · 입력칸 위치 {{ coords.input_x }}, {{ coords.input_y }}{% endif %}
+    {% if values[app ~ '.send_mode'] == 'screen' and coords.send_point %} · 전송 버튼 모니터 위치 ({{ coords.send_point }}){% elif coords.send_x %} · 전송 버튼 위치 {{ coords.send_x }}, {{ coords.send_y }}{% endif %}</p>
 
   {% if auto %}
     <h2 style="margin-top:16px">자동 찾기 결과 <span class="muted">{{ auto.file }}</span></h2>

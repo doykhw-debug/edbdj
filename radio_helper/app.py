@@ -1417,7 +1417,8 @@ def create_app(data_dir: str | None = None) -> Flask:
 
         if report and is_excluded(report.get("title") or "", report.get("process") or ""):
             report = None  # 브라우저(이 도우미 화면)를 점검한 결과는 채팅 앱 설정에 쓸모가 없어 보여 주지 않는다
-        coords = {k: qconfig.get(g.conn, f"{app_}.{k}") for k in ("input_x", "input_y", "send_x", "send_y")}
+        coords = {k: qconfig.get(g.conn, f"{app_}.{k}")
+                  for k in ("input_x", "input_y", "send_x", "send_y", "input_point", "send_point")}
         from .quizbot.gorilla import parse_rect
 
         rects = {k: parse_rect(qconfig.get(g.conn, f"{app_}.{k}_rect")) for k in ("input", "send")}

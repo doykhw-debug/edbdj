@@ -52,14 +52,19 @@ DEFAULTS = {
     "gorilla.window_size": "",            # 위치 지정 때 잰 창 크기 "너비,높이"
     "gorilla.screen_region": "",          # 고릴라 창 영역을 네모로 지정했을 때 화면 좌표 "왼,위,오른,아래"
     "gorilla.region_window": "",          # 그때 그 자리에 있던 고릴라 창의 화면 좌표 (창이 옮겨졌는지 확인용)
+    # 모니터 기준 위치 (입력칸·전송 버튼 영역을 지정하면 저장, input_mode/send_mode = screen 일 때 그 자리를 그대로 누름)
+    "gorilla.input_point": "",            # 입력칸 네모 가운데의 모니터 좌표 "x,y"
+    "gorilla.send_point": "",             # 전송 버튼 네모 가운데의 모니터 좌표 "x,y"
+    "gorilla.point_window": "",           # 지정할 때 그 자리에 있던 채팅 창의 모니터 좌표 (창이 옮겨졌는지 확인용)
+    "gorilla.chat_screen": "",            # 채팅 목록 네모의 모니터 좌표 "왼,위,오른,아래"
     "gorilla.input_rect": "",             # 입력칸 네모 (기준 대비 비율 "x1,y1,x2,y2")
     "gorilla.send_rect": "",              # 전송 버튼 네모
     "gorilla.chat_rect": "",              # 채팅 목록 네모 (키워드가 들리면 읽어서 녹취와 함께 분석)
     "gorilla.window_title": "고릴라|gorealra",
-    "gorilla.input_mode": "uia",          # uia: 화면 요소로 입력칸 찾기 / coords: 지정한 위치 클릭
+    "gorilla.input_mode": "uia",          # uia: 화면 요소로 입력칸 찾기 / screen: 모니터의 지정한 자리 클릭 / coords: 창 안 비율 위치
     "gorilla.input_auto_id": "",
     "gorilla.input_name": "공감로그|글쓰기",
-    "gorilla.send_mode": "auto",          # auto(전송 버튼, 없으면 Enter) / button / enter / coords
+    "gorilla.send_mode": "auto",          # auto(전송 버튼, 없으면 Enter) / button / enter / screen / coords
     "gorilla.send_button_name": "전송|보내기|등록",
     "gorilla.input_x": "",
     "gorilla.input_y": "",
@@ -105,10 +110,10 @@ LABELS = {
     "quizbot.effort": "분석 노력 수준 (low/medium/high)",
     "gorilla.process_name": "고릴라 프로그램 이름 (자동 찾기로 채워짐)",
     "gorilla.window_title": "고릴라 창 제목(정규식, 프로그램 이름이 없을 때)",
-    "gorilla.input_mode": "입력칸 찾기 (uia/coords)",
+    "gorilla.input_mode": "입력칸 찾기 (screen=모니터 위치 / uia / coords)",
     "gorilla.input_auto_id": "입력칸 AutomationId (uia)",
     "gorilla.input_name": "입력칸 이름 (uia)",
-    "gorilla.send_mode": "전송 방법 (auto/button/enter/coords)",
+    "gorilla.send_mode": "전송 방법 (screen=모니터 위치 / auto / button / enter / coords)",
     "gorilla.send_button_name": "전송 버튼 이름(정규식)",
     "gorilla.message_template": "보낼 문구 ({answer} 자리에 정답)",
     "gorilla.test_message": "전송 테스트로 실제로 보낼 글",
@@ -133,7 +138,7 @@ CHAT_APPS = {
 APP_ALIASES = {"고릴라": "gorilla", "gorilla": "gorilla", "mini": "mini", "미니": "mini", "콩": "kong", "kong": "kong"}
 _APP_FIELDS = {  # 앱마다 따로 저장하는 화면 설정 (고릴라는 기존 'gorilla.*' 키를 그대로 쓴다)
     "process_name": "", "window_size": "", "screen_region": "", "region_window": "", "input_rect": "", "send_rect": "",
-    "chat_rect": "", "input_mode": "uia", "input_auto_id": "", "send_mode": "auto", "send_button_name": "전송|보내기|등록",
+    "chat_rect": "", "input_point": "", "send_point": "", "point_window": "", "chat_screen": "", "input_mode": "uia", "input_auto_id": "", "send_mode": "auto", "send_button_name": "전송|보내기|등록",
     "input_x": "", "input_y": "", "send_x": "", "send_y": "",
 }
 for _app, _meta in CHAT_APPS.items():
@@ -258,6 +263,10 @@ class GorillaConfig:
     window_size: str = ""
     screen_region: str = ""
     region_window: str = ""
+    input_point: str = ""
+    send_point: str = ""
+    point_window: str = ""
+    chat_screen: str = ""
     input_rect: str = ""
     send_rect: str = ""
     chat_rect: str = ""

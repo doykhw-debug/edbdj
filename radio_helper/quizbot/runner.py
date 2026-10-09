@@ -806,7 +806,7 @@ class Runner:
         if route != "sms":
             cfg = getattr(self.chat_sender(app), "cfg", None)
             how_clicked = "" if cfg is None else \
-                " (위치 클릭)" if "coords" in (cfg.input_mode, cfg.send_mode) else " (화면 요소)"
+                " (위치 클릭)" if {"coords", "screen"} & {cfg.input_mode, cfg.send_mode} else " (화면 요소)"
             self.touch(f"{config.app_label(app)} 채팅 전송{how_clicked}")
         try:
             if route == "sms":

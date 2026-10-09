@@ -98,7 +98,7 @@ def judge_result(mode: str, input_after: str | None, text: str, seen_in_chat: bo
     """전송 뒤 상태 판단. 확인할 수 없으면 '결과 불명'으로 두고 다시 보내지 않는다."""
     if seen_in_chat:
         return SendResult("posted", "채팅 목록에서 보낸 문구를 확인함")
-    if mode == "coords":
+    if mode in ("coords", "screen"):
         return SendResult("entered", "위치 클릭 방식이라 채팅에 올라갔는지는 확인하지 못함")
     if input_after is not None and text not in input_after:
         return SendResult("entered", "입력칸이 비워져 전송된 것으로 보임 (채팅 목록에서는 확인 못 함)")
@@ -246,6 +246,33 @@ def window_info(root: int) -> dict:
     user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
     return {"hwnd": root, "title": buf.value, "process": process_name(pid.value),
             "rect": (rect.left, rect.top, rect.right, rect.bottom)}
+
+
+def app_window_at(x: int, y: int, process: str) -> int | None:
+    """모니터 좌표 (x, y)를 덮고 있는 그 프로그램의 보이는 최상위 창 중 맨 위의 것. 다른 창에 가려져 있어도 찾는다
+    (앞으로 가져온 뒤 누르기 위해). 없으면 None."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = _user32()
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        r = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(r))
+        if r.left <= x < r.right and r.top <= y < r.bottom:
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if process_name(pid.value) == process:
+                found.append(hwnd)
+                return False
+        return True
+
+    user32.EnumWindows(each, 0)   # 위에 있는 창부터 차례로
+    return found[0] if found else None
 
 
 def foreground_root() -> int:
@@ -474,6 +501,7 @@ def region_settings(target: str, rect: tuple[int, int, int, int], info: dict,
             # 기준이 바뀌었으니 예전 입력칸·버튼 위치는 지운다
             "gorilla.input_x": "", "gorilla.input_y": "", "gorilla.input_rect": "",
             "gorilla.send_x": "", "gorilla.send_y": "", "gorilla.send_rect": "",
+            "gorilla.input_point": "", "gorilla.send_point": "", "gorilla.point_window": "",
         })
         if win_ok:
             settings["gorilla.window_title"] = re.escape(info["title"]) if info["title"] else ""
@@ -496,17 +524,26 @@ def region_settings(target: str, rect: tuple[int, int, int, int], info: dict,
     if not (0 <= cx <= 1 and 0 <= cy <= 1):
         raise GorillaError("네모가 고릴라 창(영역) 밖에 있습니다.")
     if target == "chat":
-        # 읽기만 하는 영역: 누를 위치나 입력 방식은 바꾸지 않는다
+        # 읽기만 하는 영역: 누를 위치나 입력 방식은 바꾸지 않는다. 모니터 좌표도 같이 저장 (채팅이 따로 뜨는 앱)
         settings["gorilla.chat_rect"] = f"{fx1},{fy1},{fx2},{fy2}"
+        settings["gorilla.chat_screen"] = f"{l},{t},{r},{b}"
         return settings, (f"채팅창 영역을 저장했습니다: {basis}의 {fx2 - fx1:.0%}×{fy2 - fy1:.0%}. "
                           "퀴즈·사연 키워드가 들리면 이 부분에 올라오는 글도 함께 읽어 분석합니다.")
+    if not win_ok:
+        raise GorillaError(f"네모 가운데가 고릴라가 아닌 창('{info['title'][:40]}', {info['process']}) 위에 있습니다. "
+                           "고릴라 채팅 창의 그 자리에 그려 주세요.")
+    px, py = (l + r) // 2, (t + b) // 2
     settings.update({
         f"gorilla.{target}_rect": f"{fx1},{fy1},{fx2},{fy2}",
         f"gorilla.{target}_x": str(cx), f"gorilla.{target}_y": str(cy),
-        "gorilla.input_mode" if target == "input" else "gorilla.send_mode": "coords",
+        # 모니터 기준: 채팅 창이 플레이어 옆에 따로 뜨는 앱도 그 자리를 그대로 누른다
+        f"gorilla.{target}_point": f"{px},{py}",
+        "gorilla.point_window": ",".join(str(v) for v in info["rect"]),
+        "gorilla.input_mode" if target == "input" else "gorilla.send_mode": "screen",
     })
     label = "입력칸" if target == "input" else "전송 버튼"
-    return settings, f"{label} 영역을 저장했습니다: {basis} 기준 가로 {cx:.0%}, 세로 {cy:.0%} 지점을 누릅니다."
+    return settings, (f"{label} 영역을 저장했습니다: 모니터 화면의 ({px}, {py}) 지점을 그대로 누릅니다 "
+                      f"('{info['title'] or '(제목 없음)'}' 창). 고릴라 창을 옮기면 다시 지정하세요.")
 
 
 def calibration_settings(target: str, info: dict) -> dict:
@@ -518,7 +555,9 @@ def calibration_settings(target: str, info: dict) -> dict:
     left, top, right, bottom = info["rect"]
     settings = {
         f"gorilla.{target}_x": str(fx), f"gorilla.{target}_y": str(fy),
-        "gorilla.input_mode" if target == "input" else "gorilla.send_mode": "coords",
+        f"gorilla.{target}_point": "{},{}".format(*info["point"]),         # 모니터 기준 (그 자리를 그대로 누름)
+        "gorilla.point_window": ",".join(str(v) for v in info["rect"]),
+        "gorilla.input_mode" if target == "input" else "gorilla.send_mode": "screen",
         "gorilla.window_title": re.escape(info["title"]) if info["title"] else "",
         "gorilla.window_size": f"{right - left},{bottom - top}",
     }
@@ -610,7 +649,43 @@ class Gorilla:
             raise GorillaError("저장한 고릴라 창 영역에 다른 창이 있습니다. 고릴라 창을 그 자리에 두거나 영역을 다시 지정하세요.")
         return info
 
+    def _screen_point(self, target: str) -> tuple[int, int] | None:
+        """모니터 기준으로 저장한 자리 (그 방식일 때만)."""
+        mode = self.cfg.input_mode if target == "input" else self.cfg.send_mode
+        raw = self.cfg.input_point if target == "input" else self.cfg.send_point
+        if mode != "screen":
+            return None
+        try:
+            x, y = (int(float(v)) for v in (raw or "").split(","))
+        except ValueError:
+            return None
+        return x, y
+
+    def _is_app(self, info: dict) -> bool:
+        proc = (self.cfg.process_name or "").lower()
+        return not is_excluded(info["title"], info["process"]) and (not proc or not info["process"]
+                                                                    or info["process"] == proc)
+
+    def _window_at_point(self, point: tuple[int, int], label: str):
+        """모니터 기준: 그 자리의 채팅 창. 다른 창이 덮고 있으면 그 자리를 포함하는 앱 창을 찾아 앞으로 가져온다."""
+        from pywinauto import Desktop
+
+        info = window_at_point(*point)
+        if self._is_app(info):
+            hwnd = info["hwnd"]
+        else:
+            proc = (self.cfg.process_name or "").lower()
+            hwnd = app_window_at(*point, proc) if proc else None
+            if not hwnd:
+                raise GorillaError(f"{label} 자리(모니터 {point[0]}, {point[1]})에 {self.cfg.label} 창이 없습니다 "
+                                   f"(지금 그 자리: '{(info['title'] or '제목 없음')[:30]}', {info['process'] or '?'}). "
+                                   f"{self.cfg.label} 채팅 창을 지정할 때 자리에 두거나 ①② 위치를 다시 지정하세요. 최소화하지 마세요.")
+        return Desktop(backend="uia").window(handle=hwnd).wrapper_object()
+
     def _window(self):
+        point = self._screen_point("input") or self._screen_point("send")
+        if point is not None:
+            return self._window_at_point(point, "입력칸" if self._screen_point("input") else "전송 버튼")
         if self._region() is not None:
             from pywinauto import Desktop
 
@@ -637,9 +712,29 @@ class Gorilla:
                 pass
         return self._rect(w)
 
+    def _screen_mode(self) -> bool:
+        return self._screen_point("input") is not None or self._screen_point("send") is not None
+
     def _ref_rect(self, w) -> tuple[int, int, int, int]:
-        """위치 비율의 기준: 지정한 화면 영역이 있으면 그 영역, 없으면 고릴라 창."""
+        """사진·위치 비율의 기준: 모니터 기준이면 그 자리의 채팅 창, 지정한 화면 영역이 있으면 그 영역, 없으면 고릴라 창."""
+        if self._screen_mode():
+            return self._frame(w)
         return self._region() or self._frame(w)
+
+    def _has_point(self, target: str) -> bool:
+        if (self.cfg.input_mode if target == "input" else self.cfg.send_mode) == "screen":
+            return self._screen_point(target) is not None
+        fx, fy = (self.cfg.input_x, self.cfg.input_y) if target == "input" else (self.cfg.send_x, self.cfg.send_y)
+        return fx is not None and fy is not None
+
+    def _target_point(self, w, target: str) -> tuple[int, int]:
+        """입력칸(input)·전송 버튼(send)을 누를 화면 좌표: 모니터 기준이면 저장한 자리 그대로, 아니면 창 안 비율."""
+        point = self._screen_point(target)
+        if point is not None:
+            return point
+        if target == "input":
+            return self._point(w, self.cfg.input_x, self.cfg.input_y)
+        return self._point(w, self.cfg.send_x, self.cfg.send_y)
 
     def _point(self, w, fx: float, fy: float) -> tuple[int, int]:
         """저장한 위치(비율) → 지금 누를 화면 좌표. 창 기준이면 가장자리에 붙은 입력칸·전송 버튼을 따라간다."""
@@ -801,7 +896,9 @@ class Gorilla:
     def _check_layout(self, w) -> None:
         """위치 클릭 전에: 창 크기·자리가 위치를 지정할 때와 같은지. 많이 다르면 저장한 비율 위치가
         재생·채널 버튼 같은 다른 곳을 가리킬 수 있으므로 누르지 않는다."""
-        if self._region() is not None:
+        if self._screen_mode():
+            problem = window_moved(self.cfg.point_window, self._frame(w))
+        elif self._region() is not None:
             problem = window_moved(self.cfg.region_window, self._frame(w))
         else:
             problem = size_changed(self.cfg.window_size, self._frame(w))
@@ -855,11 +952,11 @@ class Gorilla:
     def _put_text(self, w, text: str):
         """입력칸에 글자를 넣고 입력칸 객체(uia) 또는 None(coords)을 돌려준다.
         앱이 키 입력으로 글자를 인식하도록 실제 클릭 후 붙여넣기를 먼저 쓴다."""
-        if self.cfg.input_mode == "coords":
-            if self.cfg.input_x is None or self.cfg.input_y is None:
-                raise GorillaError("입력칸 위치가 지정되지 않았습니다. '입력칸 위치 지정'을 하세요.")
+        if self.cfg.input_mode in ("coords", "screen"):
+            if not self._has_point("input"):
+                raise GorillaError("입력칸 위치가 지정되지 않았습니다. '① 입력칸 영역 지정'을 하세요.")
             self._check_layout(w)
-            self._click(w, self._point(w, self.cfg.input_x, self.cfg.input_y), "입력칸")
+            self._click(w, self._target_point(w, "input"), "입력칸")
             time.sleep(0.2)
             self._paste(w, text)
             return None
@@ -882,11 +979,11 @@ class Gorilla:
         from pywinauto.keyboard import send_keys
 
         mode = self.cfg.send_mode or "auto"
-        if mode == "coords":
-            if self.cfg.send_x is None or self.cfg.send_y is None:
-                raise GorillaError("전송 버튼 위치가 지정되지 않았습니다.")
+        if mode in ("coords", "screen"):
+            if not self._has_point("send"):
+                raise GorillaError("전송 버튼 위치가 지정되지 않았습니다. '② 전송 버튼 영역 지정'을 하세요.")
             self._check_layout(w)
-            self._click(w, self._point(w, self.cfg.send_x, self.cfg.send_y), "전송 버튼")
+            self._click(w, self._target_point(w, "send"), "전송 버튼")
             return
         if mode in ("button", "auto"):
             pattern = re.compile(self.cfg.send_button_name or SEND_BUTTON_HINT.pattern)
@@ -917,8 +1014,12 @@ class Gorilla:
             saved_clip = self._clipboard()
         except Exception:
             saved_clip = None
-        w = self._window()
         hidden = hide_caption_window()   # 자막 창이 입력칸·전송 버튼을 가리지 않게 (끝나면 다시 보임)
+        try:
+            w = self._window()
+        except Exception:
+            show_windows(hidden)
+            raise
         try:
             try:
                 # 최소화돼 있으면 set_focus 가 원래 모양(최대화였으면 최대화)으로 되돌린다.
@@ -941,35 +1042,42 @@ class Gorilla:
 
     def click_points(self, w) -> list[tuple[tuple[int, int], str]]:
         points = []
-        if self.cfg.input_mode == "coords" and self.cfg.input_x is not None and self.cfg.input_y is not None:
-            points.append((self._point(w, self.cfg.input_x, self.cfg.input_y), "#ef4444"))
-        if self.cfg.send_mode == "coords" and self.cfg.send_x is not None and self.cfg.send_y is not None:
-            points.append((self._point(w, self.cfg.send_x, self.cfg.send_y), "#22c55e"))
+        if self.cfg.input_mode in ("coords", "screen") and self._has_point("input"):
+            points.append((self._target_point(w, "input"), "#ef4444"))
+        if self.cfg.send_mode in ("coords", "screen") and self._has_point("send"):
+            points.append((self._target_point(w, "send"), "#22c55e"))
         return points
 
     def chat_image(self, max_side: int = 900, save_as: str | None = None) -> bytes | None:
         """채팅 목록 영역을 찍어 JPEG 로 돌려준다 (읽기만 함, 창을 앞으로 가져오지 않음).
         영역을 지정하지 않았거나 창을 찾지 못하면 None."""
-        frac = parse_rect(self.cfg.chat_rect)
-        if not frac:
-            return None
-        w = self._window()
-        ref = self._ref_rect(w)
-        rl, rt, rr, rb = ref
-        rw, rh = rr - rl, rb - rt
-        box = (int(rw * frac[0]), int(rh * frac[1]), int(rw * frac[2]), int(rh * frac[3]))
+        screen = parse_rect(self.cfg.chat_screen)
+        if screen:   # 모니터 기준으로 지정한 채팅 목록 (채팅이 플레이어 옆에 따로 뜨는 앱)
+            area = tuple(int(v) for v in screen)
+            w = self._window_at_point(((area[0] + area[2]) // 2, (area[1] + area[3]) // 2), "채팅 목록")
+            by_window = True
+        else:
+            frac = parse_rect(self.cfg.chat_rect)
+            if not frac:
+                return None
+            w = self._window()
+            rl, rt, rr, rb = self._ref_rect(w)
+            rw, rh = rr - rl, rb - rt
+            area = (rl + int(rw * frac[0]), rt + int(rh * frac[1]), rl + int(rw * frac[2]), rt + int(rh * frac[3]))
+            by_window = self._region() is None
         img = None
-        if self._region() is None:
+        if by_window:
             try:
-                full = window_image(w.handle)
+                full = window_image(w.handle)   # 다른 창에 가려져 있어도 그 창만 찍힘
                 if full is not None:
-                    img = full.crop(box)
+                    fl, ft, _fr, _fb = self._frame(w)
+                    img = full.crop((area[0] - fl, area[1] - ft, area[2] - fl, area[3] - ft))
             except Exception:
                 img = None
         if img is None:  # 창 사진을 못 찍는 앱이면 화면에서 그 부분을 찍는다 (가려져 있으면 가린 창이 찍힘)
             from PIL import ImageGrab
 
-            img = ImageGrab.grab(bbox=(rl + box[0], rt + box[1], rl + box[2], rt + box[3]), all_screens=True)
+            img = ImageGrab.grab(bbox=area, all_screens=True)
         if save_as:
             from .. import db
 
@@ -1021,7 +1129,7 @@ class Gorilla:
     def evidence_image(self, w) -> bytes | None:
         """증거 사진: 지금 채팅 앱 창 (JPEG). 다른 창에 가려져도 찍히는 창 사진을 먼저, 안 되면 화면에서 그 영역."""
         try:
-            img = window_image(w.handle) if self._region() is None else None
+            img = window_image(w.handle) if self._region() is None or self._screen_mode() else None
             if img is None:
                 from PIL import ImageGrab
 
