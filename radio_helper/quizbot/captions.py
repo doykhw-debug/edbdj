@@ -70,7 +70,10 @@ def run_window() -> None:
             root.after(2000, refresh)
             return
         if state["tick"] % 5 == 0:  # 관리 화면에 '자막 창 열림'을 알린다
-            db.set_setting(conn, "captions.heartbeat", time.strftime("%Y-%m-%d %H:%M:%S"))
+            try:
+                db.set_setting(conn, "captions.heartbeat", time.strftime("%Y-%m-%d %H:%M:%S"))
+            except Exception:   # 데이터가 잠시 잠겨도 자막 창은 멈추지 않는다
+                conn.rollback()
         state["tick"] += 1
         if not vm["active"]:
             state["off_since"] = state["off_since"] or time.monotonic()

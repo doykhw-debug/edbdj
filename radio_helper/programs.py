@@ -364,6 +364,8 @@ def refresh(conn: sqlite3.Connection, fetch: Fetcher, discover: bool = True,
             conn.execute("UPDATE programs SET checked_at = ?, updated_at = ? WHERE id = ?", (db.now(), db.now(), p["id"]))
         if info.channel and p["channel"] in (None, "", "미확인"):
             conn.execute("UPDATE programs SET channel = ? WHERE id = ?", (info.channel, p["id"]))
+        # 게시판 페이지를 여는 동안(수십 초) 데이터를 잠가 두면 관리 화면·청취가 '데이터베이스 잠김'으로 멈춘다
+        conn.commit()
         _save_boards(conn, report, p["title"], fetch, p["code"], links, final, say)
         conn.commit()
 
@@ -390,6 +392,7 @@ def refresh(conn: sqlite3.Connection, fetch: Fetcher, discover: bool = True,
                      "공식 페이지" if on_air else "SBS 라디오 첫 화면에서 발견", db.now(), db.now()))
                 (report.added if on_air else report.candidates).append(
                     f"{title}({info.channel} {info.start}~{info.end})" if on_air else title)
+                conn.commit()
                 if on_air:  # 새로 편성에 넣은 프로그램의 게시판도 같이 모은다
                     _save_boards(conn, report, title, fetch, code, page_links, final, say)
                 conn.commit()

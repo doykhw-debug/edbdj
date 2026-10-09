@@ -15,6 +15,7 @@ from pathlib import Path
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
 from . import db, gates, generator, quiz
+from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
 from .quizbot import live
@@ -70,6 +71,12 @@ def create_app(data_dir: str | None = None) -> Flask:
         conn = g.pop("conn", None)
         if conn is not None:
             conn.close()
+
+    @app.errorhandler(500)
+    def server_error(e):
+        """'Internal Server Error' 대신 무엇이 어디서 잘못됐는지 보여 주고 기록 파일에 남긴다 (이 PC 안에서만 보임)."""
+        err = getattr(e, "original_exception", None) or e
+        return error_page(err, request.method, request.full_path.rstrip("?")), 500
 
     @app.context_processor
     def inject():

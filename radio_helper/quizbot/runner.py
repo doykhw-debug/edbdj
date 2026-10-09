@@ -258,9 +258,11 @@ class Runner:
             schedules = self.schedules()
             w = active_window(schedules, now)
             if w is None:
-                nxt = next_window(schedules, now)
-                self.state(f"대기 중 — 다음 예약 {nxt.start:%m/%d %H:%M}" if nxt else "대기 중 — '청취 시작'을 누르세요")
-                self.process_approved(None)
+                def idle():
+                    nxt = next_window(schedules, now)
+                    self.state(f"대기 중 — 다음 예약 {nxt.start:%m/%d %H:%M}" if nxt else "대기 중 — '청취 시작'을 누르세요")
+                    self.process_approved(None)
+                self._guarded(idle)
                 self.deps.sleep(idle_seconds)
                 continue
             self._guarded(lambda: self.run_window(w))
@@ -272,8 +274,15 @@ class Runner:
             fn()
         except Exception as e:  # 녹음 장치·모델 내려받기 등 실패 → 기록하고 30초 뒤 다시 시도
             msg = f"{type(e).__name__}: {str(e)[:150]}"
-            db.log(self.conn, "quizbot", f"듣기 중 오류 — 30초 뒤 다시 시도: {msg}")
-            self.state(f"오류 후 대기 중 — {msg}")
+            try:
+                db.log(self.conn, "quizbot", f"듣기 중 오류 — 30초 뒤 다시 시도: {msg}")
+                self.state(f"오류 후 대기 중 — {msg}")
+            except Exception:  # 데이터가 잠시 잠겨 기록도 못 하면 실행 기록 파일에만 남기고 계속 산다
+                self.deps.log(f"[{self.deps.now():%H:%M:%S}] 듣기 중 오류 — 30초 뒤 다시 시도: {msg}")
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
             self.deps.sleep(30)
 
     def run_window(self, w: Window) -> None:
