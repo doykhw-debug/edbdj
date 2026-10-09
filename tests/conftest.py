@@ -85,7 +85,7 @@ def make_draft(conn, exp_id, corner_id=None, **over):
 
 def open_corner(conn, corner_id=None, **over):
     fields = dict(recruiting="open", notice_checked_at=db.now(), notice_changed=0, deadline="2099-12-31",
-                  ai_assist_policy="allowed")
+                  ai_assist_policy="allowed", title_selector="#title", body_selector="#content")
     fields.update(over)
     conn.execute(f"UPDATE corners SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
                  (*fields.values(), corner_id or target_corner_id(conn)))

@@ -224,20 +224,22 @@ def run_fill(conn, draft, corner, headless: bool = False) -> int:
     write_url = corner["write_url"]
     if not write_url or not _allowed_real_url(write_url):
         raise AutofillError("허용된 SBS 글쓰기 주소가 아닙니다.")
-    if not corner["title_selector"] or not corner["body_selector"]:
+    sel, borrowed = gates.corner_selectors(conn, corner)
+    if not sel["title"] or not sel["body"]:
         raise AutofillError("코너 설정에 제목·본문 입력 요소(선택자)가 없습니다. 먼저 '읽기 전용 점검'을 실행해 확인하세요.")
+    if borrowed:
+        say(borrowed)
 
     with sync_playwright() as p:
         browser = launch_browser(p, headless)
         page = browser.new_context().new_page()
         _open_and_wait_for_form(
             page, write_url,
-            lambda: locate(page, corner["title_selector"]).count() > 0
-            and locate(page, corner["body_selector"]).count() > 0)
-        fill_and_verify(page, corner["title_selector"], draft["title"])
-        fill_and_verify(page, corner["body_selector"], draft["body"])
-        if draft["song"] and corner["song_selector"]:
-            fill_and_verify(page, corner["song_selector"], draft["song"])
+            lambda: locate(page, sel["title"]).count() > 0 and locate(page, sel["body"]).count() > 0)
+        fill_and_verify(page, sel["title"], draft["title"])
+        fill_and_verify(page, sel["body"], draft["body"])
+        if draft["song"] and sel["song"]:
+            fill_and_verify(page, sel["song"], draft["song"])
 
         cur = conn.execute(
             """INSERT INTO submissions (draft_id, experience_id, corner_id, title, body, post_status, note,

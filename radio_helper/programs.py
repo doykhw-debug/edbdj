@@ -327,9 +327,9 @@ def _save_boards(conn: sqlite3.Connection, report: RefreshReport, title: str, fe
     for kind, label, url in boards:
         note = "공식 페이지에서 자동 수집. 모집 여부·형식 미확인" + ("" if label else " · 이름을 못 읽음(열어서 확인)")
         cur = conn.execute(
-            """INSERT OR IGNORE INTO corners (program, kind, title, board_url, dev_note, is_target, updated_at)
-               VALUES (?, ?, ?, ?, ?, 0, ?)""",
-            (title, kind, board_title(kind, label, url), url, note, db.now()))
+            """INSERT OR IGNORE INTO corners (program, kind, title, board_url, write_url, dev_note, is_target, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 0, ?)""",
+            (title, kind, board_title(kind, label, url), url, db.corner_write_url(url), note, db.now()))
         if cur.rowcount:
             added += 1
             report.new_boards.append(f"{title} · {board_title(kind, label, url)}")

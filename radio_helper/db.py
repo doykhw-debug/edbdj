@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -463,6 +464,30 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 
+_CORNERBOARD = re.compile(r"^https://(?:m\.)?programs\.sbs\.co\.kr/radio/([A-Za-z0-9_]+)/cornerboards/(\d+)(?:\?cornerid=(\d+))?$")
+
+
+def corner_write_url(board_url: str | None) -> str | None:
+    """코너 게시판 주소 → 글쓰기 화면 주소 (…/cornerboards/번호?cornerid=n → …/cornerboardwrite/번호/?cornerid=n).
+    처음 넣어 둔 '사연과 신청곡'의 공식 주소와 같은 모양이다. 일반 게시판(boards)은 모양을 몰라 만들지 않는다."""
+    m = _CORNERBOARD.match(board_url or "")
+    if not m:
+        return None
+    url = f"https://programs.sbs.co.kr/radio/{m.group(1)}/cornerboardwrite/{m.group(2)}/"
+    return url + (f"?cornerid={m.group(3)}" if m.group(3) else "")
+
+
+def fill_write_urls(conn: sqlite3.Connection) -> int:
+    """글쓰기 주소가 빈 코너 게시판에 주소를 채운다 (자동 수집한 코너)."""
+    n = 0
+    for c in conn.execute("SELECT id, board_url FROM corners WHERE COALESCE(write_url, '') = ''").fetchall():
+        url = corner_write_url(c["board_url"])
+        if url:
+            conn.execute("UPDATE corners SET write_url = ? WHERE id = ?", (url, c["id"]))
+            n += 1
+    return n
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _ensure_columns(conn)
@@ -484,6 +509,7 @@ def init_db(conn: sqlite3.Connection) -> None:
                  seed.POWERFM_SEED_SOURCE, now()),
             )
     conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('global_stop', '0')")
+    fill_write_urls(conn)
     conn.commit()
 
 

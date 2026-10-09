@@ -66,6 +66,21 @@ def corner_blockers(corner: sqlite3.Row) -> tuple[list[str], list[str]]:
     return blockers, warnings
 
 
+def corner_selectors(conn: sqlite3.Connection, corner) -> tuple[dict, str]:
+    """제목·본문·신청곡 입력 요소. 이 코너에 없으면 다른 SBS 코너에서 확인해 둔 것을 쓴다 (글쓰기 화면 틀이 같다).
+    ({title, body, song}, 어디서 가져왔는지 설명)"""
+    own = {"title": corner["title_selector"], "body": corner["body_selector"], "song": corner["song_selector"]}
+    if own["title"] and own["body"]:
+        return own, ""
+    other = conn.execute(
+        "SELECT * FROM corners WHERE id != ? AND COALESCE(title_selector, '') != '' AND COALESCE(body_selector, '') != '' "
+        "ORDER BY updated_at DESC, id DESC LIMIT 1", (corner["id"],)).fetchone()
+    if other is None:
+        return own, ""
+    return ({"title": other["title_selector"], "body": other["body_selector"], "song": other["song_selector"]},
+            f"입력 요소는 '{other['title']}' 코너에서 확인한 것을 씁니다.")
+
+
 def previous_bodies(conn: sqlite3.Connection, exclude_draft_id: int | None = None) -> list[str]:
     rows = conn.execute(
         "SELECT body FROM submissions WHERE post_status IN ('filled','posted','unknown') "
@@ -121,6 +136,12 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
     b, w = corner_blockers(corner)
     result.blockers += b
     result.warnings += w
+    selectors, borrowed = corner_selectors(conn, corner)
+    if not (selectors["title"] and selectors["body"]):
+        result.blockers.append("글쓰기 화면의 제목·본문 입력 요소를 아직 모릅니다. 아무 SBS 코너에서나 '점검용 브라우저 열기'로 "
+                               "한 번 확인해 적어 두면 모든 SBS 코너에 씁니다.")
+    elif borrowed:
+        result.warnings.append(borrowed)
     if not exp["user_confirmed"]:
         result.blockers.append("이 경험이 실제 있었던 일이라고 사용자가 확인하지 않았습니다.")
     if draft["status"] != "approved":
