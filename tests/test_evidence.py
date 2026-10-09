@@ -1,6 +1,7 @@
 """보낸 증거 사진: 채팅 앱·문자·게시판으로 보낼 때 찍은 화면을 저장하고 화면에서 본다."""
 
 import io
+from types import SimpleNamespace
 
 import pytest
 from test_quizbot import FakeGorilla, add_schedule, analysis, auto_quizzes, make_runner, run_one_window
@@ -9,7 +10,7 @@ import test_sound_stop
 from test_sound_stop import Win, coords_gorilla
 
 from radio_helper import db, evidence
-from radio_helper.quizbot import sms
+from radio_helper.quizbot import gorilla, sms
 
 PIL = pytest.importorskip("PIL.Image")
 desk = test_sound_stop.desk   # 가짜 윈도우 화면 준비물을 같이 쓴다
@@ -102,3 +103,81 @@ def test_evidence_page_empty_and_filters(client):
     assert "아직 찍어 둔 사진이 없습니다" in page and "모두 0장" in page
     assert client.get("/evidence?t=../etc&day=x").status_code == 200
     assert client.get("/evidence/999/image").status_code == 404
+
+
+# ── 전송 테스트도 증거 사진으로 ──────────────────────────────────────
+class TitledWin(Win):
+    def window_text(self):
+        return "공감로그"
+
+
+def fake_capture(data_dir):
+    """화면 찍기 흉내: inspect/<name>.png 를 만들고 이름을 돌려준다 (누를 자리 표시 수를 기록)."""
+    marks = {}
+
+    def capture(rect, name, boxes=(), points=()):
+        (data_dir / "inspect").mkdir(exist_ok=True)
+        (data_dir / "inspect" / f"{name}.png").write_bytes(png(64, 32))
+        marks[name] = len(points)
+        return f"{name}.png"
+    return capture, marks
+
+
+def test_send_test_returns_photos_even_when_refused(desk, monkeypatch, data_dir):
+    capture, marks = fake_capture(data_dir)
+    monkeypatch.setattr(gorilla, "capture", capture)
+    g = coords_gorilla()
+    monkeypatch.setattr(g, "_with_focus", lambda fn: fn(TitledWin()))
+    res, msg = g.send_test("파워 FM 화이팅")
+    assert res.status == "entered" and [label[:6] for label, _ in res.shots] == ["누르기 직전", "보낸 뒤"]
+    assert marks["gorilla_test"] == 2                                         # 빨강(입력칸)·초록(전송 버튼)
+
+    desk.at_point = {"hwnd": 3003, "title": "고릴라", "process": "gorealra.exe"}   # 플레이어 창이 가림
+    res, msg = g.send_test("파워 FM 화이팅")
+    assert res.status == "failed" and "가리고" in msg and "보내지 못했을 때" in msg
+    assert [label[:9] for label, _ in res.shots] == ["보내지 못했을 때"] and marks["gorilla_test"] == 2
+
+
+def test_send_test_command_saves_evidence(client, conn, monkeypatch):
+    from contextlib import nullcontext
+
+    from radio_helper.quizbot import __main__ as qmain
+    from radio_helper.quizbot import runner
+
+    shots = [("누르기 직전 (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼)", png(300, 200)), ("보낸 뒤", png(300, 200))]
+    monkeypatch.setattr(runner, "shared_input_lock", lambda: nullcontext())
+    monkeypatch.setattr(gorilla.Gorilla, "send_test",
+                        lambda self, text: (gorilla.SendResult("posted", "채팅 목록에서 확인", shots), "보냈습니다"))
+    assert qmain.cmd_send_test(conn, "gorilla") == 0
+    rows = conn.execute("SELECT * FROM evidence WHERE item_table = 'tests'").fetchall()
+    assert [r["via"] for r in rows] == ["gorilla", "gorilla"] and rows[0]["text"] == "파워 FM 화이팅"
+    assert "증거 사진 화면에 2장 저장" in conn.execute("SELECT message FROM events ORDER BY id DESC").fetchone()[0]
+    page = client.get("/evidence?t=tests").get_data(as_text=True)
+    assert "전송 테스트" in page and "전송 테스트 #0" not in page and "/gorilla?app=gorilla" in page
+
+
+def test_caption_window_hidden_while_sending(monkeypatch):
+    calls = []
+    fake = SimpleNamespace(FindWindowW=lambda cls, title: 77 if title == gorilla.CAPTION_TITLE else 0,
+                           IsWindowVisible=lambda h: True, ShowWindow=lambda h, cmd: calls.append((h, cmd)))
+    monkeypatch.setattr(gorilla, "_user32", lambda: fake)
+    hidden = gorilla.hide_caption_window()
+    gorilla.show_windows(hidden)
+    assert hidden == [77] and calls == [(77, 0), (77, 4)]                    # 숨김 → 다시 보임(포커스는 안 뺏음)
+    fake.IsWindowVisible = lambda h: False                                    # 자막 창을 닫아 두었으면 손대지 않음
+    assert gorilla.hide_caption_window() == [] and len(calls) == 2
+
+
+def test_browser_window_inspection_is_not_shown(client, data_dir):
+    import json
+
+    (data_dir / "inspect").mkdir(exist_ok=True)
+    report = {"title": "고릴라·인식 설정 · 라디오 참여 도우미 - Chrome", "process": "chrome.exe", "edit_count": 17,
+              "edit_names": [], "button_names": ["Claude", "Papago"], "controls": []}
+    (data_dir / "inspect" / "gorilla_20261002_231833.json").write_text(json.dumps(report, ensure_ascii=False),
+                                                                       encoding="utf-8")
+    assert "마지막 창 점검" not in client.get("/gorilla").get_data(as_text=True)
+    report.update(title="공감로그", process="gorealra.exe")
+    (data_dir / "inspect" / "gorilla_20261009_120000.json").write_text(json.dumps(report, ensure_ascii=False),
+                                                                       encoding="utf-8")
+    assert "마지막 창 점검" in client.get("/gorilla").get_data(as_text=True)

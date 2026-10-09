@@ -178,9 +178,14 @@ def cmd_send_test(conn, app: str = "gorilla") -> int:
     from .gorilla import Gorilla
     from .runner import shared_input_lock
 
+    from .. import evidence
+
     text = config.get(conn, f"{app}.test_message").strip() or config.CHAT_APPS[app]["test"]
     with shared_input_lock():
         result, msg = Gorilla(config.GorillaConfig.load(conn, app)).send_test(text)
+    if result.shots:   # 메뉴 '증거 사진'의 '전송 테스트'에도 남긴다
+        evidence.save(conn, "tests", 0, app, text, result.status, result.shots)
+        msg += f" (증거 사진 화면에 {len(result.shots)}장 저장)"
     _save(conn, app, {}, f"전송 테스트 → {quiz.ENTRY_LABELS.get(result.status, result.status)}: {msg}")
     return 0 if result.status in ("entered", "posted") else 1
 

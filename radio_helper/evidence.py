@@ -16,7 +16,8 @@ from . import db
 
 DIR_NAME = "evidence"
 MAX_WIDTH, MAX_HEIGHT = 1600, 6000   # 게시판 전체 화면처럼 긴 사진은 가로 기준으로 줄인다
-ITEM_LABELS = {"quizzes": "퀴즈 정답", "story_posts": "사연(채팅·문자)", "submissions": "게시판 사연"}
+ITEM_LABELS = {"quizzes": "퀴즈 정답", "story_posts": "사연(채팅·문자)", "submissions": "게시판 사연",
+               "tests": "전송 테스트"}   # 전송 테스트는 항목 번호 없이 0
 
 
 def root() -> Path:

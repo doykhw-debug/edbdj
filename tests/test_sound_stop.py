@@ -83,6 +83,19 @@ def test_coords_send_clicks_only_when_safe(desk):
     assert desk.clicks == [(1320, 902), (1576, 902)] and desk.keys == ["^a{BACKSPACE}^v"]
 
 
+def test_small_size_difference_follows_bottom_right_edges(desk):
+    """실제 사례: 위치 지정 때 640×958, 지금 719×957 (사용자는 창을 건드리지 않음) → 막지 않고,
+    아래·오른쪽에 붙은 입력칸·전송 버튼은 그 가장자리에서의 거리를 지켜 누른다."""
+    g = coords_gorilla(window_size="640,958", input_x=0.4539, input_y=0.9494, send_x=0.9125, send_y=0.953)
+    w = Win((0, 0, 719, 957))
+    g._put_text(w, "사과")
+    g._press_send(w)
+    assert desk.clicks == [(326, 908), (663, 911)]           # 전송 버튼: 오른쪽에서 56px, 아래에서 45px 그대로
+    assert gorilla.anchored_point((0, 0, 640, 958), 0.9125, 0.953, "640,958") == \
+        gorilla.fraction_to_point((0, 0, 640, 958), 0.9125, 0.953)            # 크기가 같으면 예전과 같은 자리
+    assert gorilla.anchored_point((0, 0, 500, 500), 0.5, 0.5, "") == (250, 250)  # 잰 크기를 모르면 비율 그대로
+
+
 def test_resized_window_is_not_clicked(desk):
     with pytest.raises(gorilla.GorillaError, match="창 크기"):
         coords_gorilla()._put_text(Win((0, 0, 1280, 700)), "사과")        # 최대화가 풀리는 등 크기가 바뀜

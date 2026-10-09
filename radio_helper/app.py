@@ -1361,6 +1361,9 @@ def create_app(data_dir: str | None = None) -> Flask:
         for r in rows:
             if r["item_table"] == "submissions":
                 status, link = STATUS_LABELS.get(r["status"], r["status"]), url_for("submissions")
+            elif r["item_table"] == "tests":
+                status = quiz.entry_label(r["status"], r["via"])
+                link = url_for("gorilla", app=r["via"] if r["via"] in qconfig.CHAT_APPS else "gorilla")
             else:
                 status = quiz.entry_label(r["status"], r["via"])
                 link = url_for("quizzes") + "#auto" if r["item_table"] == "quizzes" else url_for("stories_sent")
@@ -1410,6 +1413,10 @@ def create_app(data_dir: str | None = None) -> Flask:
         auto = latest(f"{app_}_auto_*.json")     # 자동 찾기
         if report and auto and report["file"][len(app_) + 1:] < auto["file"][len(app_) + 6:]:
             report = None  # 자동 찾기 이전의 점검 결과는 다른 창을 봤을 수 있다
+        from .quizbot.gorilla import is_excluded
+
+        if report and is_excluded(report.get("title") or "", report.get("process") or ""):
+            report = None  # 브라우저(이 도우미 화면)를 점검한 결과는 채팅 앱 설정에 쓸모가 없어 보여 주지 않는다
         coords = {k: qconfig.get(g.conn, f"{app_}.{k}") for k in ("input_x", "input_y", "send_x", "send_y")}
         from .quizbot.gorilla import parse_rect
 
@@ -1428,7 +1435,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         label = qconfig.app_label(app_)
         shots = image_list([(f"{app_}_chat", "④ 채팅창 읽기 — 키워드가 들리면 이 영역을 녹취와 함께 분석 (글자가 읽혀야 함)"),
                             (f"{app_}_select_chat", "④ 채팅 목록으로 지정한 영역"),
-                            (f"{app_}_test", "③ 전송 테스트 — 누르기 직전 (빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치)"),
+                            (f"{app_}_test", "③ 전송 테스트 — 누르기 직전, 또는 보내지 못했을 때 (빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치)"),
                             (f"{app_}_test_sent", "③ 전송 테스트 — 보낸 뒤 (채팅에 글이 올라왔는지 확인)"),
                             (f"{app_}_select_input", "① 입력칸으로 지정한 영역"),
                             (f"{app_}_select_send", "② 전송 버튼으로 지정한 영역"),

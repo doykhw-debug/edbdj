@@ -10,6 +10,7 @@ import time
 
 from .. import db
 from . import live
+from .gorilla import CAPTION_TITLE
 
 COLORS = {"collecting": "#ef4444", "starting": "#f59e0b", "launching": "#f59e0b", "stalled": "#a855f7",
           "off": "#9ca3af"}
@@ -31,7 +32,7 @@ def run_window() -> None:
 
     conn = db.connect()
     root = tk.Tk()
-    root.title("라디오 자막 · 라디오 참여 도우미")
+    root.title(CAPTION_TITLE)   # 보내는 동안 이 제목으로 찾아 잠깐 숨긴다 (gorilla.hide_caption_window)
     root.attributes("-topmost", True)
     root.configure(bg="#111827")
     w, h = 540, 240

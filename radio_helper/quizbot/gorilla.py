@@ -31,6 +31,7 @@ from .config import GorillaConfig, localize
 
 # 제목에 '고릴라'가 들어갈 수 있지만 고릴라 앱이 아닌 창
 OWN_TITLE = "라디오 참여 도우미"
+CAPTION_TITLE = "라디오 자막 · 라디오 참여 도우미"   # 항상 위에 뜨는 자막 창 (captions.py)
 EXCLUDED_PROCESSES = {
     "msedge.exe", "chrome.exe", "firefox.exe", "whale.exe", "opera.exe", "brave.exe", "vivaldi.exe",
     "iexplore.exe", "arc.exe", "aside.exe", "python.exe", "pythonw.exe", "explorer.exe", "cmd.exe",
@@ -40,8 +41,9 @@ TITLE_HINT = re.compile(r"고릴라|gorealra|공감로그|\bmini\b|미니|\bkong
 PROCESS_HINT = re.compile(r"gorealra|gorilla|고릴라|mbcmini|\bmini|kong", re.I)
 CHAT_INPUT_HINT = re.compile(r"공감로그|글쓰기")
 SEND_BUTTON_HINT = re.compile(r"^\s*(전송|보내기|등록)\s*$")
-LAYOUT_TOLERANCE = 0.1   # 창 크기가 위치 지정 때보다 이 비율(그리고 LAYOUT_MIN_PX)보다 많이 달라지면 위치 클릭을 하지 않는다
-LAYOUT_MIN_PX = 40
+LAYOUT_TOLERANCE = 0.35  # 창 크기가 위치 지정 때보다 이 비율(그리고 LAYOUT_MIN_PX)보다 많이 달라지면 위치 클릭을 하지 않는다
+LAYOUT_MIN_PX = 40       # (그보다 작은 변화는 가장자리에 붙은 입력칸·전송 버튼을 따라가 누른다 — anchored_point)
+EDGE_ZONE = 0.25         # 창 가장자리에서 이 비율 안쪽에 지정한 위치는 그 가장자리에 붙은 것으로 본다
 FRONT_WAIT_SECONDS = 1.0  # 클릭한 창이 맨 앞으로 올 때까지 기다리는 시간
 
 
@@ -60,6 +62,28 @@ class GorillaError(RuntimeError):
 def fraction_to_point(rect: tuple[int, int, int, int], fx: float, fy: float) -> tuple[int, int]:
     left, top, right, bottom = rect
     return int(left + (right - left) * fx), int(top + (bottom - top) * fy)
+
+
+def anchored_point(rect: tuple[int, int, int, int], fx: float, fy: float, saved_size: str | None) -> tuple[int, int]:
+    """저장한 비율 위치를 지금 창 크기에 맞춘다. 채팅 입력줄·전송 버튼은 보통 창 아래·오른쪽에 붙어 있어서,
+    창 크기가 바뀌면 비율이 아니라 그 가장자리에서의 거리가 그대로다. 그래서 위치를 지정할 때 창 크기를 알면
+    가장자리 가까이(바깥 25%) 지정한 것은 그 가장자리에서의 픽셀 거리를 지키고, 가운데 것은 비율로 옮긴다."""
+    left, top, right, bottom = rect
+    try:
+        sw, sh = (int(float(v)) for v in (saved_size or "").split(","))
+    except ValueError:
+        sw = sh = 0
+
+    def axis(frac: float, size: int, saved: int) -> float:
+        if saved <= 0:
+            return size * frac
+        if frac >= 1 - EDGE_ZONE:
+            return size - (1 - frac) * saved
+        if frac <= EDGE_ZONE:
+            return frac * saved
+        return size * frac
+
+    return int(left + axis(fx, right - left, sw)), int(top + axis(fy, bottom - top, sh))
 
 
 def point_to_fraction(rect: tuple[int, int, int, int], x: int, y: int) -> tuple[float, float]:
@@ -82,7 +106,8 @@ def judge_result(mode: str, input_after: str | None, text: str, seen_in_chat: bo
 
 
 def size_changed(saved: str | None, rect: tuple[int, int, int, int]) -> str | None:
-    """위치를 지정할 때 잰 창 크기("너비,높이")와 지금 크기가 많이 다르면 안내 문구. 같거나 모르면 None."""
+    """위치를 지정할 때 잰 창 크기("너비,높이")와 지금 크기가 크게(35% 넘게) 다르면 안내 문구. 같거나 모르면 None.
+    그보다 작은 변화는 anchored_point 가 가장자리에 붙은 입력칸·전송 버튼을 따라가 누른다."""
     try:
         sw, sh = (int(float(v)) for v in (saved or "").split(","))
     except ValueError:
@@ -90,7 +115,7 @@ def size_changed(saved: str | None, rect: tuple[int, int, int, int]) -> str | No
     w, h = rect[2] - rect[0], rect[3] - rect[1]
     if abs(w - sw) > max(LAYOUT_MIN_PX, sw * LAYOUT_TOLERANCE) or \
             abs(h - sh) > max(LAYOUT_MIN_PX, sh * LAYOUT_TOLERANCE):
-        return f"창 크기가 위치를 지정할 때({sw}×{sh})와 다릅니다(지금 {w}×{h})"
+        return f"창 크기가 위치를 지정할 때({sw}×{sh})와 크게 다릅니다(지금 {w}×{h}, 화면 모양이 바뀌었을 수 있음)"
     return None
 
 
@@ -184,6 +209,10 @@ def _user32():
     user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
     user32.GetAncestor.restype = wintypes.HWND
     user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user32.FindWindowW.restype = wintypes.HWND
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
     return user32
 
 
@@ -224,6 +253,28 @@ def foreground_root() -> int:
     user32 = _user32()
     fg = user32.GetForegroundWindow()
     return (user32.GetAncestor(fg, 2) or fg) if fg else 0  # GA_ROOT
+
+
+def hide_caption_window() -> list[int]:
+    """보내는 동안 이 도우미의 자막 창(항상 위)을 잠깐 숨긴다. 채팅 앱의 입력칸·전송 버튼을 가리면
+    오클릭 방지로 보내지 못하기 때문이다. 숨긴 창 번호들."""
+    try:
+        user32 = _user32()
+        hwnd = user32.FindWindowW(None, CAPTION_TITLE)
+        if hwnd and user32.IsWindowVisible(hwnd):
+            user32.ShowWindow(hwnd, 0)   # SW_HIDE
+            return [hwnd]
+    except Exception:
+        pass
+    return []
+
+
+def show_windows(hwnds: list[int]) -> None:
+    for hwnd in hwnds:
+        try:
+            _user32().ShowWindow(hwnd, 4)   # SW_SHOWNOACTIVATE: 다시 보이되 지금 쓰는 창을 빼앗지 않음
+        except Exception:
+            pass
 
 
 def bring_to_front(w) -> None:
@@ -527,7 +578,7 @@ class Gorilla:
             try:
                 tw, th = (int(v) for v in self.cfg.window_size.split(","))
                 def size_gap(x):
-                    left, top, right, bottom = self._rect(x[0])
+                    left, top, right, bottom = self._frame(x[0])
                     return abs((right - left) - tw) + abs((bottom - top) - th)
                 return min(cands, key=size_gap)[0]
             except (ValueError, AttributeError):
@@ -575,9 +626,27 @@ class Gorilla:
         r = w.rectangle()
         return r.left, r.top, r.right, r.bottom
 
+    def _frame(self, w) -> tuple[int, int, int, int]:
+        """지금 창의 화면 좌표. 위치를 지정할 때(window_at_point)와 같은 방법(GetWindowRect)으로 재야
+        저장한 비율·크기와 맞는다 (화면 요소 정보로 재면 앱에 따라 크기가 다르게 나옴)."""
+        handle = getattr(w, "handle", None)
+        if handle:
+            try:
+                return tuple(window_info(handle)["rect"])
+            except Exception:
+                pass
+        return self._rect(w)
+
     def _ref_rect(self, w) -> tuple[int, int, int, int]:
         """위치 비율의 기준: 지정한 화면 영역이 있으면 그 영역, 없으면 고릴라 창."""
-        return self._region() or self._rect(w)
+        return self._region() or self._frame(w)
+
+    def _point(self, w, fx: float, fy: float) -> tuple[int, int]:
+        """저장한 위치(비율) → 지금 누를 화면 좌표. 창 기준이면 가장자리에 붙은 입력칸·전송 버튼을 따라간다."""
+        region = self._region()
+        if region is not None:
+            return fraction_to_point(region, fx, fy)
+        return anchored_point(self._frame(w), fx, fy, self.cfg.window_size)
 
     # ── 자동 찾기·점검·위치 지정 ─────────────────────────────────
     def auto_setup(self) -> dict:
@@ -733,9 +802,9 @@ class Gorilla:
         """위치 클릭 전에: 창 크기·자리가 위치를 지정할 때와 같은지. 많이 다르면 저장한 비율 위치가
         재생·채널 버튼 같은 다른 곳을 가리킬 수 있으므로 누르지 않는다."""
         if self._region() is not None:
-            problem = window_moved(self.cfg.region_window, self._rect(w))
+            problem = window_moved(self.cfg.region_window, self._frame(w))
         else:
-            problem = size_changed(self.cfg.window_size, self._rect(w))
+            problem = size_changed(self.cfg.window_size, self._frame(w))
         if problem:
             raise GorillaError(f"{self.cfg.label} {problem}. 엉뚱한 곳(재생·채널 버튼 등)을 누르지 않도록 보내지 "
                                "않았습니다. 창을 위치 지정 때처럼 두거나 위치(영역)를 다시 지정하세요.")
@@ -790,7 +859,7 @@ class Gorilla:
             if self.cfg.input_x is None or self.cfg.input_y is None:
                 raise GorillaError("입력칸 위치가 지정되지 않았습니다. '입력칸 위치 지정'을 하세요.")
             self._check_layout(w)
-            self._click(w, fraction_to_point(self._ref_rect(w), self.cfg.input_x, self.cfg.input_y), "입력칸")
+            self._click(w, self._point(w, self.cfg.input_x, self.cfg.input_y), "입력칸")
             time.sleep(0.2)
             self._paste(w, text)
             return None
@@ -817,7 +886,7 @@ class Gorilla:
             if self.cfg.send_x is None or self.cfg.send_y is None:
                 raise GorillaError("전송 버튼 위치가 지정되지 않았습니다.")
             self._check_layout(w)
-            self._click(w, fraction_to_point(self._ref_rect(w), self.cfg.send_x, self.cfg.send_y), "전송 버튼")
+            self._click(w, self._point(w, self.cfg.send_x, self.cfg.send_y), "전송 버튼")
             return
         if mode in ("button", "auto"):
             pattern = re.compile(self.cfg.send_button_name or SEND_BUTTON_HINT.pattern)
@@ -849,6 +918,7 @@ class Gorilla:
         except Exception:
             saved_clip = None
         w = self._window()
+        hidden = hide_caption_window()   # 자막 창이 입력칸·전송 버튼을 가리지 않게 (끝나면 다시 보임)
         try:
             try:
                 # 최소화돼 있으면 set_focus 가 원래 모양(최대화였으면 최대화)으로 되돌린다.
@@ -860,6 +930,7 @@ class Gorilla:
             time.sleep(0.3)
             return fn(w)
         finally:
+            show_windows(hidden)
             if saved_clip is not None:
                 try:
                     self._clipboard(saved_clip)
@@ -869,12 +940,11 @@ class Gorilla:
                 user32.SetForegroundWindow(previous)
 
     def click_points(self, w) -> list[tuple[tuple[int, int], str]]:
-        ref = self._ref_rect(w)
         points = []
         if self.cfg.input_mode == "coords" and self.cfg.input_x is not None and self.cfg.input_y is not None:
-            points.append((fraction_to_point(ref, self.cfg.input_x, self.cfg.input_y), "#ef4444"))
+            points.append((self._point(w, self.cfg.input_x, self.cfg.input_y), "#ef4444"))
         if self.cfg.send_mode == "coords" and self.cfg.send_x is not None and self.cfg.send_y is not None:
-            points.append((fraction_to_point(ref, self.cfg.send_x, self.cfg.send_y), "#22c55e"))
+            points.append((self._point(w, self.cfg.send_x, self.cfg.send_y), "#22c55e"))
         return points
 
     def chat_image(self, max_side: int = 900, save_as: str | None = None) -> bytes | None:
@@ -909,32 +979,44 @@ class Gorilla:
         return to_jpeg(img, max_side)
 
     def send_test(self, text: str) -> tuple[SendResult, str]:
-        """설정 확인용으로 실제로 한 번 보낸다. 누르기 직전·보낸 직후 고릴라 창을 찍어 둔다."""
+        """설정 확인용으로 실제로 한 번 보낸다. 누르기 직전·보낸 직후 창을 찍어 둔다. 오클릭 방지로 보내지 못하면
+        그때 화면에 누를 자리(빨강·초록 원)를 표시해 찍는다. 사진은 결과의 shots 로도 돌려준다 (증거 사진)."""
+        shots, notes = [], []
+
         def run(w):
-            edit = self._put_text(w, text)
-            time.sleep(0.5)
-            notes = []
+            def snap(name: str, label: str, points=()) -> None:
+                from .. import db
+
+                try:
+                    saved = capture(self._ref_rect(w), f"{self.cfg.app}_{name}", points=points)
+                except Exception as e:
+                    notes.append(f"사진 실패: {type(e).__name__}")
+                    return
+                if saved:
+                    notes.append(f"{label} 사진 {saved}")
+                    shots.append((label, (db.data_dir() / "inspect" / saved).read_bytes()))
+
             try:
-                if capture(self._ref_rect(w), f"{self.cfg.app}_test", points=self.click_points(w)):
-                    notes.append(f"누르기 직전 사진 {self.cfg.app}_test.png (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼)")
-            except Exception as e:
-                notes.append(f"사진 실패: {type(e).__name__}")
-            self._press_send(w)
-            time.sleep(1.5)
-            after = self._value(edit) if edit is not None else None
-            result = judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
-            try:
-                if capture(self._ref_rect(w), f"{self.cfg.app}_test_sent"):
-                    notes.append(f"보낸 뒤 사진 {self.cfg.app}_test_sent.png")
-            except Exception as e:
-                notes.append(f"사진 실패: {type(e).__name__}")
+                edit = self._put_text(w, text)
+                time.sleep(0.5)
+                snap("test", "누르기 직전 (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼)", self.click_points(w))
+                self._press_send(w)
+                time.sleep(1.5)
+                after = self._value(edit) if edit is not None else None
+                result = judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
+                snap("test_sent", "보낸 뒤")
+            except GorillaError:
+                snap("test", "보내지 못했을 때 (빨간 원 = 입력칸 자리, 초록 원 = 전송 버튼 자리)", self.click_points(w))
+                raise
             msg = (f"'{w.window_text() or '(제목 없음)'}' 창에 '{text}'를 입력하고 전송을 눌렀습니다 → {result.detail}. "
                    + " / ".join(notes))
             return result, msg
         try:
-            return self._with_focus(run)
+            result, msg = self._with_focus(run)
         except GorillaError as e:
-            return SendResult("failed", str(e)), f"전송 테스트 실패: {e}"
+            result, msg = SendResult("failed", str(e)), f"전송 테스트 실패: {e}" + "".join(f" / {n}" for n in notes)
+        result.shots = shots
+        return result, msg
 
     def evidence_image(self, w) -> bytes | None:
         """증거 사진: 지금 채팅 앱 창 (JPEG). 다른 창에 가려져도 찍히는 창 사진을 먼저, 안 되면 화면에서 그 영역."""

@@ -29,7 +29,7 @@
       <img src="{{ url_for('evidence_image', eid=e.id) }}" alt="{{ e.label }}" loading="lazy"></a>
     <div class="shot-meta">
       <div><b>{{ e.taken_at }}</b></div>
-      <div><span class="badge">{{ e.kind }} #{{ e.item_id }}</span>
+      <div><span class="badge">{{ e.kind }}{% if e.item_table != 'tests' %} #{{ e.item_id }}{% endif %}</span>
         {% if e.via_label %}<span class="badge info">{{ e.via_label }}</span>{% endif %}
         <span class="badge {{ 'ok' if e.ok else 'warn' }}">{{ e.status_label }}</span></div>
       <div class="muted">{{ e.label }}</div>
