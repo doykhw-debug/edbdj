@@ -18,8 +18,11 @@ def test_rejects_foreign_host(client):
     assert r.status_code == 403
 
 
-def test_post_requires_csrf(client):
-    assert client.post("/settings", data={"global_stop": "1"}).status_code == 400
+def test_post_requires_csrf(client, conn):
+    from radio_helper import db
+
+    r = client.post("/settings", data={"global_stop": "1"})                  # 확인값 없음 → 처리 안 하고 돌려보냄
+    assert r.status_code == 302 and not db.is_stopped(conn)
     token = csrf(client, "/settings")
     assert client.post("/settings", data={"global_stop": "1", "csrf_token": token}).status_code == 302
 

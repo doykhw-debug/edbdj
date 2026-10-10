@@ -39,7 +39,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         os.environ["RADIO_HELPER_DATA_DIR"] = data_dir
     app = Flask(__name__)
     app.config.update(
-        SECRET_KEY=secrets.token_hex(32),
+        SECRET_KEY=session_key(),   # 데이터 폴더에 고정: 관리 화면을 다시 켜도 열려 있던 화면이 그대로 동작
         SESSION_COOKIE_SAMESITE="Strict",
         SESSION_COOKIE_HTTPONLY=True,
     )
@@ -64,7 +64,11 @@ def create_app(data_dir: str | None = None) -> Flask:
         if "csrf" not in session:
             session["csrf"] = secrets.token_hex(16)
         if request.method == "POST" and request.form.get("csrf_token") != session["csrf"]:
-            abort(400, "요청 확인값이 맞지 않습니다. 화면을 새로 고친 뒤 다시 시도하세요.")
+            # 다시 켜기 전에 열어 둔 화면 등에서 누른 것: 처리하지 않고 원래 화면으로 돌려보낸다 (외부 위조 요청도 마찬가지)
+            flash("화면이 오래되어 방금 누른 것은 처리하지 않았습니다 (관리 화면이 다시 켜졌거나 브라우저를 다시 열었을 때 생김). "
+                  "새로 불러온 이 화면에서 한 번 더 눌러 주세요.", "warn")
+            back = request.referrer or ""
+            return redirect(back if back.startswith(request.host_url) else url_for("home"))
         g.conn = db.connect()
 
     @app.teardown_request
@@ -1509,6 +1513,25 @@ def create_app(data_dir: str | None = None) -> Flask:
         return render_template("mock_view.html", post=one("SELECT * FROM mock_posts WHERE id = ?", mid))
 
     return app
+
+
+def session_key() -> str:
+    """세션 서명 키. 데이터 폴더에 한 번 만들어 계속 쓴다 (프로그램 폴더·GitHub 에는 남지 않음).
+    예전에는 켤 때마다 새로 만들어, 다시 켠 뒤 열려 있던 화면에서 누르면 'Bad Request' 가 났다."""
+    path = db.data_dir() / "session.key"
+    try:
+        key = path.read_text(encoding="ascii").strip()
+        if len(key) >= 32:
+            return key
+    except (OSError, ValueError):
+        pass
+    key = secrets.token_hex(32)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(key, encoding="ascii")
+    except OSError:
+        pass
+    return key
 
 
 def launch_module(module: str, args: list[str], prefix: str) -> str:

@@ -1,12 +1,14 @@
 """python -m radio_helper  → 로컬 관리 화면 실행 (http://127.0.0.1:5000)"""
 
 import argparse
+import faulthandler
 import json
 import logging
 import socket
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 import webbrowser
@@ -19,8 +21,33 @@ from .quizbot import config as qconfig
 
 APP_NAME = "radio_helper"
 PORT_TRIES = 20
+# 끝날 때 돌려주는 값: start_windows.bat 이 보고 비정상 종료(그 밖의 값)일 때만 자동으로 다시 켠다
+EXIT_OK, EXIT_CRASH, EXIT_NO_PORT = 0, 1, 2
+_crash_file = None   # 파이썬 밖(라이브러리)에서 꺼질 때 위치를 남기는 파일 (닫히지 않게 잡아 둠)
 # 이 PC 안의 주소만 부르므로 윈도우 프록시 설정을 거치지 않는다
 _local = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def server_log(message: str) -> None:
+    """관리 화면 서버가 켜지고 꺼진 기록 (데이터 폴더 logs/server.log). 중간에 꺼졌을 때 원인을 찾는 용도."""
+    try:
+        log_dir = db.data_dir() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with open(log_dir / "server.log", "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+    except OSError:
+        pass
+
+
+def record_native_crashes() -> None:
+    global _crash_file
+    try:
+        log_dir = db.data_dir() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        _crash_file = open(log_dir / "server_crash.log", "a", encoding="utf-8")
+        faulthandler.enable(file=_crash_file)
+    except OSError:
+        faulthandler.enable()
 
 
 def disable_console_quick_edit() -> None:
@@ -130,8 +157,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="SBS 라디오 참여 도우미 — 로컬 관리 화면")
     ap.add_argument("--port", type=int, default=5000)
     ap.add_argument("--no-browser", action="store_true", help="실행 후 브라우저를 자동으로 열지 않음")
+    ap.add_argument("--restarted", action="store_true", help="비정상 종료 뒤 start_windows.bat 이 다시 켠 경우")
     args = ap.parse_args()
     disable_console_quick_edit()
+    record_native_crashes()
 
     port, notes = pick_port(args.port)
     for note in notes:
@@ -141,7 +170,8 @@ def main() -> None:
     if port is None:
         print(f"[오류] {args.port}~{args.port + PORT_TRIES - 1}번을 모두 다른 프로그램이 쓰고 있습니다. "
               "PC를 다시 켠 뒤 실행하거나 이 창을 캡처해 보내 주세요.")
-        sys.exit(1)
+        server_log("시작 못 함: 쓸 수 있는 번호(포트)가 없음")
+        sys.exit(EXIT_NO_PORT)
 
     app = create_app()
     url = f"http://127.0.0.1:{port}/"
@@ -155,8 +185,12 @@ def main() -> None:
     if db.ADOPTED_FROM:
         print(f" 예전 폴더의 경험·사연 데이터를 옮겨 왔습니다: {db.ADOPTED_FROM.parent}")
     print("=" * 60)
+    server_log(f"시작 — {url}" + (" (비정상 종료 뒤 자동으로 다시 켬)" if args.restarted else ""))
     conn = db.connect()
     try:
+        if args.restarted:
+            print("[재시작] 관리 화면이 예기치 않게 꺼져서 자동으로 다시 켰습니다. 열려 있던 화면은 그대로 쓰면 됩니다.")
+            db.log(conn, "quizbot", "관리 화면이 예기치 않게 꺼져 자동으로 다시 켰습니다 (원인 기록: 데이터 폴더 logs/server.log)")
         listening = qconfig.get(conn, "live.active") == "1"
         if ((qconfig.get(conn, "quizbot.autostart") == "1" or listening) and not db.is_stopped(conn)
                 and not qconfig.runner_alive(conn)):
@@ -170,7 +204,13 @@ def main() -> None:
     # 개발 서버 시작 안내(빨간 WARNING)와 접속 기록은 오류처럼 보여 감춘다. 오류·경고는 그대로 보인다.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     # 이 PC에서만 접속 가능하도록 127.0.0.1 에만 연다.
-    run_simple("127.0.0.1", port, app, threaded=True)
+    try:
+        run_simple("127.0.0.1", port, app, threaded=True)   # Ctrl+C 는 안에서 받아 정상으로 끝남
+    except Exception:
+        server_log("오류로 멈춤:\n" + traceback.format_exc())
+        print("[오류] 관리 화면이 오류로 멈췄습니다. 잠시 뒤 자동으로 다시 켭니다. (기록: 데이터 폴더 logs/server.log)")
+        sys.exit(EXIT_CRASH)
+    server_log("종료 (Ctrl+C 등 사용자가 끝냄)")
 
 
 if __name__ == "__main__":
