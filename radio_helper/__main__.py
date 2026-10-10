@@ -4,6 +4,7 @@ import argparse
 import faulthandler
 import json
 import logging
+import signal
 import socket
 import sys
 import threading
@@ -16,7 +17,7 @@ import webbrowser
 from werkzeug.serving import run_simple
 
 from . import db
-from .app import create_app, start_runner
+from .app import create_app, ensure_runner, start_runner
 from .quizbot import config as qconfig
 
 APP_NAME = "radio_helper"
@@ -24,6 +25,8 @@ PORT_TRIES = 20
 # 끝날 때 돌려주는 값: start_windows.bat 이 보고 비정상 종료(그 밖의 값)일 때만 자동으로 다시 켠다
 EXIT_OK, EXIT_CRASH, EXIT_NO_PORT = 0, 1, 2
 _crash_file = None   # 파이썬 밖(라이브러리)에서 꺼질 때 위치를 남기는 파일 (닫히지 않게 잡아 둠)
+CTRL_C_CONFIRM_SECONDS = 3   # 이 시간 안에 Ctrl+C 를 두 번 눌러야 끝난다 (한 번은 실수로 보고 계속)
+WATCHDOG_SECONDS = 30        # 듣기 실행기가 꺼졌는지 보는 간격
 # 이 PC 안의 주소만 부르므로 윈도우 프록시 설정을 거치지 않는다
 _local = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -37,6 +40,40 @@ def server_log(message: str) -> None:
             f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
     except OSError:
         pass
+
+
+def ctrl_c_handler(clock=time.monotonic, say=print):
+    """Ctrl+C 를 한 번 누르면 안내만 하고 계속, 3초 안에 한 번 더 누르면 끝낸다.
+    (검은 창에서 글자를 복사하려고 Ctrl+C 를 누르거나 실수로 눌러 모두 꺼지던 것을 막음)"""
+    last = [None]
+
+    def handler(_signum, _frame):
+        t = clock()
+        if last[0] is not None and t - last[0] <= CTRL_C_CONFIRM_SECONDS:
+            raise KeyboardInterrupt
+        last[0] = t
+        say(f"[알림] Ctrl+C 를 눌렀습니다. 정말 끝내려면 {CTRL_C_CONFIRM_SECONDS}초 안에 Ctrl+C 를 한 번 더 누르세요. "
+            "(실수였다면 그냥 두세요 — 관리 화면과 청취는 계속됩니다)")
+        server_log("Ctrl+C 한 번 — 끝내지 않고 계속")
+    return handler
+
+
+def watch_runner(interval: float = WATCHDOG_SECONDS) -> None:
+    """'청취 시작'이 켜져 있는데 듣기 실행기가 꺼지면 다시 띄운다 (뒤에서 계속 돎)."""
+    restarts: list = []
+    while True:
+        time.sleep(interval)
+        try:
+            conn = db.connect()
+            try:
+                done = ensure_runner(conn, restarts, time.monotonic())
+            finally:
+                conn.close()
+            if done and done != "limit":
+                server_log(f"듣기 실행기가 꺼져 있어 다시 켬 ({done})")
+                print(f"[알림] 듣기 실행기가 꺼져 있어 자동으로 다시 켰습니다. (기록: {done})")
+        except Exception as e:   # 감시가 멈추지 않게
+            server_log(f"듣기 실행기 감시 오류: {type(e).__name__}: {e}")
 
 
 def record_native_crashes() -> None:
@@ -180,7 +217,7 @@ def main() -> None:
     print(f" 관리 화면: {url}")
     print("   브라우저가 저절로 안 열리면 위 주소를 Ctrl+클릭하거나 주소창에 입력하세요.")
     print(" 이 검은 창을 닫으면 관리 화면과 청취·퀴즈 참여가 멈춥니다.")
-    print(" 켜 둔 채로 최소화하세요. 끝낼 때는 이 창에서 Ctrl+C.")
+    print(" 켜 둔 채로 최소화하세요. 끝낼 때는 이 창에서 Ctrl+C 를 두 번 (3초 안에).")
     print(f" 데이터 위치: {db.data_dir()}  (업데이트 파일을 어디에 풀어도 그대로 남음)")
     if db.ADOPTED_FROM:
         print(f" 예전 폴더의 경험·사연 데이터를 옮겨 왔습니다: {db.ADOPTED_FROM.parent}")
@@ -201,6 +238,8 @@ def main() -> None:
         conn.close()
     # 서버가 실제로 뜬 뒤에 브라우저를 연다 (먼저 열면 '연결할 수 없음' 화면이 뜬다)
     threading.Thread(target=self_check, args=(url, not args.no_browser), daemon=True).start()
+    threading.Thread(target=watch_runner, daemon=True).start()
+    signal.signal(signal.SIGINT, ctrl_c_handler())
     # 개발 서버 시작 안내(빨간 WARNING)와 접속 기록은 오류처럼 보여 감춘다. 오류·경고는 그대로 보인다.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     # 이 PC에서만 접속 가능하도록 127.0.0.1 에만 연다.

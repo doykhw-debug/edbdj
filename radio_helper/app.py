@@ -1542,9 +1542,11 @@ def launch_module(module: str, args: list[str], prefix: str) -> str:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUNBUFFERED"] = "1"
+    # 윈도우: 새 프로세스 그룹으로 띄워 검은 창의 Ctrl+C 가 듣기·자막·도구까지 끄지 않게 한다 (창을 닫으면 함께 끝남)
+    flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if sys.platform == "win32" else 0
     with open(log_dir / name, "w", encoding="utf-8") as out:
-        subprocess.Popen([sys.executable, "-m", module, *args],
-                         stdout=out, stderr=subprocess.STDOUT, cwd=str(PROJECT_ROOT), env=env)
+        subprocess.Popen([sys.executable, "-m", module, *args], stdout=out, stderr=subprocess.STDOUT,
+                         cwd=str(PROJECT_ROOT), env=env, creationflags=flags)
     return name
 
 
@@ -1594,6 +1596,39 @@ def start_runner(conn) -> str:
     db.set_setting(conn, "quizbot.launched_at", db.now())
     log_name = launch_quizbot(["run"])
     db.set_setting(conn, "quizbot.run_log", log_name)
+    return log_name
+
+
+RUNNER_START_GRACE = 120      # 막 띄운 실행기는 이 시간(초) 동안 살아 있는지 따지지 않는다
+RUNNER_RESTART_LIMIT = 5      # 30분 안에 자동으로 다시 켜는 횟수 상한 (계속 꺼지면 원인을 봐야 함)
+
+
+def ensure_runner(conn, restarts: list, now: float) -> str | None:
+    """'청취 시작'이 켜져 있는데 듣기 실행기 프로세스가 없으면 다시 띄운다 (관리 화면 서버가 30초마다 부름).
+    restarts: 자동으로 다시 켠 시각들(초). 한 일을 돌려준다: 기록 파일 이름 / 'limit' / None."""
+    if qconfig.get(conn, "live.active") != "1" or db.is_stopped(conn) or db.get_setting(conn, "quizbot.stop") == "1":
+        return None
+    launched = db.get_setting(conn, "quizbot.launched_at")
+    try:
+        if launched and (datetime.now() - datetime.strptime(launched, "%Y-%m-%d %H:%M:%S")).total_seconds() \
+                < RUNNER_START_GRACE:
+            return None
+    except ValueError:
+        pass
+    lock = qconfig.instance_lock("quizbot_run")
+    if lock is None:
+        return None              # 실행기 프로세스가 살아 있음 (잠금을 쥐고 있음)
+    lock.close()
+    restarts[:] = [t for t in restarts if now - t < 1800]
+    if len(restarts) >= RUNNER_RESTART_LIMIT:
+        if len(restarts) == RUNNER_RESTART_LIMIT:
+            restarts.append(now)   # 한 번만 알린다
+            db.log(conn, "quizbot", f"듣기 실행기가 30분 안에 {RUNNER_RESTART_LIMIT}번 꺼져 자동으로 다시 켜지 않습니다. "
+                                    "첫 화면의 실행기 기록을 캡처해 보내 주세요.")
+        return "limit"
+    restarts.append(now)
+    log_name = start_runner(conn)
+    db.log(conn, "quizbot", f"듣기 실행기가 꺼져 있어 자동으로 다시 켰습니다 (기록: {log_name})")
     return log_name
 
 

@@ -130,6 +130,8 @@ def test_server_crash_is_logged_and_exits_for_restart(data_dir, monkeypatch):
     monkeypatch.setattr(launcher, "self_check", lambda *a, **k: None)
     monkeypatch.setattr(launcher, "disable_console_quick_edit", lambda: None)
     monkeypatch.setattr(launcher, "record_native_crashes", lambda: None)
+    monkeypatch.setattr(launcher, "watch_runner", lambda: None)                 # 시험 중엔 감시 스레드를 띄우지 않음
+    monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)            # 시험 프로세스의 Ctrl+C 처리는 그대로
 
     def boom(*a, **k):
         raise OSError("소켓 오류")
@@ -163,3 +165,83 @@ def test_windows_launcher_restarts_only_on_crash():
     assert ':run' in text and 'goto run' in text and '--no-browser --restarted' in text
     assert f'if "%RH_CODE%"=="{launcher.EXIT_OK}" goto end' in text
     assert f'if "%RH_CODE%"=="{launcher.EXIT_NO_PORT}" goto end' in text and "GEQ 20" in text
+
+
+# ── Ctrl+C 로 듣기가 꺼지던 문제 ───────────────────────────────────────
+def test_server_needs_ctrl_c_twice(data_dir):
+    import pytest
+
+    t = [100.0]
+    said = []
+    handler = launcher.ctrl_c_handler(clock=lambda: t[0], say=said.append)
+    handler(2, None)                                          # 한 번: 안내만 하고 계속
+    assert said and "한 번 더" in said[0]
+    t[0] += 5
+    handler(2, None)                                          # 3초가 지나면 다시 처음부터
+    t[0] += 1
+    with pytest.raises(KeyboardInterrupt):                    # 3초 안에 두 번째 → 끝냄
+        handler(2, None)
+    assert "Ctrl+C 한 번" in (data_dir / "logs" / "server.log").read_text(encoding="utf-8")
+
+
+def test_helpers_ignore_ctrl_c(capsys):
+    import signal
+
+    from radio_helper.quizbot import __main__ as qmain
+
+    old = signal.getsignal(signal.SIGINT)
+    try:
+        qmain.ignore_ctrl_c()
+        signal.raise_signal(signal.SIGINT)                    # 예전엔 여기서 KeyboardInterrupt → 듣기 실행기 꺼짐
+        assert "Ctrl+C 신호를 받았지만 계속합니다" in capsys.readouterr().out
+    finally:
+        signal.signal(signal.SIGINT, old)
+
+
+def test_children_start_in_own_process_group(data_dir, monkeypatch):
+    import subprocess
+
+    from radio_helper import app as app_module
+
+    calls = []
+    monkeypatch.setattr(app_module.subprocess, "Popen", lambda *a, **k: calls.append(k))
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    monkeypatch.setattr(app_module.sys, "platform", "win32")
+    app_module.launch_quizbot(["run"])
+    assert calls[-1]["creationflags"] == 0x200                # 검은 창의 Ctrl+C 가 듣기 실행기에 가지 않음
+
+
+def test_watchdog_restarts_dead_runner_only_when_listening(conn, monkeypatch):
+    from datetime import datetime, timedelta
+
+    from radio_helper import app as app_module
+    from radio_helper import db
+    from radio_helper.quizbot import config
+
+    started = []
+    monkeypatch.setattr(app_module, "start_runner", lambda c: started.append(1) or f"quizbot_{len(started)}.log")
+    old = (datetime.now() - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+    db.set_setting(conn, "quizbot.launched_at", old)
+    restarts = []
+
+    assert app_module.ensure_runner(conn, restarts, 0) is None and not started   # 청취 중이 아니면 손대지 않음
+    db.set_setting(conn, "live.active", "1")
+    assert app_module.ensure_runner(conn, restarts, 10) == "quizbot_1.log"         # 꺼진 실행기를 다시 켬
+    msgs = [m for (m,) in conn.execute("SELECT message FROM events")]
+    assert any("자동으로 다시 켰습니다" in m for m in msgs)
+
+    lock = config.instance_lock("quizbot_run")                                     # 실행기가 살아 있음
+    assert app_module.ensure_runner(conn, restarts, 20) is None and len(started) == 1
+    lock.close()
+
+    db.set_setting(conn, "quizbot.launched_at", db.now())                          # 막 띄운 중
+    assert app_module.ensure_runner(conn, restarts, 30) is None
+    db.set_setting(conn, "quizbot.launched_at", old)
+    db.set_setting(conn, "quizbot.stop", "1")                                      # '멈춤' 중
+    assert app_module.ensure_runner(conn, restarts, 40) is None
+    db.set_setting(conn, "quizbot.stop", "0")
+
+    for i in range(4):
+        assert app_module.ensure_runner(conn, restarts, 50 + i).startswith("quizbot_")
+    assert app_module.ensure_runner(conn, restarts, 60) == "limit" and len(started) == 5   # 30분에 5번까지
+    assert app_module.ensure_runner(conn, restarts, 1900) == "quizbot_6.log"               # 30분 지나면 다시

@@ -36,6 +36,17 @@ def say(msg: str) -> None:
     print(msg, flush=True)
 
 
+def ignore_ctrl_c() -> None:
+    """검은 창에서 Ctrl+C 를 눌러도 듣기·자막·도구가 꺼지지 않게 한다 (기록에만 남김).
+    멈출 때는 관리 화면의 '청취 중지'·'멈춤'을, 모두 끝낼 때는 검은 창을 닫는다."""
+    import signal
+
+    def handler(_signum, _frame):
+        say(f"[{time.strftime('%H:%M:%S')}] Ctrl+C 신호를 받았지만 계속합니다 (멈추려면 관리 화면의 '청취 중지').")
+
+    signal.signal(signal.SIGINT, handler)
+
+
 def lower_priority() -> bool:
     """받아쓰기가 CPU 를 많이 써도 라디오 재생(고릴라 앱)이 먼저 돌도록 이 프로세스를 '낮음' 우선순위로 둔다."""
     if sys.platform != "win32":
@@ -381,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
+    ignore_ctrl_c()
     if args.command in ("run", "stt-test", "gpu-check"):
         lower_priority()
     if args.command == "gpu-check":
