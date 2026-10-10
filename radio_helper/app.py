@@ -30,6 +30,7 @@ SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "m
 STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀"}
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
                 ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"))
+TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
 
@@ -1324,6 +1325,16 @@ def create_app(data_dir: str | None = None) -> Flask:
         if tool != "check" and db.is_stopped(g.conn):
             flash("일괄 중지가 켜져 있습니다.", "error")
             return redirect(url_for("gorilla", app=app_))
+        if tool == "send-test" and "test_message" in request.form:
+            # 전송 테스트 버튼 옆 칸에 적은 글을 보낸다 (다음에도 그 글이 칸에 남음)
+            text = " ".join(form("test_message").split())
+            if not text:
+                flash("보낼 시험 글을 적어 주세요.", "error")
+                return redirect(url_for("gorilla", app=app_))
+            if len(text) > TEST_MESSAGE_MAX:
+                flash(f"시험 글이 너무 깁니다 ({len(text)}자). {TEST_MESSAGE_MAX}자 안으로 적어 주세요.", "error")
+                return redirect(url_for("gorilla", app=app_))
+            db.set_setting(g.conn, f"{app_}.test_message", text)
         if tool != "check":
             args = args + ["--app", app_]
         log_name = launch_quizbot(args)

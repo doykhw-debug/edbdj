@@ -655,3 +655,27 @@ def test_region_settings_window_region_and_errors():
 def test_parse_rect():
     assert gorilla.parse_rect("1,2,3,4") == (1.0, 2.0, 3.0, 4.0)
     assert gorilla.parse_rect("") is None and gorilla.parse_rect("1,2") is None and gorilla.parse_rect("a,b,c,d") is None
+
+
+def test_send_test_message_typed_by_user(client, conn, monkeypatch):
+    launched = []
+    monkeypatch.setattr(app_module, "launch_quizbot", lambda args: launched.append(args) or "q.log")
+    page = client.get("/gorilla").get_data(as_text=True)
+    assert 'name="test_message" value="파워 FM 화이팅"' in page             # 버튼 옆 칸 (처음엔 기본 글)
+    token = csrf(client, "/gorilla")
+
+    client.post("/quizbot/tool", data={"csrf_token": token, "tool": "send-test", "app": "gorilla",
+                                       "test_message": "  웬디 언니   오늘도\n화이팅! "})
+    assert launched[-1] == ["send-test", "--app", "gorilla"]
+    assert db.get_setting(conn, "gorilla.test_message") == "웬디 언니 오늘도 화이팅!"    # 한 줄로, 공백 정리
+    assert 'value="웬디 언니 오늘도 화이팅!"' in client.get("/gorilla").get_data(as_text=True)  # 다음에도 남음
+
+    for bad in ("   ", "가" * 201):                                         # 빈 글·너무 긴 글은 보내지 않음
+        client.post("/quizbot/tool", data={"csrf_token": token, "tool": "send-test", "app": "gorilla",
+                                           "test_message": bad})
+    assert len(launched) == 1 and db.get_setting(conn, "gorilla.test_message") == "웬디 언니 오늘도 화이팅!"
+
+    client.post("/quizbot/tool", data={"csrf_token": token, "tool": "send-test", "app": "mini",
+                                       "test_message": "FM4U 화이팅"})            # 앱마다 따로 저장
+    assert db.get_setting(conn, "mini.test_message") == "FM4U 화이팅"
+    assert db.get_setting(conn, "gorilla.test_message") == "웬디 언니 오늘도 화이팅!"
