@@ -629,6 +629,13 @@ class Gorilla:
 
     def is_running(self) -> bool:
         try:
+            if self._screen_mode():
+                # 모니터 기준이면 보낼 때와 똑같이 그 자리의 창으로 본다 (창 목록 검색은 채팅이 따로 뜨는 앱을 못 찾을 수 있음)
+                point = self._screen_point("input") or self._screen_point("send")
+                if self._is_app(window_at_point(*point)):
+                    return True
+                proc = (self.cfg.process_name or "").lower()
+                return bool(proc and app_window_at(*point, proc))
             if self._region() is not None:
                 return self._region_window_info() is not None
             return bool(self._candidates())

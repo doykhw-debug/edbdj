@@ -55,6 +55,8 @@ GORILLA_HOLD = app_hold("gorilla")
 APP_HOLDS = [app_hold(a) for a in config.CHAT_APPS]
 SMS_HOLD = "대기: 휴대폰(USB)이 연결되지 않음 — 연결되면 보냄"
 HELD_RETRY_MINUTES = 20  # 이보다 오래된 보류 글은 늦었으므로 자동으로 보내지 않는다
+RETRY_PREFIX = "대기: 전송 못 함 — 1분마다 다시 시도"   # 채팅 앱 전송이 누르기 전에 막힘 (보내지 않았으므로 다시 보내도 안전)
+RETRY_SECONDS = 60
 
 
 class Recorder(Protocol):
@@ -586,17 +588,20 @@ class Runner:
             self.try_send_story(r["id"], self._schedule(schedule, r["schedule_id"]))
 
     def retry_held(self, schedule, app_ok: bool = True) -> None:
-        """앱 창·휴대폰이 없어 보류한 자동 전송 글을 다시 판단해 보낸다 (최근 것만)."""
-        holds = [SMS_HOLD] + (APP_HOLDS if app_ok else [])
+        """앱 창·휴대폰이 없어 보류했거나 전송이 막혔던 자동 전송 글을 다시 보낸다 (최근 것만, 1분 간격).
+        채팅 앱은 창을 찾았다는 판단과 상관없이 다시 시도한다 (판단이 틀릴 수 있고, 막힌 전송은 보내지 않은 것이므로)."""
+        holds = [SMS_HOLD] + APP_HOLDS
         marks = ",".join("?" * len(holds))
         # created_at 은 db.now()(실제 시각)로 남으므로 같은 기준으로 비교한다
         since = (datetime.now() - timedelta(minutes=HELD_RETRY_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
-        for r in self.conn.execute(f"SELECT id, schedule_id FROM quizzes WHERE entry_status = 'pending' AND approved = 0 "
-                                   f"AND decision IN ({marks}) AND created_at >= ?", (*holds, since)).fetchall():
-            self.try_send(r["id"], self._schedule(schedule, r["schedule_id"]))
-        for r in self.conn.execute(f"SELECT id, schedule_id FROM story_posts WHERE status = 'pending' AND approved = 0 "
-                                   f"AND decision IN ({marks}) AND created_at >= ?", (*holds, since)).fetchall():
-            self.try_send_story(r["id"], self._schedule(schedule, r["schedule_id"]))
+        for table, status_col, send in (("quizzes", "entry_status", self.try_send),
+                                        ("story_posts", "status", self.try_send_story)):
+            rows = self.conn.execute(
+                f"SELECT id, schedule_id FROM {table} WHERE {status_col} = 'pending' AND approved = 0 "
+                f"AND (decision IN ({marks}) OR decision LIKE ?) AND created_at >= ?",
+                (*holds, RETRY_PREFIX + "%", since)).fetchall()
+            for r in rows:   # (다시 시도 간격·20분 상한은 deliver 에서)
+                send(r["id"], self._schedule(schedule, r["schedule_id"]))
 
     # ── 선물 정보 ────────────────────────────────────────────────
     def analyze_gifts(self, schedule, w: Window, transcript: str) -> list[int]:
@@ -799,9 +804,26 @@ class Runner:
     def deliver(self, table: str, status_col: str, item_id: int, route: str, channel: str | None, text: str,
                 how: str, label: str) -> str | None:
         hold = self.not_ready(route, channel)
-        if hold:
+        if hold and hold not in APP_HOLDS:
             self._hold(table, item_id, hold)
             return None
+        # 채팅 앱 창을 못 찾았다는 판단은 틀릴 수 있어 보류하지 않고 일단 보낸다 (못 보내면 아래에서 다시 시도로 돌림)
+        retrying = (self.conn.execute(f"SELECT decision FROM {table} WHERE id = ?", (item_id,)).fetchone()[0]
+                    or "").startswith(RETRY_PREFIX)
+        key, now = (table, item_id), self.deps.now()
+        retried = self.__dict__.setdefault("_retried", {})       # 마지막으로 다시 시도한 때
+        first_fail = self.__dict__.setdefault("_first_fail", {})  # 처음 못 보낸 때
+        if retrying:
+            if key in retried and (now - retried[key]).total_seconds() < RETRY_SECONDS:
+                return None   # 1분에 한 번만 (매번 창을 앞으로 가져오지 않게)
+            if key in first_fail and (now - first_fail[key]).total_seconds() > HELD_RETRY_MINUTES * 60:
+                # 20분 동안 못 보냄 → 늦었으므로 그만두고 확인 대기에 남긴다 (직접 보내기는 가능)
+                self.conn.execute(f"UPDATE {table} SET approved = 0, decision = ?, updated_at = ? WHERE id = ?",
+                                  (f"보류: {HELD_RETRY_MINUTES}분 동안 다시 시도했지만 보내지 못함 — 확인 후 직접 보내기",
+                                   db.now(), item_id))
+                self.conn.commit()
+                return None
+        retried[key] = now
         number, app = None, config.chat_app(self.conn, channel)
         if route == "sms":
             number = config.sms_number(self.conn, channel)
@@ -832,6 +854,19 @@ class Runner:
         except Exception as e:  # 보냈는지 알 수 없다 → 결과 불명 유지
             status, detail = "unknown", f"전송 중 오류: {type(e).__name__}: {str(e)[:120]}"
             shots = []
+        if route != "sms" and status == "failed":
+            # 누르기 전에 막힘(창 없음·가려짐 등) = 보내지 않았음 → 대기로 되돌려 1분마다 다시 시도 (20분까지)
+            first_fail.setdefault(key, now)
+            self.conn.execute(
+                f"UPDATE {table} SET {status_col} = 'pending', sent_at = NULL, sent_via = NULL, decision = ?, "
+                "updated_at = ? WHERE id = ?", (f"{RETRY_PREFIX} ({detail[:120]})", db.now(), item_id))
+            self.conn.commit()
+            if not retrying:
+                if shots:
+                    evidence.save(self.conn, table, item_id, app, text, status, shots)
+                db.log(self.conn, "quizbot", f"{label} {config.app_label(app)} 전송 '{text[:60]}' → 못 보냄, "
+                                             f"1분마다 다시 시도 ({detail[:120]})")
+            return None
         if shots:   # 증거 사진 (보낸 뒤 채팅 앱 창 / 문자 작성·보낸 화면)
             evidence.save(self.conn, table, item_id, "sms" if route == "sms" else app, text, status, shots)
             detail += f" · 증거 사진 {len(shots)}장"

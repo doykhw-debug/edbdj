@@ -125,3 +125,15 @@ def test_settings_page_asks_to_remark_old_positions_and_shows_points(client, con
     page = client.get("/gorilla").get_data(as_text=True)
     assert "다시 해 주세요" not in page and "입력칸 모니터 위치 (650,617)" in page
     assert "전송 버튼 모니터 위치 (819,617)" in page and "모니터 화면 좌표" in page
+
+
+def test_running_check_uses_marked_spot_like_send(desk, screen, monkeypatch):
+    """보낼 때와 같은 방법(표시한 자리의 창)으로 '고릴라가 켜져 있는지' 본다.
+    예전엔 창 목록 검색으로 봐서, 채팅이 따로 뜨는 고릴라를 못 찾아 '고릴라 창을 찾지 못함'으로 보류했다."""
+    monkeypatch.setattr(gorilla, "_top_windows", lambda: [])          # 창 목록 검색으로는 못 찾는 앱
+    g = chat_gorilla()
+    assert g.is_running()                                              # 표시한 자리에 채팅 창이 있음
+    screen.cover = CHROME                                              # 크롬에 가려져 있어도 그 자리의 고릴라 창을 찾음
+    assert g.is_running()
+    monkeypatch.setattr(gorilla, "app_window_at", lambda x, y, proc: None)
+    assert not g.is_running()                                          # 정말 없을 때만 '못 찾음'

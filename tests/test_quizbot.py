@@ -203,13 +203,18 @@ class ScriptAnswerer:
 
 
 class FakeGorilla:
-    def __init__(self, running=True, result="entered", explode=False):
+    """reachable: 실제로 보낼 수 있는지 (기본은 running 과 같음 — 창 찾기 판단이 틀리는 경우를 흉내 낼 때 따로 줌)"""
+    def __init__(self, running=True, result="entered", explode=False, reachable=None):
         self.running, self.result, self.explode, self.sent = running, result, explode, []
+        self.reachable, self.tried = reachable, []
 
     def is_running(self):
         return self.running
 
     def send(self, text):
+        self.tried.append(text)
+        if not (self.running if self.reachable is None else self.reachable):
+            return gorilla.SendResult("failed", "고릴라 창을 찾지 못했습니다")   # 누르기 전에 막힘 = 안 보냄
         self.sent.append(text)
         if self.explode:
             raise RuntimeError("창이 사라짐")

@@ -192,13 +192,42 @@ def test_live_keeps_listening_without_gorilla_and_sends_when_found(conn):
     assert "고릴라 창을 찾지 못했습니다" in messages and "고릴라 창을 찾았습니다" in messages
 
 
-def test_held_quiz_is_not_sent_when_gorilla_never_found(conn):
+def test_quiz_retried_every_minute_when_gorilla_really_missing(conn):
+    """고릴라 창이 정말 없으면: 보류하지 않고 보내 보고, 못 보냈으니(누르기 전에 막힘) 1분마다 다시 시도한다."""
     start_live(conn)
     sender = FakeGorilla(running=False)
+    r, _ = live_runner(conn, {3: "오늘의 퀴즈 정답은 고릴라로"}, ScriptAnswerer([analysis()]), sender, n=20)
+    r.run_live()
+    q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
+    assert sender.sent == [] and q["entry_status"] == "pending" and q["decision"].startswith(runner.RETRY_PREFIX)
+    assert len(sender.tried) == 3 and q["sent_at"] is None      # 첫 시도 뒤 2분(10초씩 12번) 동안 1분 간격으로만
+    msgs = [m for (m,) in conn.execute("SELECT message FROM events") if "못 보냄" in m]
+    assert len(msgs) == 1                                        # 실패 알림은 한 번만
+
+
+def test_quiz_sent_even_when_window_check_says_missing(conn):
+    """실제 사례: 창 찾기 판단은 '못 찾음'이었지만 표시한 자리로는 보낼 수 있었다 → 보류하지 않고 바로 보냄."""
+    start_live(conn)
+    sender = FakeGorilla(running=False, reachable=True)
     r, _ = live_runner(conn, {3: "오늘의 퀴즈 정답은 고릴라로"}, ScriptAnswerer([analysis()]), sender, n=10)
     r.run_live()
     q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
-    assert sender.sent == [] and q["entry_status"] == "pending" and q["decision"] == runner.GORILLA_HOLD
+    assert sender.sent == ["사과"] and q["entry_status"] == "entered"
+
+
+def test_retry_gives_up_after_twenty_minutes(conn):
+    from datetime import timedelta
+
+    start_live(conn)
+    sender = FakeGorilla(running=False)
+    r, recorders = live_runner(conn, {3: "오늘의 퀴즈 정답은 고릴라로"}, ScriptAnswerer([analysis()]), sender, n=10)
+    r.run_live()
+    qid = conn.execute("SELECT id FROM quizzes WHERE source = 'auto'").fetchone()[0]
+    r.deps.now = lambda: recorders[0].clock.now() + timedelta(minutes=25)   # 처음 못 보낸 뒤 25분
+    db.set_setting(conn, "live.active", "1")
+    r.try_send(qid, live.session(conn, r.deps.now()))
+    q = conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
+    assert q["entry_status"] == "pending" and "20분 동안 다시 시도했지만" in q["decision"] and not q["approved"]
 
 
 def test_live_story_auto_ai_only_when_clean(conn):
