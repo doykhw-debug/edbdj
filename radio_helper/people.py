@@ -5,6 +5,8 @@
 - 인물 관계도 파일(character-map.md)에서 인물 카드·실제 사건(연표)을 가져온다.
   〔사연〕 태그의 가상 사건은 인물 카드에 넣지 않는다.
 - 사연 로그(.jsonl)는 '사연 보관함'에 넣는다. 원본 사연을 각색한 가상 사연(fiction)은 그대로는 보내지 않는다.
+  같은 파일에 {"type": "person", ...} 줄이 있으면 그 인물(친구 등)을 먼저 추가하거나 직업을 적는다.
+  사연은 이름·호칭(와이프 등)·이름 끝(홍길동 ← 길동)로 인물에 붙인다.
 - 인물의 실제 사건(대화·통화로 확인한 연표)은 '실제로 있었던 일'로 확인된 경험으로 한 번에 옮긴다.
   옮긴 사건은 quizbot/enrich.py 가 사실은 그대로 두고 사연처럼 풀어 쓴다.
 """
@@ -325,19 +327,118 @@ def parse_story_log(text: str) -> list[dict]:
     return rows
 
 
+def find_person(conn: sqlite3.Connection, label: str) -> int | None:
+    """이름 → 인물 번호. 이름 그대로, '홍길동 과장님'의 앞 단어, 호칭(와이프 등), 이름 끝(홍길동 ← 길동, 한 명일 때만)."""
+    label = re.sub(r"\s*\(.*\)$", "", (label or "").strip())
+    if not label:
+        return None
+    rows = conn.execute("SELECT id, name, alias, side FROM people ORDER BY sort, id").fetchall()
+    if label in SELF_NAMES or any(r["side"] == "self" and r["name"] == label for r in rows):
+        mine = [r["id"] for r in rows if r["side"] == "self"]
+        return mine[0] if mine else None
+    for match in (lambda r: r["name"] == label, lambda r: r["name"].split()[0] == label,
+                  lambda r: (r["alias"] or "") == label):
+        found = [r["id"] for r in rows if match(r)]
+        if found:
+            return found[0]
+    if len(label) >= 2:
+        found = [r["id"] for r in rows if r["side"] != "self" and len(r["name"].split()[0]) > len(label)
+                 and r["name"].split()[0].endswith(label)]
+        if len(found) == 1:
+            return found[0]
+    return None
+
+
+def parse_person_records(text: str) -> list[dict]:
+    """사연 로그 안의 인물 줄: {"type": "person", "name", "side", "grp", "alias", "relation", "job", "job_tag", "note"}"""
+    out = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{") or '"person"' not in line:
+            continue
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and data.get("type") == "person" and str(data.get("name") or "").strip():
+            out.append({k: str(data.get(k) or "").strip() for k in
+                        ("name", "side", "grp", "alias", "relation", "job", "job_tag", "note")})
+    return out
+
+
+def import_person_records(conn: sqlite3.Connection, records: list[dict]) -> tuple[int, int]:
+    """(새로 넣은 인물 수, 직업 등을 적은 기존 인물 수). 사용자가 바꾼 호칭·가까움은 그대로 둔다.
+    직업은 '주신'(사용자가 알려 준 실제 정보)이면 바꾸고, '임의'면 비어 있을 때만 채운다. 실제 사건은 넣지 않는다."""
+    added = updated = 0
+    for rec in records:
+        side = rec["side"] if rec["side"] in SIDES and rec["side"] != "self" else "friend"
+        tag = rec["job_tag"] or "임의"
+        pid = find_person(conn, rec["name"])
+        if pid is None:
+            details = [{"key": "직업", "value": rec["job"], "tag": tag}] if rec["job"] else []
+            conn.execute("INSERT INTO people (name, alias, grp, side, relation, details, events, note, sort, created_at, "
+                         "updated_at) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, 900, ?, ?)",
+                         (rec["name"], (rec["alias"] or default_alias(rec["name"], side, rec["grp"] or "친구"))[:20],
+                          rec["grp"] or "친구", side, rec["relation"] or None,
+                          json.dumps(details, ensure_ascii=False), rec["note"] or None, db.now(), db.now()))
+            added += 1
+            continue
+        p = conn.execute("SELECT * FROM people WHERE id = ?", (pid,)).fetchone()
+        details = json.loads(p["details"] or "[]")
+        job = next((d for d in details if d.get("key") == "직업"), None)
+        changed = False
+        if rec["job"] and job is None:
+            details.append({"key": "직업", "value": rec["job"], "tag": tag})
+            changed = True
+        elif rec["job"] and tag == "주신" and job.get("value") != rec["job"]:
+            job.update(value=rec["job"], tag=tag)
+            changed = True
+        relation = p["relation"] or rec["relation"] or None
+        if changed or relation != p["relation"]:
+            conn.execute("UPDATE people SET details = ?, relation = ?, updated_at = ? WHERE id = ?",
+                         (json.dumps(details, ensure_ascii=False), relation, db.now(), pid))
+            updated += 1
+    conn.commit()
+    return added, updated
+
+
+def delete_library_item(conn: sqlite3.Connection, lid: int) -> int:
+    """보관함 사연을 지운다. 거기서 옮긴 '확인 전' 경험(원고·전송 기록이 없는 것)도 함께 지우고,
+    이미 '실제로 있었던 일'로 확인한 경험은 남긴다(보관함 연결만 끊음). 지운 경험 수."""
+    gone = 0
+    for e in conn.execute("SELECT id, user_confirmed FROM experiences WHERE from_library_id = ?", (lid,)).fetchall():
+        if not e["user_confirmed"] and not experience_in_use(conn, e["id"]):
+            conn.execute("DELETE FROM experiences WHERE id = ?", (e["id"],))
+            gone += 1
+        else:
+            conn.execute("UPDATE experiences SET from_library_id = NULL WHERE id = ?", (e["id"],))
+    conn.execute("DELETE FROM story_library WHERE id = ?", (lid,))
+    conn.commit()
+    return gone
+
+
+def experience_in_use(conn: sqlite3.Connection, eid: int) -> bool:
+    """원고·사연 전송·제출 기록이 있는 경험 (지우면 기록이 깨진다)."""
+    return any(conn.execute(f"SELECT 1 FROM {t} WHERE experience_id = ? LIMIT 1", (eid,)).fetchone()
+               for t in ("drafts", "story_posts", "submissions"))
+
+
+def delete_unconfirmed_experience(conn: sqlite3.Connection, eid: int) -> bool:
+    """'확인 전' 경험을 지운다 (보관함에서 왔으면 보관함 원본도 — 다시 가져오지 않도록). 지웠으면 True."""
+    e = conn.execute("SELECT * FROM experiences WHERE id = ?", (eid,)).fetchone()
+    if e is None or e["user_confirmed"] or experience_in_use(conn, eid):
+        return False
+    conn.execute("DELETE FROM experiences WHERE id = ?", (eid,))
+    if e["from_library_id"]:
+        conn.execute("DELETE FROM story_library WHERE id = ?", (e["from_library_id"],))
+    conn.commit()
+    return True
+
+
 def import_library(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int]:
-    by_name = {r["name"]: r["id"] for r in conn.execute("SELECT id, name FROM people")}
-    by_first = {}
-    for name, pid in by_name.items():
-        by_first.setdefault(name.split()[0], pid)   # '홍길동 과장님' 은 '홍길동' 으로도 찾는다
-    self_ids = [r["id"] for r in conn.execute("SELECT id, name FROM people WHERE side = 'self'")]
-    self_names = SELF_NAMES | {r["name"] for r in conn.execute("SELECT name FROM people WHERE side = 'self'")}
     added = updated = 0
     for row in rows:
-        label = row["person_label"]
-        bare = re.sub(r"\s*\(.*\)$", "", label)
-        person_id = (self_ids[0] if self_ids and (label in self_names or bare in self_names) else
-                     by_name.get(label) or by_name.get(bare) or by_first.get(bare))
+        person_id = find_person(conn, row["person_label"])
         cols = [k for k in row]
         exists = conn.execute("SELECT id FROM story_library WHERE code = ?", (row["code"],)).fetchone() \
             if row["code"] else None
@@ -356,7 +457,8 @@ def import_library(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int
 def detect(text: str) -> str | None:
     """가져오기 파일 종류: people(인물 관계도 .md) / library(사연 로그 .jsonl) / None(기존 JSON)."""
     head = text.lstrip()[:2000]
-    if head.startswith("{") and "\n" in text.strip() and '"body"' in head and '"intro"' in head:
+    if head.startswith("{") and "\n" in text.strip() and (('"body"' in head and '"intro"' in head)
+                                                           or '"type": "person"' in head):
         return "library"
     if head.startswith("#") and ("#### " in text) and ("## 가족 인물" in text or "## 주인공" in text):
         return "people"

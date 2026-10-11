@@ -81,6 +81,14 @@
     <b>위 내용은 실제로 있었던 일입니다.</b> <span class="hint">(체크하지 않으면 원고를 제출 대상으로 쓸 수 없습니다)</span></label>
   <div class="actions"><button>저장</button></div>
 </form>
+{% if eid and not e.user_confirmed and not drafts %}
+<form method="post" action="{{ url_for('experience_delete', eid=eid) }}" class="actions"
+      onsubmit="return confirm('이 경험을 지울까요? (보관함에서 가져온 것이면 보관함 원본도 함께)')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button class="secondary" style="color:var(--bad);border-color:var(--bad)">이 경험 지우기</button>
+  <span class="muted">'확인 전' 경험만 지울 수 있습니다. 보관함에서 가져온 것이면 보관함 원본도 지워 다시 가져오지 않습니다.</span>
+</form>
+{% endif %}
 
 {% if eid %}
 <div class="panel">

@@ -18,6 +18,12 @@
       '실제로 있었던 일'을 체크해야 사연으로 보냅니다.</span>
   </form>
   {% endif %}
+  <form method="post" action="{{ url_for('library_delete', lid=s.id) }}" class="actions"
+        onsubmit="return confirm('이 사연을 보관함에서 지울까요?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="secondary" style="color:var(--bad);border-color:var(--bad)">보관함에서 지우기</button>
+    <span class="muted">옮겨 둔 '확인 전' 경험도 함께 지웁니다. 이미 실제로 있었던 일로 확인한 경험은 남깁니다.</span>
+  </form>
 </div>
 <div class="panel">
   <div class="row3 muted">

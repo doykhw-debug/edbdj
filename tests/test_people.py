@@ -207,7 +207,8 @@ def test_import_pages_and_people_screens(client, conn):
     item = client.get(f"/library/{lid}").get_data(as_text=True)
     assert "가상(각색) 사연" in item and "네이트판 001" in item
     after_nav = item.split("</nav>")[1]
-    assert after_nav.count("<form") == 1 and "실제 있었던 일로 옮기기" in after_nav   # 옮기기만 있고
+    assert after_nav.count("<form") == 2 and "실제 있었던 일로 옮기기" in after_nav   # 옮기기·지우기만 있고
+    assert "보관함에서 지우기" in after_nav
     assert "<button>보내기" not in after_nav and "전송" not in after_nav                # 보내기·전송 버튼은 없다
     assert "가상 사연 둘" in client.get(f"/library?person={pid}").get_data(as_text=True)
     assert "가상 사연 하나" not in client.get(f"/library?person={pid}").get_data(as_text=True)

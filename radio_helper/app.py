@@ -484,10 +484,15 @@ def create_app(data_dir: str | None = None) -> Flask:
     def experiences_review_save():
         src = "all" if form("src") == "all" else "library"
         ids = [int(x) for x in request.form.getlist("ids") if x.isdigit()]
-        confirmed = edited = 0
+        from . import people as people_mod
+
+        confirmed = edited = deleted = 0
         for eid in ids:
             e = g.conn.execute("SELECT * FROM experiences WHERE id = ? AND user_confirmed = 0", (eid,)).fetchone()
             if e is None:
+                continue
+            if request.form.get(f"del_{eid}"):   # 아닌 것은 지운다 (보관함 원본도 — 다시 가져오지 않도록)
+                deleted += people_mod.delete_unconfirmed_experience(g.conn, eid)
                 continue
             values = {k: (request.form.get(f"{k}_{eid}") or "").strip() for k in ("label", "when_text", "story")}
             values["story"] = values["story"] or e["story"]          # 본문을 지우면 원래 글을 둔다
@@ -501,8 +506,11 @@ def create_app(data_dir: str | None = None) -> Flask:
         g.conn.commit()
         if confirmed:
             db.log(g.conn, "record", f"경험 {confirmed}건을 '실제로 있었던 일'로 확인 (10개씩 확인, 사용자)")
-        flash(f"{confirmed}건 확인" + (f" · {edited}건 고침" if edited else "")
-              + (f" · {len(ids) - confirmed}건은 확인 전으로 남김(나중에 다시 볼 수 있음)" if len(ids) > confirmed else "") + ".")
+        if deleted:
+            db.log(g.conn, "record", f"확인 전 경험 {deleted}건 지움 (10개씩 확인, 사용자)")
+        kept = len(ids) - confirmed - deleted
+        flash(f"{confirmed}건 확인" + (f" · {edited}건 고침" if edited else "") + (f" · {deleted}건 지움" if deleted else "")
+              + (f" · {kept}건은 확인 전으로 남김(나중에 다시 볼 수 있음)" if kept > 0 else "") + ".")
         return redirect(url_for("experiences_review", src=src, after=max(ids) if ids else 0))
 
     @app.post("/experiences/confirm")
@@ -519,6 +527,19 @@ def create_app(data_dir: str | None = None) -> Flask:
         flash(f"{n}건을 '실제로 있었던 일'로 확인했습니다. 이제 사연 재료로 씁니다." if n else "체크한 사건이 없습니다.",
               "message" if n else "warn")
         return redirect(url_for("experiences", only=form("only")))
+
+    @app.post("/experiences/<int:eid>/delete")
+    def experience_delete(eid):
+        """'확인 전' 경험 지우기 (원고·전송 기록이 있거나 이미 확인한 것은 지우지 않음)."""
+        from . import people as people_mod
+
+        e = one("SELECT id, label FROM experiences WHERE id = ?", eid)
+        if people_mod.delete_unconfirmed_experience(g.conn, eid):
+            db.log(g.conn, "record", f"확인 전 경험 #{eid} 지움 (사용자)")
+            flash(f"경험 #{eid} '{(e['label'] or '')[:30]}'을(를) 지웠습니다.")
+            return redirect(url_for("experiences"))
+        flash("이미 '실제로 있었던 일'로 확인했거나 원고·전송 기록이 있는 경험은 지우지 않습니다.", "error")
+        return redirect(url_for("experience_edit", eid=eid))
 
     @app.route("/experiences/new", methods=["GET", "POST"])
     @app.route("/experiences/<int:eid>", methods=["GET", "POST"])
@@ -1160,7 +1181,15 @@ def create_app(data_dir: str | None = None) -> Flask:
                           "인물 화면에서 호칭을 확인하세요.")
                     return redirect(url_for("people_page"))
                 if kind == "library":
-                    rows = people_mod.parse_story_log(text)
+                    persons = people_mod.parse_person_records(text)
+                    rows = people_mod.parse_story_log(text) if '"body"' in text else []
+                    if persons:   # 사연을 붙일 인물(친구 등)을 먼저 넣는다
+                        p_added, p_updated = people_mod.import_person_records(g.conn, persons)
+                        db.log(g.conn, "people", f"인물 추가: 새 인물 {p_added}명, 직업 등 적음 {p_updated}명")
+                        flash(f"인물 {len(persons)}명: 새로 넣음 {p_added} · 직업 등을 적음 {p_updated}. "
+                              "직업에 '임의'가 붙은 것은 사연 묶음용으로 정한 값이니 인물 화면에서 확인하세요.")
+                    if not rows and persons:
+                        return redirect(url_for("people_page"))
                     added, updated = people_mod.import_library(g.conn, rows)
                     fiction = sum(1 for r in rows if r["kind"] == "fiction")
                     db.log(g.conn, "people", f"사연 보관함 가져오기: 새 사연 {added}편, 고침 {updated}편")
@@ -1291,6 +1320,17 @@ def create_app(data_dir: str | None = None) -> Flask:
         moved = g.conn.execute("SELECT id, user_confirmed FROM experiences WHERE from_library_id = ? ORDER BY id LIMIT 1",
                                (lid,)).fetchone()
         return render_template("library_item.html", s=item, moved=moved)
+
+    @app.post("/library/<int:lid>/delete")
+    def library_delete(lid):
+        """보관함 사연 지우기 (거기서 옮긴 '확인 전' 경험도 함께, 확인한 경험은 남김)."""
+        from . import people as people_mod
+
+        item = one("SELECT id, code, title FROM story_library WHERE id = ?", lid)
+        gone = people_mod.delete_library_item(g.conn, lid)
+        db.log(g.conn, "people", f"보관함 사연 {item['code'] or item['id']} 지움" + (f" (확인 전 경험 {gone}건 함께)" if gone else ""))
+        flash(f"보관함 사연 '{item['title'][:30]}'을(를) 지웠습니다" + (f" — 옮겨 둔 확인 전 경험 {gone}건도 함께." if gone else "."))
+        return redirect(url_for("library", **({"person": form("person")} if form("person").isdigit() else {})))
 
     @app.post("/library/<int:lid>/to-experience")
     def library_to_experience(lid):
