@@ -421,6 +421,9 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
 
 # 기존 데이터베이스에 나중에 추가된 칼럼
 _ADDED_COLUMNS = {
+    "corners": [
+        ("submit_selector", "TEXT"),                    # 글쓰기 화면의 '등록' 버튼 (비면 글자로 찾음, 게시판 자동 등록용)
+    ],
     "experiences": [
         ("gorilla_line", "TEXT"),                       # 공감로그용 한 줄 (사용자가 직접 씀, 200자 이내)
         ("about_person_id", "INTEGER"),                 # 누구 이야기인가 (화자는 늘 나, 비면 내 이야기)

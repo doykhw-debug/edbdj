@@ -63,6 +63,7 @@
       <div><label>제목 입력 요소</label><input type="text" name="title_selector" value="{{ c.title_selector or '' }}" placeholder='예: input[name="title"]'></div>
       <div><label>본문 입력 요소</label><input type="text" name="body_selector" value="{{ c.body_selector or '' }}" placeholder="iframe 안이면: iframe#editor || body"></div>
       <div><label>신청곡 입력 요소 <span class="hint">(있으면)</span></label><input type="text" name="song_selector" value="{{ c.song_selector or '' }}"></div>
+      <div><label>등록 버튼 <span class="hint">(비우면 '등록'·'확인' 글자로 찾음 — 게시판 자동 등록용)</span></label><input type="text" name="submit_selector" value="{{ c.submit_selector or '' }}"></div>
     </div>
   </details>
   <div class="actions"><button>저장</button></div>

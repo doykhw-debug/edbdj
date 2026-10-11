@@ -30,6 +30,7 @@ DEFAULTS = {
     "quizbot.story_cooldown_seconds": "600",
     "quizbot.max_story_analyses_per_window": "4",
     "quizbot.max_story_sends_per_hour": "2",
+    "quizbot.max_board_posts_per_day": "3",   # 게시판 자동 등록 하루 상한 (도배로 보이지 않게)
     # 선물 정보
     "quizbot.gift_settle_seconds": "30",
     "quizbot.gift_cooldown_seconds": "600",
@@ -42,6 +43,7 @@ DEFAULTS = {
     "live.auto_story": "1",               # 사연: 검사를 모두 통과한 초안은 자동 전송
     "live.gift": "1",                     # 선물 정보 기록
     "live.witty": "1",                    # 퀴즈에 기발한 오답 섞기
+    "live.board_auto": "1",               # 방송에서 게시판에 남겨 달라는 사연: 검사 경고 없으면 자동 승인·입력·등록
     "live.quiz_always": "1",              # 퀴즈는 확신도와 상관없이 정답 후보를 보냄 (객관식·주관식 모두, 틀려도 손해 없음)
     "live.captions": "1",                 # 자막 창 띄우기
     # 분석 (Claude API)
@@ -101,6 +103,7 @@ LABELS = {
     "quizbot.story_cooldown_seconds": "사연 분석 간 최소 간격(초)",
     "quizbot.max_story_analyses_per_window": "예약 1회당 최대 사연 분석 횟수",
     "quizbot.max_story_sends_per_hour": "시간당 최대 사연 전송 수",
+    "quizbot.max_board_posts_per_day": "하루 최대 게시판 자동 등록 수",
     "quizbot.gift_settle_seconds": "선물 안내 신호 후 대기(초)",
     "quizbot.gift_cooldown_seconds": "선물 분석 간 최소 간격(초)",
     "quizbot.max_gift_analyses_per_window": "예약 1회당 최대 선물 분석 횟수",

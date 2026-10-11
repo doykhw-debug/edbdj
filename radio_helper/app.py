@@ -29,7 +29,8 @@ DRAFT_STATUS = {"draft": "작성 중", "approved": "승인됨", "archived": "보
 SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "manual": "직접 작성"}
 STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀"}
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
-                ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"))
+                ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"),
+                ("live.board_auto", "board_auto"))
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
@@ -52,7 +53,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         SOURCE=SOURCE, POST_STATUS=STATUS_LABELS, QUIZ_KIND=quiz.KIND_LABELS, QUIZ_ENTRY=quiz.ENTRY_LABELS,
         entry_label=quiz.entry_label,
         STORY_SOURCE=STORY_SOURCE,
-        VIA={"sms": "문자", **{k: v["label"] for k, v in qconfig.CHAT_APPS.items()}},
+        VIA={"sms": "문자", "board": "게시판", **{k: v["label"] for k, v in qconfig.CHAT_APPS.items()}},
     )
 
     # ── 보안: 로컬 전용 + 위조 요청 차단 ─────────────────────────────
@@ -378,13 +379,13 @@ def create_app(data_dir: str | None = None) -> Flask:
             g.conn.execute(
                 """UPDATE corners SET title = ?, recruiting = ?, char_limit = ?, deadline = ?, required_fields = ?,
                        ai_assist_policy = ?, is_target = ?, write_url = ?, title_selector = ?, body_selector = ?,
-                       song_selector = ?, updated_at = ? WHERE id = ?""",
+                       song_selector = ?, submit_selector = ?, updated_at = ? WHERE id = ?""",
                 ((form("corner_title") or corner["title"])[:80],
                  form("recruiting", "unknown"), int(limit) if limit.isdigit() else None, form("deadline") or None,
                  form("required_fields") or None, form("ai_assist_policy", "unknown"),
                  1 if request.form.get("is_target") else 0, form("write_url") or None,
                  form("title_selector") or None, form("body_selector") or None, form("song_selector") or None,
-                 db.now(), cid))
+                 form("submit_selector") or None, db.now(), cid))
             g.conn.commit()
             if db.update_corner_notice(g.conn, cid, request.form.get("notice_text", "")):
                 db.log(g.conn, "notice", f"{corner['title']} 공지 변경 감지 → 재검토 전 제출 중지")
@@ -1060,13 +1061,18 @@ def create_app(data_dir: str | None = None) -> Flask:
 
         who = request.args.get("b", "")
         rows = []
+        # 게시판 자동 등록한 사연은 제출 이력(아래)이 생기면 그쪽 한 줄로 보인다
+        on_board = {r[0] for r in g.conn.execute("SELECT DISTINCT draft_id FROM submissions WHERE draft_id IS NOT NULL "
+                                                 "AND post_status IN ('filled', 'posted', 'unknown')")}
         for sp in g.conn.execute(
                 """SELECT sp.*, e.label AS exp_label FROM story_posts sp LEFT JOIN experiences e ON e.id = sp.experience_id
                    WHERE sp.status IN ('entered', 'posted', 'unknown')"""):
+            if sp["sent_via"] == "board" and sp["draft_id"] in on_board:
+                continue
             rows.append({"at": sp["sent_at"] or sp["updated_at"], "broadcaster": story.post_broadcaster(g.conn, sp),
                          "where": " · ".join(x for x in (sp["channel"], sp["program"]) if x),
                          "how": qconfig.app_label(sp["sent_via"]) if sp["sent_via"] in qconfig.CHAT_APPS
-                         else ("문자" if sp["sent_via"] == "sms" else "앱 채팅"),
+                         else {"sms": "문자", "board": "게시판 (자동 등록 중)"}.get(sp["sent_via"], "앱 채팅"),
                          "status": quiz.entry_label(sp["status"], sp["sent_via"]), "ok": sp["status"] == "posted",
                          "topic": sp["topic"], "text": sp["message"], "exp_id": sp["experience_id"],
                          "exp_label": sp["exp_label"], "ev_t": "story_posts", "ev_id": sp["id"]})

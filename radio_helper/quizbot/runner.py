@@ -93,6 +93,7 @@ class Deps:
     notify: Callable[[str], None] = lambda m: None      # 확인할 글이 생겼을 때 알림 (윈도우: 알림음)
     sms: object | None = None                           # 휴대폰 문자: is_ready(), send(number, text)
     chat_senders: dict | None = None                    # 앱별 채팅 전송 {"mini": ..., "kong": ...} (없으면 sender)
+    launch_board: Callable[[int], str] | None = None    # 원고 번호 → 게시판 자동 등록 도구를 띄우고 기록 파일 이름
 
 
 # ── 판단 ────────────────────────────────────────────────────────────
@@ -689,7 +690,8 @@ class Runner:
         warnings = story.message_checks(self.conn, message, exp, source, res.added_facts,
                                         limit=2000 if target == "board" else None) if exp is not None else []
         note = res.fit_reason if exp is not None else "주제에 맞는 실제 경험이 없음 — 직접 써서 보내거나 건너뛰세요"
-        draft_id = self.make_board_draft(program, exp, res.board_title, message, song) \
+        draft_id = self.make_board_draft(program, exp, res.board_title, message, song,
+                                         hint=f"{res.topic}\n{transcript[-1500:]}") \
             if target == "board" and exp is not None and message else None
         cur = self.conn.execute(
             """INSERT INTO story_posts (schedule_id, channel, program, broadcast_date, topic, experience_id, message, source,
@@ -707,21 +709,48 @@ class Runner:
                                      + (" · 게시판에만 받음" if target == "board" else "")
                                      + (f" · 채팅창 {len(images)}장 함께 분석" if images else ""))
         if target == "board":
-            self._hold("story_posts", pid, (f"게시판용 — 원고 검토함 #{draft_id}에서 확인하고 게시판에 입력하세요 (등록은 직접)"
-                                            if draft_id else "게시판용 — 이 프로그램의 게시판(코너)을 몰라 원고를 만들지 못함. "
-                                                             "코너 화면에서 게시판을 추가하세요"))
+            if draft_id and config.get(self.conn, "live.board_auto") == "1" and self.auto_board(pid, draft_id):
+                return pid
+            if self.conn.execute("SELECT decision FROM story_posts WHERE id = ?", (pid,)).fetchone()[0] is None:
+                self._hold("story_posts", pid, (f"게시판용 — 원고 검토함 #{draft_id}에서 확인하고 게시판에 입력하세요 (등록은 직접)"
+                                                if draft_id else "게시판용 — 이 프로그램의 게시판(코너)을 몰라 원고를 만들지 못함. "
+                                                                 "코너 화면에서 게시판을 추가하세요"))
             self.deps.notify(f"게시판 사연 '{res.topic[:30]}' — 원고 검토함 확인")
             return pid
         if self.try_send_story(pid, schedule) is None:
             self.deps.notify(f"사연 주제 '{res.topic[:30]}' — 확인 대기")
         return pid
 
-    def make_board_draft(self, program: str, exp, title: str, body: str, song: str) -> int | None:
+    def auto_board(self, pid: int, draft_id: int) -> bool:
+        """방송에서 게시판에 남겨 달라고 한 사연: 검사 경고가 없으면 원고를 자동 승인하고 등록 도구를 띄운다.
+        로그인·CAPTCHA 는 도구가 창을 띄워 사용자에게 맡긴다 (우회하지 않음). 띄웠으면 True."""
+        from .. import gates
+
+        result = gates.evaluate(self.conn, draft_id, gates.MODE_POST)
+        if not result.ok:
+            reasons = " / ".join(result.blockers)
+            self._hold("story_posts", pid, f"게시판 자동 등록 보류: {reasons[:400]} — 원고 검토함 #{draft_id}에서 고쳐 직접 입력할 수 있음")
+            db.log(self.conn, "quizbot", f"사연 #{pid} 게시판 자동 등록 보류: {reasons[:200]}")
+            return False
+        if self.deps.launch_board is None:
+            return False
+        now = db.now()
+        # 자동 승인: 검사 경고 0건이 승인을 대신한다 ('사실 확인'은 사용자가 한 것이 아니므로 표시하지 않음)
+        self.conn.execute("UPDATE drafts SET status = 'approved', approved_at = ?, updated_at = ? WHERE id = ?",
+                          (now, now, draft_id))
+        # 보내기 전에 '결과 불명'으로 바꿔 두어 같은 경험을 다시 쓰지 않게 한다 (등록 도구가 끝나면 결과로 바꿈)
+        self.conn.execute("UPDATE story_posts SET status = 'unknown', sent_at = ?, sent_via = 'board', decision = ?, "
+                          "updated_at = ? WHERE id = ?",
+                          (now, f"게시판 자동 등록 중 — 원고 #{draft_id} 자동 승인(검사 경고 없음)", now, pid))
+        self.conn.commit()
+        log_name = self.deps.launch_board(draft_id)
+        db.log(self.conn, "quizbot", f"사연 #{pid} 게시판 자동 등록 시작 — 원고 #{draft_id} 자동 승인 (기록: {log_name})")
+        return True
+
+    def make_board_draft(self, program: str, exp, title: str, body: str, song: str, hint: str = "") -> int | None:
         """진행자가 '게시판에만' 받는다고 하면 그 프로그램 게시판용 원고를 원고 검토함에 만든다.
-        게시판 등록은 로그인·보안 문자가 있어 사용자가 직접 한다 (원고 화면의 '실제 화면에 입력하기')."""
-        corner = self.conn.execute(
-            "SELECT id FROM corners WHERE program = ? ORDER BY is_target DESC, (title LIKE '%사연%') DESC, id LIMIT 1",
-            (program,)).fetchone()
+        진행자가 말한 게시판·코너 이름(hint: 주제·녹취)이 있으면 그 코너를 고른다."""
+        corner = board_corner(self.conn, program, hint)
         if corner is None:
             return None
         cur = self.conn.execute(
@@ -878,6 +907,24 @@ class Runner:
         return status
 
 
+def _plain(text: str) -> str:
+    return re.sub(r"[\s\[\]()<>'\"·.,!?~\-]", "", text or "").lower()
+
+
+def board_corner(conn: sqlite3.Connection, program: str, hint: str = ""):
+    """그 프로그램 게시판 중 하나. 진행자가 말한 코너 이름이 주제·녹취에 나오면 그 코너(긴 이름 우선),
+    아니면 제출 대상 → '사연'이 들어간 게시판 순. 글쓰기 주소가 있는 게시판을 먼저 고른다."""
+    rows = conn.execute("SELECT * FROM corners WHERE program = ? ORDER BY is_target DESC, (title LIKE '%사연%') DESC, "
+                        "(COALESCE(write_url, '') != '') DESC, id", (program,)).fetchall()
+    if not rows:
+        return None
+    said = _plain(hint)
+    named = [r for r in rows if len(_plain(r["title"])) >= 3 and _plain(r["title"]) in said]
+    if named:
+        return max(named, key=lambda r: (len(_plain(r["title"])), bool(r["write_url"])))
+    return rows[0]
+
+
 @contextmanager
 def shared_input_lock(wait_seconds: int = 20):
     """웹 입력 도구와 같은 잠금. 다른 입력 작업이 돌고 있으면 잠깐 기다린다."""
@@ -914,6 +961,7 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
 
 def build_real_deps(conn: sqlite3.Connection) -> Deps:
     """윈도우에서 실제로 쓰는 구성."""
+    from ..app import launch_autofill
     from .answerer import ClaudeAnswerer
     from .audio import LoopbackRecorder
     from .gorilla import Gorilla
@@ -936,4 +984,5 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
         chat_senders={app: Gorilla(config.GorillaConfig.load(conn, app)) for app in config.CHAT_APPS},
         sms=AdbSms.from_settings(conn),
         lock=shared_input_lock,
+        launch_board=lambda draft_id: launch_autofill(["--draft", str(draft_id), "--mode", "post"]),
     )

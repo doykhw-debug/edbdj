@@ -14,6 +14,8 @@ from . import checks, db
 MODE_MOCK = "mock"        # 로컬 모의 화면. 실제 사이트에 아무것도 남기지 않는다.
 MODE_INSPECT = "inspect"  # 실제 글쓰기 화면 읽기 전용 점검.
 MODE_FILL = "fill"        # 실제 글쓰기 화면에 입력만. 등록 버튼은 사용자가 직접 누른다.
+MODE_POST = "post"        # 방송에서 게시판에 남겨 달라고 한 사연: 검사 경고 없는 원고만 자동 승인·입력·등록.
+                          # 로그인·CAPTCHA 는 여전히 사용자가 처리한다 (우회하지 않음).
 
 ACTIVE_POST_STATUSES = ("filled", "posted", "unknown")
 
@@ -40,16 +42,22 @@ def _parse_deadline(text: str | None) -> datetime | None:
     return None
 
 
-def corner_blockers(corner: sqlite3.Row) -> tuple[list[str], list[str]]:
+def corner_blockers(corner: sqlite3.Row, on_air: bool = False) -> tuple[list[str], list[str]]:
+    """on_air: 진행자가 방송에서 이 게시판에 사연을 남겨 달라고 함 → 제출 대상·모집 중·공지 확인으로 본다."""
     blockers, warnings = [], []
-    if not corner["is_target"]:
-        blockers.append("이 코너는 제출 대상으로 지정되지 않았습니다. (첫 대상은 '사연과 신청곡' 한 곳)")
-    if corner["recruiting"] != "open":
-        blockers.append("현재 사연 모집 여부가 '모집 중'으로 확인되지 않았습니다.")
-    if corner["notice_changed"]:
-        blockers.append("코너 공지가 바뀌었습니다. 재검토 후 '공지 확인 완료'를 눌러야 합니다.")
-    elif not corner["notice_checked_at"]:
-        blockers.append("모집 공지·마감·필수 항목을 확인했다는 기록이 없습니다.")
+    if on_air:
+        warnings.append("방송에서 이 게시판에 사연을 받는다고 해서 모집 중으로 보고 자동 등록합니다.")
+    else:
+        if not corner["is_target"]:
+            blockers.append("이 코너는 제출 대상으로 지정되지 않았습니다. (첫 대상은 '사연과 신청곡' 한 곳)")
+        if corner["recruiting"] != "open":
+            blockers.append("현재 사연 모집 여부가 '모집 중'으로 확인되지 않았습니다.")
+        if corner["notice_changed"]:
+            blockers.append("코너 공지가 바뀌었습니다. 재검토 후 '공지 확인 완료'를 눌러야 합니다.")
+        elif not corner["notice_checked_at"]:
+            blockers.append("모집 공지·마감·필수 항목을 확인했다는 기록이 없습니다.")
+    if on_air and corner["recruiting"] == "closed":
+        blockers.append("이 코너는 '모집 마감'으로 표시돼 있습니다.")
     deadline = _parse_deadline(corner["deadline"])
     if corner["deadline"] and deadline is None:
         warnings.append(f"마감 '{corner['deadline']}'을(를) 날짜로 읽지 못했습니다. YYYY-MM-DD 형식을 권장합니다.")
@@ -133,21 +141,33 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
         return result
 
     exp = conn.execute("SELECT * FROM experiences WHERE id = ?", (draft["experience_id"],)).fetchone()
-    b, w = corner_blockers(corner)
+    auto = mode == MODE_POST
+    b, w = corner_blockers(corner, on_air=auto)
     result.blockers += b
     result.warnings += w
     selectors, borrowed = corner_selectors(conn, corner)
-    if not (selectors["title"] and selectors["body"]):
+    if not (selectors["title"] and selectors["body"]) and auto:
+        result.warnings.append("입력 요소를 아직 몰라 등록할 때 글쓰기 화면에서 제목·본문 칸을 자동으로 찾습니다 "
+                               "(찾으면 코너에 적어 둠).")
+    elif not (selectors["title"] and selectors["body"]):
         result.blockers.append("글쓰기 화면의 제목·본문 입력 요소를 아직 모릅니다. 아무 SBS 코너에서나 '점검용 브라우저 열기'로 "
                                "한 번 확인해 적어 두면 모든 SBS 코너에 씁니다.")
     elif borrowed:
         result.warnings.append(borrowed)
     if not exp["user_confirmed"]:
         result.blockers.append("이 경험이 실제 있었던 일이라고 사용자가 확인하지 않았습니다.")
-    if draft["status"] != "approved":
-        result.blockers.append("원고가 승인되지 않았습니다. 사용자가 확인한 원고만 제출 대상입니다.")
-    if not draft["fact_confirmed"]:
-        result.blockers.append("원고의 사건·인물·결과가 실제와 같다는 확인이 없습니다.")
+    if not auto:   # 자동 등록은 아래 검사(경고 0건)가 승인을 대신한다
+        if draft["status"] != "approved":
+            result.blockers.append("원고가 승인되지 않았습니다. 사용자가 확인한 원고만 제출 대상입니다.")
+        if not draft["fact_confirmed"]:
+            result.blockers.append("원고의 사건·인물·결과가 실제와 같다는 확인이 없습니다.")
+    else:
+        limit = _int_setting(conn, "quizbot.max_board_posts_per_day", 3)
+        today = datetime.now().strftime("%Y-%m-%d")
+        done = conn.execute("SELECT COUNT(*) FROM submissions WHERE substr(created_at, 1, 10) = ? "
+                            "AND post_status IN ('filled','posted','unknown')", (today,)).fetchone()[0]
+        if done >= limit:
+            result.blockers.append(f"오늘 게시판 등록이 {done}건으로 하루 상한({limit}건)에 닿았습니다.")
     # 게시판은 SBS 뿐이다. 같은 방송국에 한 번 보낸 경험은 다시 보내지 않는다 (다른 방송국은 가능)
     active = conn.execute(
         "SELECT s.id, c.title AS corner_title, s.post_status FROM submissions s "
@@ -161,14 +181,24 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
             "같은 방송국(SBS)에는 다시 보내지 않고, 결과 불명이어도 다시 보내지 않습니다.")
     from .quizbot.story import post_broadcaster
 
-    for sp in conn.execute("SELECT * FROM story_posts WHERE experience_id = ? "
-                           "AND status IN ('entered','posted','unknown')", (draft["experience_id"],)):
+    for sp in conn.execute("SELECT * FROM story_posts WHERE experience_id = ? AND COALESCE(draft_id, -1) != ? "
+                           "AND status IN ('entered','posted','unknown')", (draft["experience_id"], draft_id)):
         if post_broadcaster(conn, sp) == "SBS":
             result.blockers.append(f"같은 경험을 SBS 사연 #{sp['id']} ({sp['program']})로 이미 보냈습니다. "
                                    "같은 방송국에는 다시 보내지 않습니다.")
     result.blockers += [f.message for f in findings if f.level == checks.BLOCK]
-    result.warnings += [f.message for f in findings if f.level == checks.WARN]
+    if auto:   # 사람이 보지 않고 올리므로 '지어냈을 수 있음' 경고도 막는다
+        result.blockers += [f"자동 등록은 검사 경고가 없는 원고만: {f.message}" for f in findings if f.level == checks.WARN]
+    else:
+        result.warnings += [f.message for f in findings if f.level == checks.WARN]
     return result
+
+
+def _int_setting(conn: sqlite3.Connection, key: str, default: int) -> int:
+    try:
+        return int(float(db.get_setting(conn, key) or default))
+    except ValueError:
+        return default
 
 
 STATUS_LABELS = {
