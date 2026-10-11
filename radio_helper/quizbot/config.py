@@ -30,7 +30,6 @@ DEFAULTS = {
     "quizbot.story_cooldown_seconds": "600",
     "quizbot.max_story_analyses_per_window": "4",
     "quizbot.max_story_sends_per_hour": "2",
-    "quizbot.max_board_posts_per_day": "3",   # 게시판 자동 등록 하루 상한 (도배로 보이지 않게)
     # 선물 정보
     "quizbot.gift_settle_seconds": "30",
     "quizbot.gift_cooldown_seconds": "600",
@@ -103,7 +102,6 @@ LABELS = {
     "quizbot.story_cooldown_seconds": "사연 분석 간 최소 간격(초)",
     "quizbot.max_story_analyses_per_window": "예약 1회당 최대 사연 분석 횟수",
     "quizbot.max_story_sends_per_hour": "시간당 최대 사연 전송 수",
-    "quizbot.max_board_posts_per_day": "하루 최대 게시판 자동 등록 수",
     "quizbot.gift_settle_seconds": "선물 안내 신호 후 대기(초)",
     "quizbot.gift_cooldown_seconds": "선물 분석 간 최소 간격(초)",
     "quizbot.max_gift_analyses_per_window": "예약 1회당 최대 선물 분석 횟수",

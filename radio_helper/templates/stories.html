@@ -11,7 +11,13 @@
 </div>
 
 <div class="panel" id="pending">
-  <h2>확인 대기 <span class="muted">진행자가 주제를 주고 사연을 받을 때 · 경고가 있거나 경험이 안 맞아 자동으로 보내지 않은 글</span></h2>
+  <h2>확인 대기 <span class="muted">진행자가 주제를 주고 사연을 받을 때 · 경고가 있거나 경험이 안 맞아 자동으로 보내지 않은 글</span>
+  {% if nav_pending.stories %}
+  <form method="post" action="{{ url_for('notices_seen') }}" style="display:inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="stories">
+    <input type="hidden" name="next" value="{{ url_for('stories') }}#pending">
+    <button class="secondary" style="font-size:13px;margin-left:6px" title="메뉴의 빨간 숫자만 지웁니다 (글은 그대로)">✓ 알림 확인함</button>
+  </form>{% endif %}</h2>
   {% if not counts.confirmed %}
     <div class="flash warn">'실제로 있었던 일'로 확인한 경험이 없어 사연 글을 만들지 않습니다.
       <a href="{{ url_for('experiences') }}">실제 경험</a>을 적거나 <a href="{{ url_for('import_page') }}">가져오기</a>를 하세요.</div>

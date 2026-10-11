@@ -213,7 +213,7 @@
       d.appendChild(node('span', 'muted', e.at));
       d.appendChild(document.createTextNode(' · ' + e.message)); ev.appendChild(d);
     });
-    var n = vm.pending.quizzes + vm.pending.stories;
+    var n = vm.unseen.quizzes + vm.unseen.stories;
     document.title = (vm.status === 'collecting' ? '● ' : '') + (n ? '(' + n + ') ' : '') + '청취 · 라디오 참여 도우미';
   }
   function poll() {

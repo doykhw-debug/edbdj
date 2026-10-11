@@ -75,16 +75,13 @@ def test_post_mode_unconfirmed_experience_and_stop_switch(conn):
     assert any("일괄 중지" in b for b in gates.evaluate(conn, did, gates.MODE_POST).blockers)
 
 
-def test_post_mode_daily_cap(conn):
+def test_post_mode_has_no_daily_cap(conn):
     did = make_draft(conn, make_experience(conn))
-    for i in range(3):
+    for i in range(12):                                              # 하루 상한 없음 (무제한)
         conn.execute("INSERT INTO submissions (draft_id, experience_id, corner_id, title, body, post_status, created_at, "
                      "updated_at) VALUES (NULL, ?, ?, ?, ?, 'posted', ?, ?)",
                      (make_experience(conn), target_corner_id(conn), f"글 {i}", f"다른 글 {i}번째", db.now(), db.now()))
     conn.commit()
-    r = gates.evaluate(conn, did, gates.MODE_POST)
-    assert not r.ok and any("하루 상한(3건)" in b for b in r.blockers)
-    db.set_setting(conn, "quizbot.max_board_posts_per_day", "5")
     assert gates.evaluate(conn, did, gates.MODE_POST).ok
 
 
@@ -166,7 +163,7 @@ def test_board_auto_off_keeps_manual_review(conn):
 
 def test_board_auto_defaults_and_toggle(client, conn):
     assert config.get(conn, "live.board_auto") == "1"
-    assert config.get(conn, "quizbot.max_board_posts_per_day") == "3"
+    assert "quizbot.max_board_posts_per_day" not in config.DEFAULTS
     html = client.get("/").get_data(as_text=True)
     assert 'name="board_auto"' in html and "게시판 사연도 자동 등록" in html
 
@@ -292,3 +289,49 @@ def test_post_never_bypasses_login_or_captcha(conn, monkeypatch, kw, reason):
     assert sp["decision"].startswith("게시판 자동 등록 못 함") and reason in sp["decision"]
     assert conn.execute("SELECT COUNT(*) FROM submissions WHERE post_status != 'failed'").fetchone()[0] == 0
     assert not (db.data_dir() / "board_post.lock").exists()
+
+
+# ── 메뉴 알림 숫자 '확인함' ─────────────────────────────────────────
+def add_pending_quiz(conn, question="오늘의 퀴즈"):
+    cur = conn.execute("INSERT INTO quizzes (account, channel, program, broadcast_date, question, question_key, dedupe_key, "
+                       "source, entry_status, created_at, updated_at) VALUES ('고릴라', '파워FM', '두시탈출 컬투쇼', "
+                       "'2026-10-11', ?, ?, ?, 'auto', 'pending', ?, ?)",
+                       (question, question, f"k|{question}", db.now(), db.now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def test_seen_button_clears_menu_count_but_keeps_items(client, conn):
+    from radio_helper import notices
+
+    for q in ("퀴즈 하나", "퀴즈 둘", "퀴즈 셋"):
+        add_pending_quiz(conn, q)
+    eid = make_experience(conn)
+    add_story_post(conn, eid, None, status="pending")
+    add_story_post(conn, eid, None, status="pending")
+    html = client.get("/").get_data(as_text=True)
+    assert '<span class="nav-count">3</span>' in html and '<span class="nav-count">2</span>' in html
+    assert "✓ 확인함" in html
+
+    token = csrf(client, "/")
+    r = client.post("/notices/seen", data={"csrf_token": token, "next": "/quizzes"})
+    assert r.status_code == 302 and r.headers["Location"].endswith("/quizzes")
+    html = client.get("/").get_data(as_text=True)
+    assert "nav-count" not in html and "✓ 확인함" not in html
+    assert notices.pending_counts(conn) == {"quizzes": 3, "stories": 2}            # 글은 그대로 (첫 화면 '확인 대기')
+    assert client.get("/live.json").get_json()["unseen"] == {"quizzes": 0, "stories": 0}
+    assert "퀴즈 셋" in client.get("/quizzes").get_data(as_text=True)
+
+    # 새로 생긴 대기 글만 다시 숫자로
+    add_pending_quiz(conn, "새 퀴즈")
+    assert notices.unseen_counts(conn) == {"quizzes": 1, "stories": 0}
+    html = client.get("/quizzes").get_data(as_text=True)
+    assert '<span class="nav-count">1</span>' in html and "✓ 알림 확인함" in html
+
+    # 화면별 '알림 확인함'은 그 종류만
+    add_story_post(conn, eid, None, status="pending")
+    client.post("/notices/seen", data={"csrf_token": token, "kind": "stories", "next": "/stories#pending"})
+    assert notices.unseen_counts(conn) == {"quizzes": 1, "stories": 0}
+    # 바깥 주소로는 돌아가지 않음
+    r = client.post("/notices/seen", data={"csrf_token": token, "next": "//evil.example.com/"})
+    assert r.headers["Location"] in ("/", "http://127.0.0.1:5000/")

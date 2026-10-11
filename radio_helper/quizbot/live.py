@@ -13,7 +13,7 @@ import re
 import sqlite3
 from datetime import datetime, timedelta
 
-from .. import db
+from .. import db, notices
 from . import config, silence
 from .detector import is_gift_signal, is_quiz_signal, is_story_signal
 
@@ -189,10 +189,6 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
     rows = conn.execute("SELECT * FROM transcripts ORDER BY id DESC LIMIT ?", (lines,)).fetchall()
     events = conn.execute("SELECT at, message FROM events WHERE kind IN ('quizbot', 'gorilla') "
                           "ORDER BY id DESC LIMIT 8").fetchall()
-    pending_quiz = conn.execute("SELECT COUNT(*) FROM quizzes WHERE source = 'auto' AND entry_status = 'pending' "
-                                "AND approved = 0").fetchone()[0]
-    pending_story = conn.execute("SELECT COUNT(*) FROM story_posts WHERE status = 'pending' AND approved = 0"
-                                 ).fetchone()[0]
     channel = config.get(conn, "live.channel")
     if not active:
         status = "off"
@@ -219,7 +215,8 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
         "lines": [{"at": r["at"][11:19], "text": r["text"], "keywords": keywords(r["text"]),
                    "kinds": [KEYWORD_KIND[k] for k in keywords(r["text"])]} for r in reversed(rows)],
         "events": [{"at": e["at"][11:16], "message": e["message"]} for e in events],
-        "pending": {"quizzes": pending_quiz, "stories": pending_story},
+        "pending": notices.pending_counts(conn),
+        "unseen": notices.unseen_counts(conn),            # 메뉴 알림 숫자·창 제목 ('확인함' 뒤 새로 생긴 대기 글)
         "last_chunk": _json_setting(conn, "quizbot.last_chunk") if active else None,
         "stt_test": stt_test,
         "quiz_text": last_quiz_text(conn, now),

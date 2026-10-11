@@ -4,7 +4,13 @@
 <h1>퀴즈 기록</h1>
 
 <div class="panel" id="pending">
-  <h2>확인 대기 <span class="muted">자동으로 들은 문제 중 자동 전송 조건을 못 채운 것</span></h2>
+  <h2>확인 대기 <span class="muted">자동으로 들은 문제 중 자동 전송 조건을 못 채운 것</span>
+  {% if nav_pending.quizzes %}
+  <form method="post" action="{{ url_for('notices_seen') }}" style="display:inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="quizzes">
+    <input type="hidden" name="next" value="{{ url_for('quizzes') }}#pending">
+    <button class="secondary" style="font-size:13px;margin-left:6px" title="메뉴의 빨간 숫자만 지웁니다 (글은 그대로)">✓ 알림 확인함</button>
+  </form>{% endif %}</h2>
   {% for q in pending %}
   <div style="border-bottom:1px solid var(--line);padding:10px 0">
     <b>#{{ q.id }} {{ q.channel }} · {{ q.program }}</b> <span class="muted">{{ q.created_at }}</span>

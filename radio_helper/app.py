@@ -14,7 +14,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import db, evidence, gates, generator, quiz
+from . import db, evidence, gates, generator, notices, quiz
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -89,7 +89,15 @@ def create_app(data_dir: str | None = None) -> Flask:
         if "conn" not in g:
             return {"csrf_token": session.get("csrf", ""), "stopped": False, "nav_pending": {}, "listening": False}
         return {"csrf_token": session.get("csrf", ""), "stopped": db.is_stopped(g.conn),
-                "nav_pending": pending_counts(g.conn), "listening": live.is_active(g.conn)}
+                "nav_pending": notices.unseen_counts(g.conn), "listening": live.is_active(g.conn)}
+
+    @app.post("/notices/seen")
+    def notices_seen():
+        """메뉴 알림 숫자 '확인함': 지금까지의 확인 대기 글을 숫자에서 뺀다 (글은 목록에 그대로)."""
+        kind = form("kind")
+        notices.mark_seen(g.conn, [kind] if kind in notices.KINDS else None)
+        nxt = form("next")
+        return redirect(nxt if nxt.startswith("/") and not nxt.startswith("//") else url_for("home"))
 
     @app.get("/health")
     def health():
@@ -1031,7 +1039,8 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.get("/quizbot/pending.json")
     def quizbot_pending():
-        return {**pending_counts(g.conn), "state": db.get_setting(g.conn, "quizbot.state")}
+        return {**pending_counts(g.conn), "unseen": notices.unseen_counts(g.conn),
+                "state": db.get_setting(g.conn, "quizbot.state")}
 
     @app.get("/stories")
     def stories():
@@ -1667,13 +1676,8 @@ def _json(text: str | None):
 
 
 def pending_counts(conn) -> dict:
-    """확인을 기다리는 자동 감지 퀴즈·사연 수 (메뉴 배지·알림용)."""
-    return {
-        "quizzes": conn.execute("SELECT COUNT(*) FROM quizzes WHERE source = 'auto' AND entry_status = 'pending' "
-                                "AND approved = 0").fetchone()[0],
-        "stories": conn.execute("SELECT COUNT(*) FROM story_posts WHERE status = 'pending' AND approved = 0"
-                                ).fetchone()[0],
-    }
+    """확인을 기다리는 자동 감지 퀴즈·사연 수 (메뉴 알림 숫자는 '확인함' 뒤에 새로 생긴 것만: notices.unseen_counts)."""
+    return notices.pending_counts(conn)
 
 
 def _fresh(stamp: str | None, seconds: int) -> bool:

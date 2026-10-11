@@ -161,13 +161,6 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
             result.blockers.append("원고가 승인되지 않았습니다. 사용자가 확인한 원고만 제출 대상입니다.")
         if not draft["fact_confirmed"]:
             result.blockers.append("원고의 사건·인물·결과가 실제와 같다는 확인이 없습니다.")
-    else:
-        limit = _int_setting(conn, "quizbot.max_board_posts_per_day", 3)
-        today = datetime.now().strftime("%Y-%m-%d")
-        done = conn.execute("SELECT COUNT(*) FROM submissions WHERE substr(created_at, 1, 10) = ? "
-                            "AND post_status IN ('filled','posted','unknown')", (today,)).fetchone()[0]
-        if done >= limit:
-            result.blockers.append(f"오늘 게시판 등록이 {done}건으로 하루 상한({limit}건)에 닿았습니다.")
     # 게시판은 SBS 뿐이다. 같은 방송국에 한 번 보낸 경험은 다시 보내지 않는다 (다른 방송국은 가능)
     active = conn.execute(
         "SELECT s.id, c.title AS corner_title, s.post_status FROM submissions s "
@@ -192,13 +185,6 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
     else:
         result.warnings += [f.message for f in findings if f.level == checks.WARN]
     return result
-
-
-def _int_setting(conn: sqlite3.Connection, key: str, default: int) -> int:
-    try:
-        return int(float(db.get_setting(conn, key) or default))
-    except ValueError:
-        return default
 
 
 STATUS_LABELS = {
