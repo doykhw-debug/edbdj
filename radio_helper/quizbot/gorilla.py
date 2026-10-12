@@ -13,6 +13,11 @@ SBS 고릴라(공감로그)·MBC mini·KBS 콩 모두 같은 방식이다. 설�
 
 전송 중에는 고릴라 창이 잠깐 맨 앞으로 나온다. 끝나면 원래 쓰던 창과 클립보드를 되돌린다.
 
+보낼 때 채팅 창이 그 자리에 없으면 (모니터 기준 위치 방식)
+  - 최소화·트레이로 숨은 창은 되살리고, 옮겨지거나 크기가 바뀐 창은 위치를 지정할 때 자리·크기로 되돌린다.
+  - 앱이 아예 꺼져 있으면 실행 파일(위치 지정 때 저장) 또는 시작 메뉴 바로 가기로 다시 켜고 창이 뜨기를 기다린다.
+  - 그래도 그 자리에 앱 창이 없을 때만 보내지 않는다 (바탕화면 등 엉뚱한 곳에 Enter 를 누르지 않게).
+
 엉뚱한 곳을 누르지 않게 (라디오가 멈추거나 다른 프로그램에 키가 들어가는 것을 막음)
   - 누를 자리를 다른 창(자막 창·플레이어 창·다른 프로그램)이 가리고 있으면 누르지 않는다.
   - 위치 클릭 방식은 창 크기·자리가 위치를 지정할 때와 많이 다르면 누르지 않는다.
@@ -45,6 +50,8 @@ LAYOUT_TOLERANCE = 0.35  # 창 크기가 위치 지정 때보다 이 비율(그�
 LAYOUT_MIN_PX = 40       # (그보다 작은 변화는 가장자리에 붙은 입력칸·전송 버튼을 따라가 누른다 — anchored_point)
 EDGE_ZONE = 0.25         # 창 가장자리에서 이 비율 안쪽에 지정한 위치는 그 가장자리에 붙은 것으로 본다
 FRONT_WAIT_SECONDS = 1.0  # 클릭한 창이 맨 앞으로 올 때까지 기다리는 시간
+LAUNCH_WAIT_SECONDS = 40  # 꺼진 채팅 앱을 다시 켠 뒤 창이 뜨기를 기다리는 시간
+MIN_APP_WINDOW = 150      # 이보다 작은 창(알림·숨은 도우미 창)은 채팅 창으로 보지 않는다
 
 
 @dataclass
@@ -159,6 +166,26 @@ def score_window(title: str, process: str, edit_names: list[str], button_names: 
 
 
 # ── 윈도우 조작 ─────────────────────────────────────────────────────
+def process_path(pid: int) -> str:
+    """실행 파일 전체 경로 (다시 켜기용). 모르면 빈 문자열."""
+    try:
+        import ctypes
+
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = ctypes.c_uint32(len(buf))
+            if ctypes.windll.kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return buf.value
+        finally:
+            ctypes.windll.kernel32.CloseHandle(h)
+    except Exception:
+        pass
+    return ""
+
+
 def process_name(pid: int) -> str:
     try:
         from pywinauto.application import process_module
@@ -213,6 +240,10 @@ def _user32():
     user32.FindWindowW.restype = wintypes.HWND
     user32.IsWindowVisible.argtypes = [wintypes.HWND]
     user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.GetWindowPlacement.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                    ctypes.c_int, wintypes.UINT]
     return user32
 
 
@@ -244,7 +275,7 @@ def window_info(root: int) -> dict:
     user32.GetWindowTextW(h, buf, 512)
     pid = wintypes.DWORD()
     user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
-    return {"hwnd": root, "title": buf.value, "process": process_name(pid.value),
+    return {"hwnd": root, "title": buf.value, "process": process_name(pid.value), "path": process_path(pid.value),
             "rect": (rect.left, rect.top, rect.right, rect.bottom)}
 
 
@@ -273,6 +304,87 @@ def app_window_at(x: int, y: int, process: str) -> int | None:
 
     user32.EnumWindows(each, 0)   # 위에 있는 창부터 차례로
     return found[0] if found else None
+
+
+def app_windows(process: str) -> list[dict]:
+    """그 프로그램의 최상위 창 (보이는 것·최소화된 것·트레이로 숨은 것), 위에 있는 창부터.
+    [{hwnd, title, visible, iconic, normal: 최소화 전 자리 (왼, 위, 오른, 아래)}]. 작은 도우미 창은 뺀다."""
+    import ctypes
+    from ctypes import wintypes
+
+    class WINDOWPLACEMENT(ctypes.Structure):
+        _fields_ = [("length", wintypes.UINT), ("flags", wintypes.UINT), ("showCmd", wintypes.UINT),
+                    ("ptMinPosition", wintypes.POINT), ("ptMaxPosition", wintypes.POINT),
+                    ("rcNormalPosition", wintypes.RECT)]
+
+    user32 = _user32()
+    out: list[dict] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _lparam):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if process_name(pid.value) != process:
+            return True
+        visible, iconic = bool(user32.IsWindowVisible(hwnd)), bool(user32.IsIconic(hwnd))
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, buf, 256)
+        wp = WINDOWPLACEMENT()
+        wp.length = ctypes.sizeof(WINDOWPLACEMENT)
+        if iconic and user32.GetWindowPlacement(hwnd, ctypes.byref(wp)):
+            r = wp.rcNormalPosition
+        else:
+            r = wintypes.RECT()
+            user32.GetWindowRect(hwnd, ctypes.byref(r))
+        normal = (r.left, r.top, r.right, r.bottom)
+        big = normal[2] - normal[0] >= MIN_APP_WINDOW and normal[3] - normal[1] >= MIN_APP_WINDOW
+        if big and (visible or buf.value):   # 숨은 창은 제목이 있을 때만 (트레이로 숨긴 앱 창)
+            out.append({"hwnd": hwnd, "title": buf.value, "visible": visible, "iconic": iconic, "normal": normal})
+        return True
+
+    user32.EnumWindows(each, 0)
+    return out
+
+
+def pick_app_window(wins: list[dict], saved: tuple | None) -> dict | None:
+    """되살릴 창 (순수 계산): 위치 지정 때 잰 창과 크기가 가장 비슷한 창, 모르면 맨 위의 보이는 창."""
+    if not wins:
+        return None
+    if saved:
+        sw, sh = saved[2] - saved[0], saved[3] - saved[1]
+        return min(wins, key=lambda w: (abs((w["normal"][2] - w["normal"][0]) - sw)
+                                        + abs((w["normal"][3] - w["normal"][1]) - sh), not w["visible"]))
+    return next((w for w in wins if w["visible"]), wins[0])
+
+
+def restore_window(hwnd: int, rect: tuple | None, iconic: bool, visible: bool) -> None:
+    """최소화·숨김을 풀고, rect 가 있으면 그 자리·크기로 옮긴다 (활성화는 보낼 때 따로)."""
+    user32 = _user32()
+    if iconic:
+        user32.ShowWindow(hwnd, 9)        # SW_RESTORE
+    elif not visible:
+        user32.ShowWindow(hwnd, 5)        # SW_SHOW
+    if rect:
+        l, t, r, b = (int(v) for v in rect)
+        user32.SetWindowPos(hwnd, None, l, t, r - l, b - t, 0x0004 | 0x0010)   # SWP_NOZORDER | SWP_NOACTIVATE
+
+
+def start_menu_shortcut(names: list[str], roots: list[str] | None = None) -> str | None:
+    """시작 메뉴에서 이름이 맞는 바로 가기 (.lnk). 실행 파일 경로를 모를 때 다시 켜기용. 앞 이름부터 찾는다."""
+    if roots is None:
+        roots = [os.path.join(os.environ.get(v, ""), "Microsoft", "Windows", "Start Menu", "Programs")
+                 for v in ("APPDATA", "PROGRAMDATA")]
+    links = []
+    for root in roots:
+        if os.path.isdir(root):
+            for folder, _dirs, files in os.walk(root):
+                links += [os.path.join(folder, f) for f in files if f.lower().endswith(".lnk")]
+    for word in (n.lower() for n in names if n and len(n) >= 2):
+        for link in links:
+            low = os.path.basename(link).lower()
+            if word in low and "uninstall" not in low and "제거" not in low:
+                return link
+    return None
 
 
 def foreground_root() -> int:
@@ -492,6 +604,8 @@ def region_settings(target: str, rect: tuple[int, int, int, int], info: dict,
     settings: dict[str, str] = {}
     if win_ok and info["process"]:
         settings["gorilla.process_name"] = info["process"]
+    if win_ok and info.get("path"):
+        settings["gorilla.exe_path"] = info["path"]   # 꺼져 있을 때 다시 켜기용
     if target == "window":
         settings.update({
             "gorilla.screen_region": f"{l},{t},{r},{b}",
@@ -563,6 +677,8 @@ def calibration_settings(target: str, info: dict) -> dict:
     }
     if info["process"]:
         settings["gorilla.process_name"] = info["process"]
+    if info.get("path"):
+        settings["gorilla.exe_path"] = info["path"]
     return settings
 
 
@@ -588,9 +704,14 @@ def _control_names(w, control_type: str, limit: int = 300) -> list[str]:
         return []
 
 
+CHAT_SHORTCUT_NAMES = {"gorilla": ("고릴라", "gorealra", "gorilla"), "mini": ("mbc mini", "미니"),
+                       "kong": ("kbs 콩", "kong")}
+
+
 class Gorilla:
     def __init__(self, cfg: GorillaConfig):
         self.cfg = cfg
+        self.fixes: list[str] = []   # 보내기 전에 창을 되살리거나 앱을 다시 켠 일 (전송 기록에 붙음)
 
     # ── 창 찾기 ─────────────────────────────────────────────────
     def _candidates(self):
@@ -683,11 +804,64 @@ class Gorilla:
         else:
             proc = (self.cfg.process_name or "").lower()
             hwnd = app_window_at(*point, proc) if proc else None
+            if not hwnd and proc:
+                try:
+                    hwnd = self._recover(point, proc)   # 최소화·옮겨짐·꺼짐 → 되살려 그 자리에 둔다
+                except Exception as e:
+                    self.fixes.append(f"창 되살리기 실패: {type(e).__name__}")
+                    hwnd = None
             if not hwnd:
+                info = window_at_point(*point)
+                tried = f" [{'; '.join(self.fixes)}]" if self.fixes else ""
                 raise GorillaError(f"{label} 자리(모니터 {point[0]}, {point[1]})에 {self.cfg.label} 창이 없습니다 "
                                    f"(지금 그 자리: '{(info['title'] or '제목 없음')[:30]}', {info['process'] or '?'}). "
-                                   f"{self.cfg.label} 채팅 창을 지정할 때 자리에 두거나 ①② 위치를 다시 지정하세요. 최소화하지 마세요.")
+                                   f"{self.cfg.label} 채팅 창을 지정할 때 자리에 두거나 ①② 위치를 다시 지정하세요.{tried}")
         return Desktop(backend="uia").window(handle=hwnd).wrapper_object()
+
+    def _recover(self, point: tuple[int, int], proc: str) -> int | None:
+        """그 자리에 채팅 창이 없을 때: 최소화·숨김을 풀고 위치 지정 때 자리로 되돌린다. 앱이 꺼져 있으면 다시 켠다.
+        되살린 뒤 그 자리를 덮는 앱 창 번호 (없으면 None). 한 일은 self.fixes 에 남긴다 (전송 기록에 붙음)."""
+        saved = parse_rect(self.cfg.point_window)
+        wins = app_windows(proc)
+        if not wins:
+            if not self._launch(proc):
+                return None
+            deadline = time.time() + LAUNCH_WAIT_SECONDS
+            while not wins and time.time() < deadline:
+                time.sleep(2)
+                wins = app_windows(proc)
+            if not wins:
+                self.fixes.append(f"{self.cfg.label} 앱을 다시 켰지만 {LAUNCH_WAIT_SECONDS}초 안에 창이 뜨지 않음")
+                return None
+            time.sleep(3)   # 채팅 창이 펼쳐질 시간
+            hwnd = app_window_at(*point, proc)
+            if hwnd:
+                return hwnd   # 다시 켜자 원래 자리에 뜸
+            wins = app_windows(proc)
+        target = pick_app_window(wins, saved)
+        moved = bool(saved) and tuple(int(v) for v in target["normal"]) != tuple(int(v) for v in saved)
+        restore_window(target["hwnd"], saved if moved else None, target["iconic"], target["visible"])
+        time.sleep(0.8)
+        what = ("최소화돼 있어 되살림" if target["iconic"] else "숨어 있어 다시 띄움" if not target["visible"] else "")
+        what = " · ".join(x for x in (what, "위치 지정 때 자리로 옮김" if moved else "") if x)
+        self.fixes.append(f"{self.cfg.label} 채팅 창이 그 자리에 없어 {what or '앞으로 가져옴'}")
+        return app_window_at(*point, proc)
+
+    def _launch(self, proc: str) -> bool:
+        """꺼진 채팅 앱을 다시 켠다: 저장한 실행 파일 → 시작 메뉴 바로 가기. 켰으면 True."""
+        path = self.cfg.exe_path if self.cfg.exe_path and os.path.isfile(self.cfg.exe_path) else None
+        if path is None:
+            path = start_menu_shortcut([os.path.splitext(proc)[0], *CHAT_SHORTCUT_NAMES.get(self.cfg.app, ())])
+        if path is None:
+            self.fixes.append(f"{self.cfg.label} 앱이 꺼져 있고 실행 파일을 몰라 다시 켜지 못함 — 앱을 켜 두거나 위치를 한 번 다시 지정하세요")
+            return False
+        try:
+            os.startfile(path)   # 윈도우: 실행 파일·바로 가기를 연다
+        except Exception as e:
+            self.fixes.append(f"{self.cfg.label} 앱 다시 켜기 실패: {type(e).__name__}")
+            return False
+        self.fixes.append(f"{self.cfg.label} 앱이 꺼져 있어 다시 켬 ({os.path.basename(path)})")
+        return True
 
     def _window(self):
         point = self._screen_point("input") or self._screen_point("send")
@@ -1097,6 +1271,7 @@ class Gorilla:
         """설정 확인용으로 실제로 한 번 보낸다. 누르기 직전·보낸 직후 창을 찍어 둔다. 오클릭 방지로 보내지 못하면
         그때 화면에 누를 자리(빨강·초록 원)를 표시해 찍는다. 사진은 결과의 shots 로도 돌려준다 (증거 사진)."""
         shots, notes = [], []
+        self.fixes = []
 
         def run(w):
             def snap(name: str, label: str, points=()) -> None:
@@ -1131,6 +1306,8 @@ class Gorilla:
         except GorillaError as e:
             result, msg = SendResult("failed", str(e)), f"전송 테스트 실패: {e}" + "".join(f" / {n}" for n in notes)
         result.shots = shots
+        if self.fixes and result.status != "failed":
+            msg = " · ".join(self.fixes) + " → " + msg
         return result, msg
 
     def evidence_image(self, w) -> bytes | None:
@@ -1147,6 +1324,7 @@ class Gorilla:
 
     def send(self, text: str) -> SendResult:
         shots = []
+        self.fixes = []
 
         def run(w):
             label = f"보내지 못했을 때 {self.cfg.label} 창"
@@ -1166,6 +1344,8 @@ class Gorilla:
         except GorillaError as e:
             result = SendResult("failed", str(e))
         result.shots = shots
+        if self.fixes:   # 창을 되살리거나 앱을 다시 켠 일도 기록에 남긴다
+            result.detail = " · ".join(self.fixes) + " → " + result.detail
         return result
 
 
