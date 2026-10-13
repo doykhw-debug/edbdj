@@ -1186,8 +1186,10 @@ def create_app(data_dir: str | None = None) -> Flask:
                     if persons:   # 사연을 붙일 인물(친구 등)을 먼저 넣는다
                         p_added, p_updated = people_mod.import_person_records(g.conn, persons)
                         db.log(g.conn, "people", f"인물 추가: 새 인물 {p_added}명, 직업 등 적음 {p_updated}명")
-                        flash(f"인물 {len(persons)}명: 새로 넣음 {p_added} · 직업 등을 적음 {p_updated}. "
-                              "직업에 '임의'가 붙은 것은 사연 묶음용으로 정한 값이니 인물 화면에서 확인하세요.")
+                        guessed = any(rec["job"] and rec["job_tag"] != "주신" for rec in persons)
+                        flash(f"인물 {len(persons)}명: 새로 넣음 {p_added} · 직업 등을 적음 {p_updated}."
+                              + (" 직업에 '임의'가 붙은 것은 사연 묶음용으로 정한 값이니 인물 화면에서 확인하세요." if guessed else
+                                 " 인물 화면에서 호칭·관계를 확인하세요."))
                     if not rows and persons:
                         return redirect(url_for("people_page"))
                     added, updated = people_mod.import_library(g.conn, rows)
