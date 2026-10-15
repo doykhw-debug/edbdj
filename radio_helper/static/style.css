@@ -82,6 +82,9 @@ details summary { cursor: pointer; font-weight: 600; }
 /* 청취 화면 */
 .nav-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ef4444; margin-right: 5px; vertical-align: middle; animation: blink 1s steps(2, start) infinite; }
 .nav-seen { display: inline; margin: 0; }
+.ask-listen { border: 2px solid var(--accent, #2554c7); }
+.ask-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+.ask-app { min-width: 150px; font-weight: 600; }
 .nav-seen button { font-size: 12px; padding: 3px 8px; border-radius: 999px; background: #fff; color: var(--bad); border: 1px solid var(--bad); cursor: pointer; }
 .nav-count { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--bad); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
 @keyframes blink { to { visibility: hidden; } }

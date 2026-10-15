@@ -6,6 +6,29 @@
 <div class="flash warn">준비가 덜 된 항목: {% for i in missing %}<a href="{{ i.url }}">{{ i.name }}</a>{{ ', ' if not loop.last }}{% endfor %}
   — 청취·자막은 지금도 되지만, 이 항목을 마쳐야 정답·사연을 보낼 수 있습니다.</div>
 {% endif %}
+{% if ask %}
+<div class="panel ask-listen" id="ask-listen">
+  <h2 style="margin-top:0">뭐로 들으시겠어요?</h2>
+  <p class="muted">PC에서 틀어 둘 방송을 고르면 바로 청취를 시작합니다. 퀴즈 정답·사연은 그 방송의 채팅 앱으로 보내고,
+    그 앱만 다시 띄웁니다 (다른 방송국 앱은 켜지 않음). 지난번: <b>{{ ask.last }}</b></p>
+  {% for grp in ask.groups %}
+  <div class="ask-group"><span class="ask-app">{{ grp.label }}</span>
+    {% for ch in grp.channels %}
+    <form method="post" action="{{ url_for('listen_start') }}" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="keep_options" value="1">
+      <input type="hidden" name="channel" value="{{ ch.name }}"><input type="hidden" name="route" value="{{ 'app' if ch.app else 'sms' }}">
+      <button class="{{ '' if ch.name == ask.last else 'secondary' }}">{{ ch.name }}</button>
+    </form>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  <form method="post" action="{{ url_for('listen_skip') }}" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="secondary">지금은 듣지 않음</button>
+    <span class="muted">오류로 꺼졌다가 저절로 다시 켜질 때는 묻지 않고 고른 방송으로 이어서 듣습니다.</span>
+  </form>
+</div>
+{% endif %}
 <div class="panel live-hero">
   <div class="live-head">
     <span id="live-dot" class="live-dot {{ vm.status }}"></span>

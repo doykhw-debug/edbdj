@@ -36,6 +36,7 @@ DEFAULTS = {
     "quizbot.max_gift_analyses_per_window": "4",
     # 청취 시작 (한 번에 켜기)
     "live.active": "0",
+    "live.ask": "0",                      # 1: 프로그램을 켰을 때 '뭐로 들으시겠어요?'에 아직 답하지 않음 (답하기 전에는 듣지 않음)
     "live.channel": "파워FM",
     "live.auto_quiz": "1",                # 퀴즈 정답 자동 전송
     "live.min_confidence": "0.8",

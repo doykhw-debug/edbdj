@@ -58,6 +58,16 @@ def ctrl_c_handler(clock=time.monotonic, say=print):
     return handler
 
 
+def ask_listen(conn, was_listening: bool) -> None:
+    """프로그램을 켤 때: 듣기를 멈춰 두고 관리 화면 첫 화면에서 무엇으로 들을지 고르게 한다."""
+    last = qconfig.get(conn, "live.channel")
+    db.set_setting(conn, "live.ask", "1")
+    if was_listening:
+        db.set_setting(conn, "live.active", "0")   # 고를 때까지 듣지도 보내지도 않는다 (채팅 앱도 켜지 않음)
+    db.log(conn, "quizbot", f"프로그램 시작 — 무엇으로 들을지 묻는 중 (지난번: {last})")
+    print(f" 무엇으로 들을지 관리 화면 첫 화면에서 골라 주세요 (지난번: {last}). 고르면 바로 청취를 시작합니다.")
+
+
 def watch_runner(interval: float = WATCHDOG_SECONDS) -> None:
     """'청취 시작'이 켜져 있는데 듣기 실행기가 꺼지면 다시 띄운다 (뒤에서 계속 돎)."""
     restarts: list = []
@@ -229,8 +239,15 @@ def main() -> None:
             print("[재시작] 관리 화면이 예기치 않게 꺼져서 자동으로 다시 켰습니다. 열려 있던 화면은 그대로 쓰면 됩니다.")
             db.log(conn, "quizbot", "관리 화면이 예기치 않게 꺼져 자동으로 다시 켰습니다 (원인 기록: 데이터 폴더 logs/server.log)")
         listening = qconfig.get(conn, "live.active") == "1"
-        if ((qconfig.get(conn, "quizbot.autostart") == "1" or listening) and not db.is_stopped(conn)
-                and not qconfig.runner_alive(conn)):
+        if not args.restarted:
+            # 처음 켤 때는 지난번 채널(예: 고릴라)로 저절로 시작하지 않고 '뭐로 들으시겠어요?'를 묻는다
+            # (MBC·KBS를 들을 수도 있음). 오류로 꺼졌다가 저절로 다시 켤 때(--restarted)는 묻지 않고 하던 대로 이어 간다.
+            ask_listen(conn, listening)
+            listening = False
+        elif qconfig.get(conn, "live.ask") == "1":
+            listening = False   # 묻는 중에 다시 켜졌으면 계속 답을 기다린다
+        if ((listening or (qconfig.get(conn, "quizbot.autostart") == "1" and qconfig.get(conn, "live.ask") != "1"))
+                and not db.is_stopped(conn) and not qconfig.runner_alive(conn)):
             db.set_setting(conn, "quizbot.stop", "0")
             print(("청취를 이어서 시작합니다." if listening else "퀴즈 자동 참여도 함께 시작합니다.")
                   + f" (기록: {start_runner(conn)})")

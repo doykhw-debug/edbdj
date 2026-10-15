@@ -194,8 +194,18 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.get("/")
     def home():
         c = g.conn
+        channels = channel_meta()
+        ask = None
+        if qconfig.get(c, "live.ask") == "1" and not live.is_active(c):
+            # '뭐로 들으시겠어요?' — 채팅 앱(방송국)별로 채널 단추를 묶는다
+            groups: dict[str, list] = {}
+            for ch in channels:
+                groups.setdefault(ch["app"] or "", []).append(ch)
+            ask = {"last": qconfig.get(c, "live.channel"), "groups": [
+                {"app": a, "label": (f"{qconfig.CHAT_APPS[a]['station']} {qconfig.app_label(a)}" if a else "문자로만 보내는 채널"),
+                 "channels": groups[a]} for a in [*qconfig.CHAT_APPS, ""] if a in groups]}
         return render_template(
-            "home.html", vm=home_vm(), setup=setup_items(), channels=channel_meta(),
+            "home.html", vm=home_vm(), setup=setup_items(), channels=channels, ask=ask,
             route=qconfig.route(c), options={name: live.flag(c, key) for key, name in LIVE_OPTIONS})
 
     @app.get("/live.json")
@@ -226,8 +236,10 @@ def create_app(data_dir: str | None = None) -> Flask:
         if channel not in channel_list():
             abort(400)
         db.set_setting(c, "live.channel", channel)
-        for key, name in LIVE_OPTIONS:
-            db.set_setting(c, key, "1" if request.form.get(name) else "0")
+        db.set_setting(c, "live.ask", "0")
+        if not form("keep_options"):   # '뭐로 들으시겠어요?'에서 고르면 선택 항목은 지난번 그대로
+            for key, name in LIVE_OPTIONS:
+                db.set_setting(c, key, "1" if request.form.get(name) else "0")
         route = form("route") or qconfig.route(c)
         if route not in qconfig.ROUTES:
             abort(400)
@@ -251,6 +263,18 @@ def create_app(data_dir: str | None = None) -> Flask:
         else:
             db.log(c, "quizbot", f"청취 시작 요청 — {channel}")
             flash(f"{channel} 청취를 시작합니다. 처음 한 번은 음성 인식 모델을 내려받느라 몇 분 걸릴 수 있습니다.")
+        return redirect(url_for("home"))
+
+    @app.post("/listen/skip")
+    def listen_skip():
+        """'뭐로 들으시겠어요?' → 지금은 듣지 않음."""
+        db.set_setting(g.conn, "live.ask", "0")
+        db.log(g.conn, "quizbot", "프로그램 시작 — 지금은 듣지 않음 (사용자)")
+        if qconfig.get(g.conn, "quizbot.autostart") == "1" and not db.is_stopped(g.conn) and \
+                not qconfig.runner_alive(g.conn):
+            db.set_setting(g.conn, "quizbot.stop", "0")
+            start_runner(g.conn)   # 예약(정해 둔 프로그램)으로 퀴즈 자동 참여는 예전처럼
+        flash("지금은 듣지 않습니다. 들을 때 아래에서 채널을 고르고 '청취 시작'을 누르세요.")
         return redirect(url_for("home"))
 
     @app.post("/listen/channels")
