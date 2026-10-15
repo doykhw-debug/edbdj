@@ -27,10 +27,12 @@ RECRUITING = {"unknown": "미확인", "open": "모집 중", "closed": "모집 �
 AI_POLICY = {"unknown": "미확인", "allowed": "제한 없음 확인", "restricted": "제한 있음"}
 DRAFT_STATUS = {"draft": "작성 중", "approved": "승인됨", "archived": "보관"}
 SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "manual": "직접 작성"}
-STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀"}
+STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀",
+                "approved": "승인한 내 사연 그대로"}
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
                 ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"),
-                ("live.board_auto", "board_auto"))
+                ("live.board_auto", "board_auto"), ("live.story_approved", "story_approved"),
+                ("live.song_free", "song_free"))
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
@@ -459,6 +461,27 @@ def create_app(data_dir: str | None = None) -> Flask:
             ev["log"] = log_tail(db.get_setting(g.conn, enrich.LOG_KEY) or "", 1500)
         return render_template("experiences.html", rows=rows, only=only, pending_events=pending_events,
                                pending_library=pending_library, enrich_left=ev["left"], enrich_status=ev)
+
+    @app.get("/experiences/export")
+    def experiences_export():
+        """정리된 사연 목록 파일 받기: 읽기용(.txt) / 다시 가져오기용(.jsonl). all=1 이면 확인 전 것도."""
+        from urllib.parse import quote
+
+        from flask import Response
+
+        from . import people as people_mod
+
+        rows = people_mod.export_rows(g.conn, include_unconfirmed=request.args.get("all") == "1")
+        stamp = datetime.now().strftime("%Y%m%d")
+        if request.args.get("fmt") == "jsonl":
+            data, ext, mime = people_mod.export_jsonl(rows), "jsonl", "application/x-ndjson; charset=utf-8"
+        else:   # 메모장에서 한글이 깨지지 않게 BOM 을 붙인다
+            data, ext, mime = "\ufeff" + people_mod.export_text(rows, datetime.now().strftime("%Y-%m-%d")), "txt", \
+                "text/plain; charset=utf-8"
+        name = f"사연목록_{stamp}.{ext}"
+        db.log(g.conn, "people", f"사연 목록 내보내기: {len(rows)}편 ({ext})")
+        return Response(data.encode("utf-8"), mimetype=mime, headers={
+            "Content-Disposition": f"attachment; filename=radio_stories_{stamp}.{ext}; filename*=UTF-8''{quote(name)}"})
 
     REVIEW_PAGE = 10
 

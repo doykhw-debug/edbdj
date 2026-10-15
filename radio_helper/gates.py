@@ -18,6 +18,7 @@ MODE_POST = "post"        # 방송에서 게시판에 남겨 달라고 한 사�
                           # 로그인·CAPTCHA 는 여전히 사용자가 처리한다 (우회하지 않음).
 
 ACTIVE_POST_STATUSES = ("filled", "posted", "unknown")
+AUTO_WARN_PREFIX = "자동 등록은 검사 경고가 없는 원고만: "
 
 
 @dataclass
@@ -181,7 +182,7 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
                                    "같은 방송국에는 다시 보내지 않습니다.")
     result.blockers += [f.message for f in findings if f.level == checks.BLOCK]
     if auto:   # 사람이 보지 않고 올리므로 '지어냈을 수 있음' 경고도 막는다
-        result.blockers += [f"자동 등록은 검사 경고가 없는 원고만: {f.message}" for f in findings if f.level == checks.WARN]
+        result.blockers += [AUTO_WARN_PREFIX + f.message for f in findings if f.level == checks.WARN]
     else:
         result.warnings += [f.message for f in findings if f.level == checks.WARN]
     return result

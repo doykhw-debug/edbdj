@@ -454,6 +454,64 @@ def import_library(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int
     return added, updated
 
 
+# ── 사연 목록 내보내기 ────────────────────────────────────────────────
+def export_rows(conn: sqlite3.Connection, include_unconfirmed: bool = False) -> list[dict]:
+    """정리된 사연 목록 (실제 경험). 인물은 호칭으로만 적는다 (실명 대신). 보관함에서 온 것은 그 번호를 쓴다."""
+    from .quizbot import story as story_mod
+
+    sent = story_mod.sent_broadcasters(conn)
+    rows = conn.execute(
+        """SELECT e.*, p.alias AS about_alias, p.side AS about_side, l.code AS lib_code, l.category AS lib_category,
+                  l.theme AS lib_theme FROM experiences e LEFT JOIN people p ON p.id = e.about_person_id
+           LEFT JOIN story_library l ON l.id = e.from_library_id"""
+        + ("" if include_unconfirmed else " WHERE e.user_confirmed = 1") + " ORDER BY COALESCE(l.code, ''), e.id").fetchall()
+    out = []
+    for e in rows:
+        about = e["about_alias"] if e["about_alias"] and e["about_side"] != "self" else None
+        out.append({
+            "id": e["lib_code"] or f"E{e['id']:04d}", "character": about or "나", "title": e["label"] or "",
+            "intro": intro_for(about), "event_date": e["when_text"] or "", "event_summary": e["highlight"] or "",
+            "broadcast_timing": "", "song": e["song"] or "", "closing": e["ending"] or "", "body": e["story"] or "",
+            "category": e["lib_category"] or "", "theme": e["lib_theme"] or "", "gorilla_line": e["gorilla_line"] or "",
+            "kind": "real" if e["user_confirmed"] else "", "confirmed": bool(e["user_confirmed"]),
+            "sent_to": sorted(sent.get(e["id"], set())),
+        })
+    return out
+
+
+def export_jsonl(rows: list[dict]) -> str:
+    """다시 가져오기용 (사연 로그 .jsonl 형식, 확인한 것은 kind=real)."""
+    return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+
+
+def export_text(rows: list[dict], today: str) -> str:
+    """읽기용: 인물별로 묶은 사연 목록."""
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r["character"], []).append(r)
+    order = sorted(groups, key=lambda k: (k != "나", -len(groups[k]), k))
+    confirmed = sum(1 for r in rows if r["confirmed"])
+    lines = [f"라디오 사연 목록 — {today} 기준",
+             f"실제로 있었던 일로 확인한 사연 {confirmed}편" + (f" · 확인 전 {len(rows) - confirmed}편" if len(rows) > confirmed else ""),
+             "인물은 사연에 쓰는 호칭으로 적었습니다.", ""]
+    for who in order:
+        lines += ["", f"■ {'내 이야기' if who == '나' else who} ({len(groups[who])}편)", ""]
+        for r in groups[who]:
+            head = f"[{r['id']}] {r['title'] or '(제목 없음)'}" + (f" · {r['event_date']}" if r["event_date"] else "")
+            if not r["confirmed"]:
+                head += " · 확인 전"
+            lines.append(head)
+            if r["body"]:
+                lines.append(r["body"].strip())
+            if r["closing"]:
+                lines.append(r["closing"].strip())
+            extra = [f"신청곡: {r['song']}" if r["song"] else "", f"공감로그 한 줄: {r['gorilla_line']}" if r["gorilla_line"] else "",
+                     f"보낸 곳: {', '.join(r['sent_to'])}" if r["sent_to"] else ""]
+            lines += [x for x in extra if x]
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def detect(text: str) -> str | None:
     """가져오기 파일 종류: people(인물 관계도 .md) / library(사연 로그 .jsonl) / None(기존 JSON)."""
     head = text.lstrip()[:2000]

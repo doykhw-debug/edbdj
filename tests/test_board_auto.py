@@ -139,16 +139,31 @@ def test_board_story_auto_approved_and_posted(client, conn):
     assert "게시판 (자동 등록 중)" in sent and "게시판 등록 중·결과 불명" in sent
 
 
-def test_board_story_with_warning_is_held(conn):
+def test_board_story_with_warning_is_held_when_approved_auto_off(conn):
     eid = make_experience(conn, story="첫 출근 날 실수로 사장님 커피를 마셨다", highlight="", ending="", quotes="",
                           quote_kind="none")
     launched: list = []
     run_board(conn, story_for(eid, board_only=True, board_title=TITLE,
-                              board_body="첫 출근 날 커피를 3잔이나 마셨습니다."), launched)   # 재료에 없는 숫자
+                              board_body="첫 출근 날 커피를 3잔이나 마셨습니다."), launched,   # 재료에 없는 숫자
+              story_approved="0")
     post = conn.execute("SELECT * FROM story_posts").fetchone()
     assert launched == [] and post["status"] == "pending"
     assert post["decision"].startswith("게시판 자동 등록 보류") and "원고 검토함" in post["decision"]
     assert conn.execute("SELECT status FROM drafts").fetchone()[0] == "draft"
+
+
+def test_board_story_with_warning_posts_approved_text(conn):
+    """승인한(확인·고친) 경험이면 다시 확인받지 않는다: AI 원고에 경고가 나면 승인한 글 그대로 원고를 바꿔 등록한다."""
+    eid = make_experience(conn, label="첫 출근 날 커피", story="첫 출근 날 실수로 사장님 커피를 마셨다.",
+                          highlight="", ending="그 뒤로 컵에 이름을 붙인다.", quotes="", quote_kind="none")
+    launched: list = []
+    run_board(conn, story_for(eid, board_only=True, board_title="커피 3잔의 비밀",
+                              board_body="첫 출근 날 커피를 3잔이나 마셨습니다."), launched)
+    post = conn.execute("SELECT * FROM story_posts").fetchone()
+    draft = conn.execute("SELECT * FROM drafts").fetchone()
+    assert launched == [draft["id"]] and post["status"] == "unknown" and post["source"] == "approved"
+    assert (draft["title"], draft["body"]) == ("첫 출근 날 커피", "첫 출근 날 실수로 사장님 커피를 마셨다.\n\n그 뒤로 컵에 이름을 붙인다.")
+    assert "3잔" not in draft["body"]
 
 
 def test_board_auto_off_keeps_manual_review(conn):

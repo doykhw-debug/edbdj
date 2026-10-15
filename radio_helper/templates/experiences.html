@@ -4,7 +4,11 @@
 <h1>실제 경험 저장소</h1>
 <p class="muted">제목과 완성된 글은 쓰지 않아도 됩니다. 실제 있었던 일을 편하게 적으면 됩니다. 처음에는 서로 다른 경험 3건이면 충분합니다.</p>
 <div class="actions" style="margin-bottom:12px"><a class="btn" href="{{ url_for('experience_edit') }}">+ 경험 추가</a>
-  <a class="btn secondary" href="{{ url_for('import_page') }}">가져오기 (파일)</a></div>
+  <a class="btn secondary" href="{{ url_for('import_page') }}">가져오기 (파일)</a>
+  <span class="muted" style="margin-left:8px">정리된 사연 목록 파일로 받기:</span>
+  <a class="btn secondary" href="{{ url_for('experiences_export') }}">읽기용 (.txt)</a>
+  <a class="btn secondary" href="{{ url_for('experiences_export', fmt='jsonl') }}">다시 가져오기용 (.jsonl)</a>
+  <a class="muted" href="{{ url_for('experiences_export', all=1) }}">확인 전 것도 함께</a></div>
 {% set es = enrich_status %}
 {% if enrich_left or es.state in ('running', 'stalled') %}
 <form method="post" action="{{ url_for('experiences_enrich') }}" class="panel" style="margin-top:0">

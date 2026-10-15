@@ -179,11 +179,22 @@ def test_song_only_from_experience(conn):
     assert sender.sent == ["첫 출근 날 실수로 사장님 커피를 마셨어요 (신청곡: 아이유 - 좋은 날)"]
 
 
-def test_invented_song_is_dropped(conn):
+def test_song_not_in_experience_is_dropped_when_song_free_off(conn):
     eid = make_experience(conn, story="첫 출근 날 실수로 사장님 커피를 마셨다", highlight="", ending="", quotes="",
                           quote_kind="none")
-    sender = run_story(conn, story_for(eid, gorilla_accepted="yes", song="지어낸 노래"))
+    db.set_setting(conn, "live.song_free", "0")
+    sender = run_story(conn, story_for(eid, gorilla_accepted="yes", song="아무 노래"))
     assert sender.sent == ["첫 출근 날 실수로 사장님 커피를 마셨어요"]
+
+
+def test_song_chosen_for_the_moment_is_sent_without_approval(conn):
+    """신청곡은 경험에 적힌 곡이 아니어도 상황에 맞게 골라 승인 없이 함께 보낸다 (곡 이름의 숫자는 '재료에 없는 숫자'가 아님)."""
+    eid = make_experience(conn, story="첫 출근 날 실수로 사장님 커피를 마셨다", highlight="", ending="", quotes="",
+                          quote_kind="none")
+    sender = run_story(conn, story_for(eid, gorilla_accepted="yes", song="god - 촛불하나 (2000)"))
+    assert sender.sent == ["첫 출근 날 실수로 사장님 커피를 마셨어요 (신청곡: god - 촛불하나 (2000))"]
+    post = conn.execute("SELECT * FROM story_posts").fetchone()
+    assert post["source"] == "ai" and post["warnings"] == "[]"
 
 
 # ── 화면 ────────────────────────────────────────────────────────────

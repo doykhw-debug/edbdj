@@ -139,9 +139,10 @@ def run_all(*, title: str, body: str, song: str, exp, profile: dict, char_limit:
     findings += check_required(title, body)
     findings += check_length(body, char_limit)
     findings += check_personal_info(full, banned)
-    findings += check_sensitive_additions(full, source)
-    findings += check_numbers(full, source)
-    findings += check_quotes(full, exp["quotes"], exp["quote_kind"])
+    told = f"{title}\n{body}"   # 신청곡(곡 이름의 숫자 등)은 사건이 아니므로 '재료에 없는 내용' 검사에서 뺀다
+    findings += check_sensitive_additions(told, source)
+    findings += check_numbers(told, source)
+    findings += check_quotes(told, exp["quotes"], exp["quote_kind"])
     findings += check_similarity(body, previous_bodies)
     if (exp["prior_history"] or "").strip():
         findings.append(Finding(WARN, "prior_history",

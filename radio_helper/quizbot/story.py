@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
@@ -90,6 +91,34 @@ def candidate_experiences(conn: sqlite3.Connection, broadcaster: str | None = No
     return out
 
 
+def approved_text(conn: sqlite3.Connection, exp, limit: int, song: str = "") -> str:
+    """사용자가 '실제로 있었던 일'로 확인하고 고친 경험 글 그대로 만든 사연 (AI가 덧붙인 내용 없음).
+    공감로그용 한 줄이 있으면 그것, 없으면 본문(게시판처럼 길게 쓸 수 있으면 마무리까지)을 문장 단위로 앞에서부터
+    limit 안에 담는다. 다른 사람 이야기면 '제 ○○ 이야기인데요,'로 시작한다. 가릴 단어(실명 등)는 ○○로 바꾼다."""
+    terms = banned_terms(conn, exp)
+    tail = f" (신청곡: {song})" if song else ""
+    line = (exp["gorilla_line"] or "").strip()
+    if line and len(line) + len(tail) <= limit:
+        return generator.mask_terms(line, terms) + tail
+    about = about_of(conn, exp)
+    lead = f"{people_intro(about)}, " if about else ""
+    body = (exp["story"] or "").strip()
+    if limit > 400 and (exp["ending"] or "").strip():
+        body += "\n\n" + exp["ending"].strip()
+    body = generator.mask_terms(body, terms)
+    room = limit - len(lead) - len(tail)
+    if len(body) <= room:
+        return lead + body + tail
+    out = ""
+    for sentence in re.split(r"(?<=[.!?…])\s+", body.replace("\n", " ")):
+        if len(out) + len(sentence) + 1 > room:
+            break
+        out = f"{out} {sentence}".strip()
+    if not out:   # 첫 문장부터 길면 낱말 단위로 자른다
+        out = body[:max(room - 1, 0)].rsplit(" ", 1)[0] + "…"
+    return lead + out + tail
+
+
 def people_intro(about: str | None) -> str:
     from ..people import intro_for
 
@@ -113,10 +142,11 @@ def message_checks(conn: sqlite3.Connection, message: str, exp, source: str, add
         found.append({"level": "block", "message": f"{len(message)}자로 제한({limit}자)을 넘습니다."})
     for f in checks.check_personal_info(message, banned_terms(conn, exp)):
         found.append({"level": f.level, "message": f.message})
-    if exp is not None and source not in ("user_line", "manual"):
+    if exp is not None and source not in ("user_line", "manual", "approved"):   # 사용자가 쓰거나 확인한 글 그대로
         src = checks.experience_source_text(exp) + "\n" + (exp["gorilla_line"] or "")
-        for f in (checks.check_sensitive_additions(message, src) + checks.check_numbers(message, src)
-                  + checks.check_quotes(message, exp["quotes"], exp["quote_kind"])):
+        core = SONG_TAIL.sub("", message)   # 신청곡은 사건이 아니므로 '재료에 없는 내용' 검사에서 뺀다
+        for f in (checks.check_sensitive_additions(core, src) + checks.check_numbers(core, src)
+                  + checks.check_quotes(core, exp["quotes"], exp["quote_kind"])):
             found.append({"level": f.level, "message": f.message})
     if added_facts:
         found.append({"level": "warn", "message": "AI가 경험에 없는 내용을 넣었다고 표시함: " + " / ".join(added_facts)[:200]})
@@ -126,6 +156,9 @@ def message_checks(conn: sqlite3.Connection, message: str, exp, source: str, add
     elif not exp["user_confirmed"]:
         found.append({"level": "block", "message": "'실제로 있었던 일'로 확인되지 않은 경험입니다."})
     return found
+
+
+SONG_TAIL = re.compile(r"\s*\(신청곡:.*\)\s*$")
 
 
 def has_block(warnings: list[dict]) -> bool:
@@ -165,6 +198,8 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
         gorilla_ok = route == "sms" or post["gorilla_accepted"] == "yes" or allowed("gorilla_confirmed")
         auto_ok = gorilla_ok and (
             (post["source"] == "user_line" and allowed("story_auto_user_line"))
+            # 승인한(확인·고친) 경험 글 그대로: 덧붙인 내용이 없으니 '사연 자동 전송'이 켜져 있으면 바로 보낸다
+            or (post["source"] == "approved" and allowed("story_auto_ai") and not has_block(warnings))
             # AI 초안은 검사 경고가 하나도 없을 때만 (재료에 없는 내용·민감 소재·숫자가 있으면 확인 대기)
             or (post["source"] == "ai" and allowed("story_auto_ai") and not warnings))
         if not auto_ok:

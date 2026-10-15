@@ -216,6 +216,22 @@ def test_blocked_story_never_sends_even_if_approved(conn):
     conn.commit()
     r.process_approved(None)
     post = conn.execute("SELECT * FROM story_posts").fetchone()
+    assert all("010" not in s for s in sender.sent)                      # 막힌 AI 글(전화번호)은 절대 보내지 않음
+    assert post["source"] == "approved" and "010" not in post["message"]  # 승인한 경험 글 그대로로 바뀜
+
+
+def test_blocked_story_stays_blocked_when_approved_auto_off(conn):
+    add_schedule(conn)
+    db.set_setting(conn, "live.story_approved", "0")
+    eid = make_experience(conn)
+    sender = FakeGorilla()
+    r, clock, _ = make(conn, {3: "오늘의 주제"},
+                       FullAnswerer(stories=[story_for(eid, message="제 번호 010-1234-5678 로 연락 주세요")]), sender)
+    run_window(r, clock)
+    conn.execute("UPDATE story_posts SET approved = 1")
+    conn.commit()
+    r.process_approved(None)
+    post = conn.execute("SELECT * FROM story_posts").fetchone()
     assert sender.sent == [] and "막힌 항목" in post["decision"]
 
 

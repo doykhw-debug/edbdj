@@ -675,9 +675,9 @@ class Runner:
             exp = self.conn.execute("SELECT * FROM experiences WHERE id = ?", (res.experience_id,)).fetchone()
         target = "board" if res.board_only else "chat"
         song = (res.song or "").strip()
-        if song and exp is not None and song != (exp["song"] or "").strip() and \
-                song != (db.get_profile(self.conn).get("song") or "").strip():
-            song = ""   # 경험·내 정보에 적힌 신청곡만 쓴다
+        if song and config.get(self.conn, "live.song_free") != "1" and exp is not None and \
+                song != (exp["song"] or "").strip() and song != (db.get_profile(self.conn).get("song") or "").strip():
+            song = ""   # '신청곡 알아서 고르기'를 끄면 경험·내 정보에 적힌 신청곡만 쓴다
         message, source = (res.message or "").strip(), "ai"
         if exp is not None and res.use_user_line and (exp["gorilla_line"] or "").strip():
             message, source = exp["gorilla_line"].strip(), "user_line"
@@ -689,6 +689,13 @@ class Runner:
             message = ""
         warnings = story.message_checks(self.conn, message, exp, source, res.added_facts,
                                         limit=2000 if target == "board" else None) if exp is not None else []
+        if exp is not None and target == "chat" and source == "ai" and warnings and \
+                config.get(self.conn, "live.story_approved") == "1":
+            # 승인한(확인·고친) 경험이면 확인을 다시 받지 않는다: AI가 덧붙여 경고가 난 글 대신 승인한 글 그대로 보낸다
+            plain = story.approved_text(self.conn, exp, answerer_mod.STORY_LIMIT, song)
+            plain_warnings = story.message_checks(self.conn, plain, exp, "approved")
+            if not story.has_block(plain_warnings):
+                message, source, warnings = plain, "approved", plain_warnings
         note = res.fit_reason if exp is not None else "주제에 맞는 실제 경험이 없음 — 직접 써서 보내거나 건너뛰세요"
         draft_id = self.make_board_draft(program, exp, res.board_title, message, song,
                                          hint=f"{res.topic}\n{transcript[-1500:]}") \
@@ -727,6 +734,11 @@ class Runner:
         from .. import gates
 
         result = gates.evaluate(self.conn, draft_id, gates.MODE_POST)
+        if not result.ok and config.get(self.conn, "live.story_approved") == "1" and \
+                all(b.startswith(gates.AUTO_WARN_PREFIX) for b in result.blockers):
+            # 검사 경고만 걸림 → AI 원고 대신 승인한(확인·고친) 경험 글 그대로 원고를 바꿔 다시 본다
+            if self.use_approved_draft(draft_id):
+                result = gates.evaluate(self.conn, draft_id, gates.MODE_POST)
         if not result.ok:
             reasons = " / ".join(result.blockers)
             self._hold("story_posts", pid, f"게시판 자동 등록 보류: {reasons[:400]} — 원고 검토함 #{draft_id}에서 고쳐 직접 입력할 수 있음")
@@ -745,6 +757,25 @@ class Runner:
         self.conn.commit()
         log_name = self.deps.launch_board(draft_id)
         db.log(self.conn, "quizbot", f"사연 #{pid} 게시판 자동 등록 시작 — 원고 #{draft_id} 자동 승인 (기록: {log_name})")
+        return True
+
+    def use_approved_draft(self, draft_id: int) -> bool:
+        """게시판 원고를 승인한 경험 글 그대로(제목은 경험 이름)로 바꾼다. 바꿨으면 True."""
+        d = self.conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()
+        exp = self.conn.execute("SELECT * FROM experiences WHERE id = ? AND user_confirmed = 1",
+                                (d["experience_id"],)).fetchone() if d else None
+        if exp is None:
+            return False
+        corner = self.conn.execute("SELECT char_limit FROM corners WHERE id = ?", (d["corner_id"],)).fetchone()
+        limit = (corner["char_limit"] if corner and corner["char_limit"] else None) or 2000
+        body = story.approved_text(self.conn, exp, limit)
+        title = (exp["label"] or "").strip()[:60] or d["title"]
+        self.conn.execute("UPDATE drafts SET title = ?, body = ?, source = 'manual', updated_at = ? WHERE id = ?",
+                          (title, body, db.now(), draft_id))
+        self.conn.execute("UPDATE story_posts SET message = ?, source = 'approved', updated_at = ? WHERE draft_id = ?",
+                          (body, db.now(), draft_id))
+        self.conn.commit()
+        db.log(self.conn, "quizbot", f"원고 #{draft_id}: AI 원고에 검사 경고가 있어 승인한 경험 #{exp['id']} 글 그대로 바꿈")
         return True
 
     def make_board_draft(self, program: str, exp, title: str, body: str, song: str, hint: str = "") -> int | None:

@@ -156,3 +156,56 @@ def test_person_only_file(client, conn):
     token = csrf(client, "/import")
     r = client.post("/import", data={"csrf_token": token, "text": only})
     assert r.headers["Location"].endswith("/people") and person(conn, "다라") is not None
+
+
+# ── 승인한 글 그대로 · 사연 목록 내보내기 ─────────────────────────────
+def test_approved_text_uses_my_words_within_limit(conn):
+    from radio_helper.quizbot import story as story_mod
+
+    load(conn)
+    wife = person(conn, "와이프")["id"]
+    long_story = "첫 문장입니다. 두 번째 문장도 있어요. " + "아주 긴 세 번째 문장 " * 20 + "끝."
+    eid = conn.execute("INSERT INTO experiences (label, story, ending, about_person_id, user_confirmed, created_at, updated_at) "
+                       "VALUES ('짧은 이름', ?, '마무리입니다.', ?, 1, ?, ?)",
+                       (long_story, wife, db.now(), db.now())).lastrowid
+    exp = conn.execute("SELECT * FROM experiences WHERE id = ?", (eid,)).fetchone()
+    chat = story_mod.approved_text(conn, exp, 80, song="가수 - 노래")
+    assert chat == "제 와이프 이야기인데요, 첫 문장입니다. 두 번째 문장도 있어요. (신청곡: 가수 - 노래)" and len(chat) <= 80
+    board = story_mod.approved_text(conn, exp, 2000)
+    assert board.startswith("제 와이프 이야기인데요, 첫 문장입니다.") and board.endswith("마무리입니다.")   # 게시판은 마무리까지
+    conn.execute("UPDATE experiences SET gorilla_line = '내가 직접 쓴 한 줄' WHERE id = ?", (eid,))
+    exp = conn.execute("SELECT * FROM experiences WHERE id = ?", (eid,)).fetchone()
+    assert story_mod.approved_text(conn, exp, 200) == "내가 직접 쓴 한 줄"
+    conn.execute("UPDATE experiences SET gorilla_line = '', story = '홍길동 과장님과 회식했다.' WHERE id = ?", (eid,))
+    exp = conn.execute("SELECT * FROM experiences WHERE id = ?", (eid,)).fetchone()
+    assert "홍길동" not in story_mod.approved_text(conn, exp, 200)                 # 실명은 ○○로 가림
+
+
+def test_export_story_list(client, conn):
+    load(conn)
+    people.import_person_records(conn, people.parse_person_records(collection()))
+    people.import_library(conn, people.parse_story_log(collection()))
+    token = csrf(client, "/library")
+    client.post("/library/to-experiences", data={"csrf_token": token})
+    rows = conn.execute("SELECT e.id, l.code FROM experiences e JOIN story_library l ON l.id = e.from_library_id "
+                        "WHERE l.code LIKE 'Y%' ORDER BY l.code").fetchall()
+    for r in rows[1:]:                                                            # Y001 만 확인 전으로 남김
+        conn.execute("UPDATE experiences SET user_confirmed = 1, story = story || ' (내가 고침)' WHERE id = ?", (r["id"],))
+    conn.commit()
+    assert "읽기용 (.txt)" in client.get("/experiences").get_data(as_text=True)
+
+    r = client.get("/experiences/export")
+    assert r.status_code == 200 and "attachment" in r.headers["Content-Disposition"]
+    text = r.get_data().decode("utf-8-sig")
+    assert "확인한 사연 3편" in text and "■ 와이프 (1편)" in text and "■ 내 이야기 (1편)" in text
+    assert "■ 간호사 친구 (1편)" in text                                        # 실명(다라) 대신 호칭
+    assert "[Y003] 시댁 이야기" in text and "(내가 고침)" in text and "창구 이야기" not in text   # 확인 전은 빼고
+    assert "김철수" not in text and "다라" not in text
+    assert "창구 이야기" in client.get("/experiences/export?all=1").get_data().decode("utf-8-sig")
+
+    data = client.get("/experiences/export?fmt=jsonl").get_data(as_text=True)
+    lines = [json.loads(x) for x in data.splitlines()]
+    assert [x["id"] for x in lines] == ["Y002", "Y003", "Y004"] and all(x["kind"] == "real" for x in lines)
+    # 다시 가져오면 보관함에 '실제' 사연으로 (다른 PC·백업 복원용)
+    back = people.parse_story_log(data)
+    assert {x["kind"] for x in back} == {"real"} and back[1]["person_label"] == "와이프"

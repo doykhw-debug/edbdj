@@ -243,16 +243,31 @@ def test_live_story_auto_ai_only_when_clean(conn):
     assert post["status"] == "entered" and post["program"] == "러브FM 방송"
 
 
-def test_live_story_with_warnings_waits(conn):
+def test_live_story_with_warnings_waits_when_approved_auto_off(conn):
     eid = make_experience(conn, story="첫 출근 날 실수로 사장님 커피를 마셨다", highlight="", ending="", quotes="",
                           quote_kind="none")
-    start_live(conn, auto_story="1")
+    start_live(conn, auto_story="1", story_approved="0")
     sender = FakeGorilla()
     r, _ = live_runner(conn, {3: "오늘의 주제는 첫 출근 날입니다 사연 보내주세요"},
                        FullAnswerer(stories=[story_for(eid, added_facts=["사장님이 웃으셨다"])]), sender, n=8)
     r.run_live()
     post = conn.execute("SELECT * FROM story_posts").fetchone()
     assert sender.sent == [] and post["status"] == "pending" and "확인 후 전송" in post["decision"]
+
+
+def test_live_story_with_warnings_sends_approved_text(conn):
+    """승인한(확인·고친) 경험은 다시 확인받지 않는다: AI가 덧붙인 글 대신 승인한 글 그대로 바로 보낸다."""
+    eid = make_experience(conn, story="첫 출근 날 실수로 사장님 커피를 마셨다.", highlight="", ending="", quotes="",
+                          quote_kind="none")
+    start_live(conn, auto_story="1")
+    sender = FakeGorilla()
+    r, _ = live_runner(conn, {3: "오늘의 주제는 첫 출근 날입니다 사연 보내주세요"},
+                       FullAnswerer(stories=[story_for(eid, message="첫 출근 날 사장님 커피를 마셨는데 사장님이 웃으셨어요",
+                                                       added_facts=["사장님이 웃으셨다"])]), sender, n=8)
+    r.run_live()
+    post = conn.execute("SELECT * FROM story_posts").fetchone()
+    assert sender.sent == ["첫 출근 날 실수로 사장님 커피를 마셨다."]          # AI가 덧붙인 '웃으셨다'는 보내지 않음
+    assert post["source"] == "approved" and post["status"] != "pending"
 
 
 def test_run_forever_switches_to_live(conn):
