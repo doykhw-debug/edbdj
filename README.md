@@ -48,7 +48,7 @@
      관리 화면 패키지가 없으면 끝없이 다시 켜지 않고 안내하고 멈춥니다.
 2. 이 폴더의 **`start_windows.bat`** 을 더블클릭합니다.
    - 처음 한 번은 필요한 패키지(음성 인식 포함)를 설치하느라 몇 분 걸립니다.
-   - 브라우저에 관리 화면(`http://127.0.0.1:5000`)이 열립니다. 이 PC에서만 접속됩니다.
+   - 브라우저에 관리 화면(`http://127.0.0.1:5000`)이 열립니다. 이 PC에서만 접속됩니다 (밖에서는 https://radio.haetsallab.com).
 3. 끝낼 때는 검은 창에서 `Ctrl + C` 를 누르거나 창을 닫습니다.
 4. **업데이트**: 새 압축 파일은 기존 폴더에 덮어써도, 새 폴더에 풀어도 됩니다. 경험·사연·설정은 프로그램 폴더 밖
    (`C:\Users\<이름>\AppData\Local\RadioHelper`)에 저장되어 그대로 남습니다. 예전 버전 폴더(`data/`)에 있던 데이터는
@@ -360,6 +360,36 @@ macOS·Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.tx
 - **되돌리기**: 새 버전이 켜지자마자 3번 연속 꺼지면 `start_windows.bat` 이 `rollback_update.py` 로 예전 파일을 되돌리고,
   그 버전은 다시 받지 않습니다. 새 버전이 2분 넘게 잘 돌면 '확인됨'으로 표시되어 그 뒤에는 되돌리지 않습니다.
 - 자동으로 다시 켜지는 것은 `start_windows.bat` 으로 켰을 때만입니다. 0.36 은 이 기능이 처음 들어간 버전이라 한 번은 직접 덮어써야 합니다.
+
+## 서버 운영 — Oracle 서버(ssh haetsal, 우분투 24.04 ARM) · https://radio.haetsallab.com
+
+관리 화면(사연·인물·원고·퀴즈 기록·증거 사진)을 서버에서 24시간 엽니다. **청취·퀴즈 자동 참여·고릴라·PC 소리·문자는
+윈도우 PC 전용**이라 서버에서는 하지 않습니다 (서버 화면에서 누르면 안내만 나옴). 게시판 자동 등록도 PC 청취 중에 일어납니다.
+
+| | PC (윈도우) | 서버 (`RADIO_HELPER_SERVER=1`) |
+|---|---|---|
+| 주소·포트 | `http://127.0.0.1:5000` (환경 변수 `PORT`) | `127.0.0.1:5002` (`PORT`) → Cloudflare 터널 → `https://radio.haetsallab.com` |
+| 실행 | `start_windows.bat` (개발용 서버 + 자동 재시작) | systemd `radio.service` (waitress, `Restart=always`, 부팅 시 자동) |
+| 로그인 | PC 앞은 없음, 밖에서만 | **모든 요청** (같은 서버의 다른 프로그램도 127.0.0.1 로 오므로) |
+| 비밀번호 | 설정 → 원격 접속 | 서버에서 `.venv/bin/python -m radio_helper.remote set-password` |
+| 비밀값 | 윈도우 자격 증명 관리자 (또는 `.env`) | `/opt/radio/.env` (권한 600, `.env.example` 참고) |
+| 데이터 | `%LOCALAPPDATA%\RadioHelper` | `/opt/radio/data` (git 에 안 올라감) |
+| 업데이트 | 자동 업데이트 (공개 저장소) | `ssh haetsal 'bash /opt/radio/deploy.sh'` |
+
+- **처음 배포 (PC 에서 한 번)**: 프로그램 폴더의 `deploy_to_server.bat` 더블클릭.
+  1. `ssh haetsal` 연결 확인 → 2. PC 데이터 전체 백업(`%USERPROFILE%\RadioHelper_backups`) + 서버로 옮길 묶음
+     (DB·증거 사진만 — 브라우저 로그인 쿠키·세션 키는 빼고) → 3. `.env.server`(API 키는 이 PC 에 저장된 키로 채움, 화면에 안 나옴)·묶음을
+     `scp` 로 보냄 → 4. 서버 설치 `deploy/server_setup.sh`: apt 패키지, GitHub 비공개 저장소용 **읽기 전용 배포 키**
+     (처음엔 브라우저가 열리면 키를 붙여 넣기), `/opt/radio` 에 clone, `.venv` + `requirements-server.txt`, 헤드리스 Chromium,
+     데이터 풀기, `radio.service` 등록·시작, `curl -I http://127.0.0.1:5002` 확인 → 5. 로그인 비밀번호 → 6. 밖에서 열리는지 확인.
+- **방화벽은 열지 않습니다.** 관리 화면은 127.0.0.1 에만 열리고 밖에서는 Cloudflare 터널로만 들어옵니다.
+  Cloudflare Zero Trust → Tunnels → **서버의 터널** → Public Hostname `radio.haetsallab.com` → `HTTP` · `127.0.0.1:5002`
+  (예전에 PC 터널에 같은 주소를 넣었다면 그쪽에서는 지웁니다 — 한 주소는 한 터널로만 갑니다).
+- **업데이트**: `ssh haetsal 'bash /opt/radio/deploy.sh'` → 데이터 백업(`/opt/radio/backups`, 최근 14개) → `git pull`(main) →
+  의존성 설치 → `systemctl restart radio` → `/health` 확인 (실패하면 되돌리는 명령을 보여 줌).
+- 브라우저 자동화(방송 시간표 읽기 등)는 서버에서 창 없이(헤드리스) 돕니다. SBS 로그인이 필요한 일(게시판 등록·점검·직접 입력)은
+  로그인 창을 띄울 수 없어 PC 에서 합니다.
+- 서버와 PC 의 데이터는 처음 옮긴 뒤로 **각자 따로** 쌓입니다 (PC 청취는 PC 데이터를 씀).
 
 ## 데이터
 

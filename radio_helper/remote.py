@@ -5,10 +5,14 @@
 - 비밀번호는 PC 앞에서만 정하고 바꾼다. 원본은 어디에도 저장하지 않고 PBKDF2 해시만 데이터 폴더 DB에 둔다.
 - 5번 틀리면 15분 동안 잠근다. 비밀번호를 바꾸면 원격으로 로그인해 둔 화면은 모두 로그아웃된다.
 - 터널 토큰(Cloudflare 가 주는 긴 문자열)은 이 프로그램이 받지도 저장하지도 않는다 (cloudflared 서비스가 가짐).
+- 서버 모드(server.py)에서는 모든 요청에 로그인을 받고, 비밀번호는 서버 터미널에서 정한다:
+  .venv/bin/python -m radio_helper.remote set-password   (끄기: off, 상태: status)
 """
 
 from __future__ import annotations
 
+import argparse
+import getpass
 import hashlib
 import hmac
 import json
@@ -20,11 +24,11 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
 
-from . import db
+from . import db, server
 
 DEFAULT_DOMAIN = "radio.haetsallab.com"
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}
-TUNNEL_PORT = 5000            # Cloudflare 터널이 가리키는 관리 화면 번호 (http://localhost:5000)
+TUNNEL_PORT = 5000            # PC: Cloudflare 터널이 가리키는 관리 화면 번호 (서버는 PORT, 기본 5002)
 MIN_PASSWORD = 8
 MAX_FAILS = 5
 LOCK_MINUTES = 15
@@ -130,7 +134,7 @@ def cloudflared_running() -> bool | None:
     return "cloudflared.exe" in out.lower()
 
 
-def probe(host: str, opener=None, timeout: float = 10) -> tuple[str, str]:
+def probe(host: str, opener=None, timeout: float = 10, port: int = TUNNEL_PORT) -> tuple[str, str]:
     """밖에서 그 주소로 이 도우미까지 오는지: (ok/access/tunnel_down/dns/error, 설명)."""
     opener = opener or urllib.request.build_opener()
     url = f"https://{host}/health"
@@ -155,4 +159,37 @@ def probe(host: str, opener=None, timeout: float = 10) -> tuple[str, str]:
             return "ok", "연결됨 — 밖에서 이 주소로 관리 화면이 열립니다."
     except (ValueError, UnicodeDecodeError, AttributeError):
         pass
-    return "error", "응답은 왔지만 이 도우미가 아닙니다. 터널이 http://localhost:5000 을 가리키는지 확인하세요."
+    return "error", f"응답은 왔지만 이 도우미가 아닙니다. 터널이 http://localhost:{port} 을 가리키는지 확인하세요."
+
+
+# ── 서버 터미널에서 비밀번호 정하기 ─────────────────────────────────────
+def cli(argv=None, ask=getpass.getpass, say=print) -> int:
+    """python -m radio_helper.remote set-password | off | status — 서버(또는 PC) 터미널에서. 비밀번호는 화면에 안 보임."""
+    ap = argparse.ArgumentParser(prog="python -m radio_helper.remote", description="원격 접속 비밀번호")
+    ap.add_argument("action", choices=["set-password", "off", "status"])
+    args = ap.parse_args(argv)
+    server.load_env()   # 서비스와 같은 데이터 폴더(RADIO_HELPER_DATA_DIR)를 쓰도록
+    conn = db.connect()
+    try:
+        db.init_db(conn)
+        if args.action == "status":
+            say(f"데이터 폴더: {db.data_dir()}")
+            say("원격 로그인: " + ("켜짐 (비밀번호 있음)" if enabled(conn) else "꺼짐 (비밀번호 없음)"))
+            say(f"REMOTE_LOGIN={'on' if enabled(conn) else 'off'}")   # 배포 스크립트가 읽는 표시
+            return 0
+        if args.action == "off":
+            turn_off(conn)
+            say("원격 로그인을 껐습니다. 밖에서 열면 '원격 접속 꺼짐'만 보입니다.")
+            return 0
+        error = set_password(conn, ask(f"새 비밀번호 ({MIN_PASSWORD}자 이상): "), ask("한 번 더: "))
+        if error:
+            say(error)
+            return 1
+        say(f"비밀번호를 정했습니다. https://{domain(conn)} 에서 이 비밀번호로 로그인하세요.")
+        return 0
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    sys.exit(cli())

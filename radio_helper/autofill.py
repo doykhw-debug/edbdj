@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import db, gates
+from . import db, gates, server
 
 ALLOWED_HOSTS = {"programs.sbs.co.kr", "m.programs.sbs.co.kr"}
 MOCK_SELECTORS = {
@@ -79,7 +79,15 @@ def input_lock(name: str = "input.lock", wait_s: float = 0):
 
 
 # ── 브라우저 ────────────────────────────────────────────────────────
+def no_window() -> bool:
+    """창을 띄울 수 없는 곳: 서버 모드, RADIO_HELPER_HEADLESS=1, 화면(DISPLAY)이 없는 리눅스."""
+    if os.environ.get("RADIO_HELPER_HEADLESS") == "1" or server.is_server():
+        return True
+    return sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
 def launch_browser(p, headless: bool):
+    headless = headless or no_window()
     exe = os.environ.get("RADIO_HELPER_CHROMIUM")
     channel = os.environ.get("RADIO_HELPER_BROWSER_CHANNEL")
     if channel is None and sys.platform.startswith("win"):
@@ -308,6 +316,7 @@ def profile_dir() -> Path:
 
 def launch_profile(p, headless: bool):
     """도우미 전용 브라우저 프로필로 연다 (한 번 로그인하면 남아 다음부터는 창 없이 등록)."""
+    headless = headless or no_window()
     exe = os.environ.get("RADIO_HELPER_CHROMIUM")
     channel = os.environ.get("RADIO_HELPER_BROWSER_CHANNEL")
     if channel is None and sys.platform.startswith("win"):
@@ -388,7 +397,8 @@ def run_post(conn, draft, corner, allow_window: bool = True) -> int:
         if not wait_for(page, ready(page), READY_WAIT_SECONDS) or captcha_on(page):
             ctx.close()
             if not allow_window:
-                raise AutofillError("SBS 로그인(또는 보안 문자)이 필요해 창을 띄워야 합니다.")
+                raise AutofillError("SBS 로그인(또는 보안 문자)이 필요해 창을 띄워야 합니다."
+                                    + (" 서버에서는 창을 띄울 수 없어 PC 프로그램에서 등록해야 합니다." if no_window() else ""))
             ctx, page = launch_profile(p, headless=False)
             shown = True
             page.goto(write_url)
@@ -552,20 +562,20 @@ def main(argv: list[str] | None = None) -> int:
             draft = conn.execute("SELECT * FROM drafts WHERE id = ?", (args.draft,)).fetchone()
             corner = conn.execute("SELECT * FROM corners WHERE id = ?", (draft["corner_id"],)).fetchone()
             with input_lock("board_post.lock", wait_s=POST_LOCK_WAIT_SECONDS):
-                run_post(conn, draft, corner, allow_window=os.environ.get("RADIO_HELPER_HEADLESS") != "1")
+                run_post(conn, draft, corner, allow_window=not no_window())
             return 0
         with input_lock():
             if args.mode == gates.MODE_INSPECT:
                 corner = conn.execute("SELECT * FROM corners WHERE id = ?", (args.corner,)).fetchone()
-                run_inspect(conn, corner, args.headless)
+                run_inspect(conn, corner, args.headless or no_window())
             else:
                 draft = conn.execute("SELECT * FROM drafts WHERE id = ?", (args.draft,)).fetchone()
                 corner = conn.execute("SELECT * FROM corners WHERE id = ?", (draft["corner_id"],)).fetchone()
                 if args.mode == gates.MODE_MOCK:
-                    headless = args.headless or os.environ.get("RADIO_HELPER_HEADLESS") == "1"
+                    headless = args.headless or no_window()
                     run_mock(conn, draft, corner, args.base_url, headless)
                 else:
-                    run_fill(conn, draft, corner, args.headless)
+                    run_fill(conn, draft, corner, args.headless or no_window())
         return 0
     except AutofillError as e:
         say(f"[중단] {e}")

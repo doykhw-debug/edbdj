@@ -10,8 +10,10 @@
 <body>
 <main style="max-width:520px">
   <h1>원격 접속이 꺼져 있습니다</h1>
-  <div class="panel"><p>밖에서 이 주소로 열려면 PC 앞에서 관리 화면 <b>설정 → 원격 접속·업데이트</b>에서
-    원격 접속 비밀번호를 먼저 정하세요.</p></div>
+  <div class="panel">{% if SERVER_MODE %}<p>서버에서 로그인 비밀번호를 먼저 정하세요:<br>
+    <code>cd /opt/radio && .venv/bin/python -m radio_helper.remote set-password</code></p>
+    {% else %}<p>밖에서 이 주소로 열려면 PC 앞에서 관리 화면 <b>설정 → 원격 접속·업데이트</b>에서
+    원격 접속 비밀번호를 먼저 정하세요.</p>{% endif %}</div>
 </main>
 </body>
 </html>

@@ -1,5 +1,6 @@
 """관리 화면 오류: 'Internal Server Error' 대신 무엇이 어디서 잘못됐는지 보여 주고, 데이터 폴더의
-logs/errors.log 에 전체 내용을 남긴다. 관리 화면은 이 PC(127.0.0.1)에서만 열리므로 화면에 보여도 된다."""
+logs/errors.log 에 전체 내용을 남긴다. 자세한 내용은 PC 앞이나 로그인한 사람에게만 보인다
+(밖에서 로그인하지 않은 요청에는 짧은 안내만 — app.server_error)."""
 
 from __future__ import annotations
 
@@ -63,9 +64,14 @@ def log_error(err: BaseException, method: str, path: str) -> str | None:
         return None
 
 
-def error_page(err: BaseException, method: str, path: str) -> str:
+def error_page(err: BaseException, method: str, path: str, detail: bool = True) -> str:
     info = describe(err)
     logged = log_error(err, method, path)
+    if not detail:
+        return """<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>오류 · 라디오 참여 도우미</title></head>
+<body style="font-family:sans-serif;max-width:640px;margin:32px auto;padding:0 16px">
+<h1>오류가 났습니다</h1><p>잠시 뒤 다시 열어 보세요. 자세한 내용은 기록 파일에 남겼습니다.</p>
+<p><a href="/">첫 화면</a></p></body></html>"""
     where = "".join(f"<li><code>{escape(w)}</code></li>" for w in info["where"])
     return f"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>오류 · 라디오 참여 도우미</title>
 <style>body{{font-family:'Malgun Gothic',sans-serif;max-width:860px;margin:32px auto;padding:0 16px;line-height:1.6;

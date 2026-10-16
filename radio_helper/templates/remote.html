@@ -5,14 +5,20 @@
 
 <div class="panel">
   <h2>밖에서 관리 화면 보기 — <code>{{ r.domain }}</code></h2>
+  {% if r.server %}
+  <p class="muted">서버 운영 모드입니다. <b>https://{{ r.domain }}</b> → Cloudflare 터널 → 이 서버의
+    <code>http://127.0.0.1:{{ r.port }}</code>. 모든 접속에 비밀번호 로그인을 받습니다.
+    비밀번호는 서버 터미널에서 <code>cd /opt/radio && .venv/bin/python -m radio_helper.remote set-password</code> 로 바꿉니다.</p>
+  {% else %}
   <p class="muted">휴대폰·다른 PC에서 <b>https://{{ r.domain }}</b> 을 열면 이 PC의 관리 화면이 열립니다 (Cloudflare 터널).
     이 PC가 켜져 있고 이 도우미가 돌고 있어야 합니다. 밖에서 열 때는 아래 비밀번호로 로그인합니다.</p>
+  {% endif %}
   <table>
     <tr><th>원격 접속</th><td>{% if r.enabled %}<span class="badge ok">켜짐</span> 비밀번호가 정해져 있음
       {% else %}<span class="badge warn">꺼짐</span> 비밀번호를 정하면 켜집니다{% endif %}</td></tr>
     <tr><th>터널 프로그램 (cloudflared)</th><td>
       {% if r.cloudflared %}<span class="badge ok">이 PC에서 실행 중</span>
-      {% elif r.cloudflared is none %}<span class="muted">확인할 수 없음 (윈도우가 아님)</span>
+      {% elif r.cloudflared is none %}<span class="muted">이 화면에서는 확인하지 않음{{ ' (서버: systemctl status cloudflared)' if r.server }}</span>
       {% else %}<span class="badge bad">실행 중이 아님</span> 아래 '처음 한 번 설정'을 하세요{% endif %}</td></tr>
     <tr><th>관리 화면 번호</th><td>{{ r.port }}
       {% if r.port != r.tunnel_port %}<span class="badge bad">터널은 {{ r.tunnel_port }}번을 가리킵니다</span>
@@ -22,7 +28,7 @@
   <form method="post" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button name="action" value="probe" class="secondary">밖에서 연결되는지 확인</button></form>
 
-  {% if not is_remote %}
+  {% if not is_remote and not r.server %}
   <form method="post" class="actions" autocomplete="off">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="password" name="password" placeholder="새 비밀번호 (8자 이상)" autocomplete="new-password" style="max-width:220px">
@@ -46,16 +52,23 @@
       <li>위 <b>밖에서 연결되는지 확인</b>을 눌러 '연결됨'이 나오면 끝입니다.</li>
     </ol>
   </details>
-  {% else %}
+  {% elif not r.server %}
   <p class="muted">밖에서 열고 있습니다. 비밀번호·주소는 PC 앞에서만 바꿀 수 있습니다.</p>
   {% endif %}
-  {% if not is_remote %}
+  {% if not is_remote and not r.server %}
   <form method="post" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label class="muted">원격 주소</label><input type="text" name="domain" value="{{ r.domain }}" style="max-width:260px">
     <button name="action" value="domain" class="secondary">주소 저장</button></form>
   {% endif %}
 </div>
 
+{% if r.server %}
+<div class="panel">
+  <h2>업데이트</h2>
+  <p>지금 버전 <b>{{ r.version }}</b>. 서버는 자동 업데이트를 쓰지 않습니다 — 서버에서 <code>/opt/radio/deploy.sh</code> 를 실행하면
+    데이터 백업 → 새 코드 받기(git pull) → 패키지 설치 → 다시 켜기 → 상태 확인을 합니다.</p>
+</div>
+{% else %}
 <div class="panel">
   <h2>업데이트</h2>
   <table>
@@ -83,4 +96,5 @@
     새 버전이 켜지자마자 계속 꺼지면 예전 버전으로 저절로 되돌리고 그 버전은 다시 받지 않습니다.
     자동 업데이트는 <code>start_windows.bat</code> 으로 켰을 때만 다시 켜집니다.</p>
 </div>
+{% endif %}
 {% endblock %}

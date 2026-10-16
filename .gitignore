@@ -7,3 +7,18 @@ __pycache__/
 platform-tools/
 update_restart.flag
 start_windows.new.bat
+
+# 비밀값 (.env.example 만 올린다)
+.env
+.env.*
+!.env.example
+# DB·업로드/생성 데이터·백업 (서버: /opt/radio/data, /opt/radio/backups)
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+backups/
+logs/
+browser_profile/
+inspect/
+evidence/

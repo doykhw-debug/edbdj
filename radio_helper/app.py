@@ -1,4 +1,5 @@
-"""로컬 관리 화면 (Flask). 이 PC(127.0.0.1)에서만 열린다."""
+"""관리 화면 (Flask). PC: 127.0.0.1 + 원격 주소(로그인). 서버 모드: 127.0.0.1 에만 열고 Cloudflare 터널로
+https://radio.haetsallab.com 에서 로그인해 연다 (server.py)."""
 
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import __version__, db, evidence, gates, generator, notices, quiz, remote, updater
+from . import __version__, db, evidence, gates, generator, notices, quiz, remote, server, updater
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -33,6 +34,9 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
                 ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"),
                 ("live.board_auto", "board_auto"), ("live.story_approved", "story_approved"),
                 ("live.song_free", "song_free"))
+# 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
+PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
+                     "draft_run", "corner_inspect"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
@@ -46,7 +50,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         SESSION_COOKIE_SAMESITE="Lax",   # 위조 요청은 화면마다 붙는 확인값으로 막는다 (Cloudflare 인증 뒤 다시 로그인하지 않게)
         SESSION_COOKIE_HTTPONLY=True,
         PERMANENT_SESSION_LIFETIME=timedelta(days=14),   # 원격 로그인 유지 기간
-        SERVER_PORT=5000,                                  # __main__ 이 실제 번호로 바꾼다
+        SESSION_COOKIE_SECURE=server.is_server(),         # 서버는 https(터널)로만 열린다
+        SERVER_PORT=server.port(),                         # __main__ 이 실제 번호로 바꾼다
         START_UPDATE=start_update_thread,                  # 시험에서는 가짜로 바꾼다
     )
     conn = db.connect()
@@ -58,6 +63,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         SOURCE=SOURCE, POST_STATUS=STATUS_LABELS, QUIZ_KIND=quiz.KIND_LABELS, QUIZ_ENTRY=quiz.ENTRY_LABELS,
         entry_label=quiz.entry_label,
         STORY_SOURCE=STORY_SOURCE,
+        SERVER_MODE=server.is_server(), PUBLIC_URL=server.public_url(),
         VIA={"sms": "문자", "board": "게시판", **{k: v["label"] for k, v in qconfig.CHAT_APPS.items()}},
     )
 
@@ -68,7 +74,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         g.conn = db.connect()
         if not remote.allowed_host(g.conn, host):
             abort(403)
-        g.remote = remote.is_remote(host, request.headers)
+        # 서버 모드: 같은 서버의 다른 프로그램도 127.0.0.1 로 들어올 수 있으므로 모든 요청을 원격으로 보고 로그인을 받는다
+        g.remote = server.is_server() or remote.is_remote(host, request.headers)
         if g.remote and request.endpoint not in remote.REMOTE_ENDPOINTS:
             if not remote.enabled(g.conn):
                 return render_template("remote_off.html"), 403
@@ -82,6 +89,9 @@ def create_app(data_dir: str | None = None) -> Flask:
                   "새로 불러온 이 화면에서 한 번 더 눌러 주세요.", "warn")
             back = request.referrer or ""
             return redirect(back if back.startswith(request.host_url) else url_for("home"))
+        if server.is_server() and request.endpoint in PC_ONLY_ENDPOINTS:
+            flash(server.PC_ONLY_MESSAGE, "warn")
+            return redirect(url_for("home"))
 
     @app.teardown_request
     def close_conn(_exc):
@@ -91,9 +101,24 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.errorhandler(500)
     def server_error(e):
-        """'Internal Server Error' 대신 무엇이 어디서 잘못됐는지 보여 주고 기록 파일에 남긴다 (이 PC 안에서만 보임)."""
+        """'Internal Server Error' 대신 무엇이 어디서 잘못됐는지 보여 주고 기록 파일에 남긴다.
+        밖에서 로그인하지 않은 사람에게는 자세한 내용(파일 위치 등)을 보이지 않는다."""
         err = getattr(e, "original_exception", None) or e
-        return error_page(err, request.method, request.full_path.rstrip("?")), 500
+        return error_page(err, request.method, request.full_path.rstrip("?"), detail=_may_see_detail()), 500
+
+    def _may_see_detail() -> bool:
+        if not g.get("remote") and not server.is_server():
+            return True
+        try:
+            mark = remote.session_mark(g.conn) if "conn" in g else ""
+        except Exception:
+            return False
+        return bool(mark) and session.get("remote_ok") == mark
+
+    @app.errorhandler(server.PcOnly)
+    def pc_only(e):
+        flash(str(e), "warn")
+        return redirect(url_for("home"))
 
     @app.context_processor
     def inject():
@@ -135,7 +160,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         latest = db.get_setting(c, "update.latest") or ""
         rec = updater.last_record()
         return {"domain": remote.domain(c), "enabled": remote.enabled(c), "port": app.config["SERVER_PORT"],
-                "tunnel_port": remote.TUNNEL_PORT, "cloudflared": remote.cloudflared_running(),
+                "tunnel_port": app.config["SERVER_PORT"] if server.is_server() else remote.TUNNEL_PORT,
+                "cloudflared": remote.cloudflared_running(), "server": server.is_server(),
                 "probe": db.get_setting(c, "remote.probe") or "", "probe_at": db.get_setting(c, "remote.probe_at") or "",
                 "version": __version__, "latest": latest, "newer": bool(latest) and updater.newer(latest, __version__),
                 "checked_at": db.get_setting(c, "update.checked_at") or "", "error": db.get_setting(c, "update.error") or "",
@@ -148,8 +174,13 @@ def create_app(data_dir: str | None = None) -> Flask:
         c = g.conn
         if request.method == "POST":
             action = form("action")
-            if action in ("password", "off", "domain") and g.get("remote"):
+            if action in ("password", "off", "domain") and server.is_server():
+                flash("서버의 비밀번호는 서버에서 바꿉니다: ssh haetsal → cd /opt/radio → "
+                      ".venv/bin/python -m radio_helper.remote set-password", "error")
+            elif action in ("password", "off", "domain") and g.get("remote"):
                 flash("원격 접속 비밀번호·주소는 PC 앞(이 PC의 관리 화면)에서만 바꿀 수 있습니다.", "error")
+            elif action in ("check", "auto", "update") and server.is_server():
+                flash("서버는 자동 업데이트를 쓰지 않습니다. 서버에서 /opt/radio/deploy.sh 로 업데이트합니다.", "warn")
             elif action == "password":
                 error = remote.set_password(c, request.form.get("password", ""), request.form.get("password2", ""))
                 flash(error or "비밀번호를 정했습니다. 이제 밖에서 그 주소로 열면 이 비밀번호로 로그인합니다.",
@@ -165,7 +196,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                     db.set_setting(c, "remote.domain", value)
                     flash(f"원격 주소를 {value} 로 정했습니다.")
             elif action == "probe":
-                state, text = remote.probe(remote.domain(c))
+                state, text = remote.probe(remote.domain(c), port=app.config["SERVER_PORT"])
                 db.set_setting(c, "remote.probe", text)
                 db.set_setting(c, "remote.probe_at", db.now())
                 flash(text, "message" if state in ("ok", "access") else "warn")
@@ -1068,7 +1099,10 @@ def create_app(data_dir: str | None = None) -> Flask:
         if form("live_min_confidence"):
             db.set_setting(g.conn, "live.min_confidence", str(_confidence(form("live_min_confidence"))))
         key = (request.form.get("api_key") or "").strip()
-        if key:
+        if key and server.is_server():
+            flash("서버의 API 키는 서버의 /opt/radio/.env 파일(ANTHROPIC_API_KEY)에 둡니다. 화면에서는 저장하지 않습니다.",
+                  "warn")
+        elif key:
             from .quizbot.answerer import save_api_key
 
             try:
@@ -1829,6 +1863,7 @@ def log_tail(name: str, chars: int = 2500) -> str:
 
 
 def launch_quizbot(args: list[str]) -> str:
+    server.check_tool(args)   # 서버에서는 Claude API 만 쓰는 도구(풀어 쓰기)만
     return launch_module("radio_helper.quizbot", args, "quizbot")
 
 

@@ -34,6 +34,8 @@
   </nav>
 </header>
 <main>
+  {% if SERVER_MODE %}<div class="flash message">서버 운영 모드 ({{ PUBLIC_URL }}) — 사연·인물·원고·기록 관리용입니다.
+    청취·퀴즈 자동 참여·고릴라·문자는 윈도우 PC 프로그램에서 합니다.</div>{% endif %}
   {% for cat, msg in get_flashed_messages(with_categories=true) %}
     <div class="flash {{ cat }}">{{ msg }}</div>
   {% endfor %}

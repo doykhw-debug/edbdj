@@ -1,0 +1,5 @@
+# 서버(우분투 24.04 ARM, 화면 없음)용: 관리 화면 + Claude API(풀어 쓰기·원고) + 운영용 WSGI 서버(waitress)
+# 청취·음성 인식·고릴라 부품(requirements-quiz.txt)은 윈도우 PC 전용이라 넣지 않는다.
+-r requirements.txt
+anthropic>=1.11
+waitress>=3.0

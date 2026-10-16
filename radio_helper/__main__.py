@@ -1,9 +1,12 @@
-"""python -m radio_helper  → 로컬 관리 화면 실행 (http://127.0.0.1:5000)"""
+"""python -m radio_helper           → PC: 관리 화면 실행 (http://127.0.0.1:5000, 환경 변수 PORT 로 바꿈)
+python -m radio_helper --server  → 서버 운영 모드: 127.0.0.1:PORT(기본 5002)에 waitress 로 연다.
+                                   밖에서는 Cloudflare 터널로 https://radio.haetsallab.com (server.py 참고)"""
 
 import argparse
 import faulthandler
 import json
 import logging
+import os
 import signal
 import socket
 import sys
@@ -17,7 +20,7 @@ from datetime import datetime
 
 from werkzeug.serving import run_simple
 
-from . import __version__, db
+from . import __version__, db, remote, server
 from .app import create_app, ensure_runner, start_runner
 from .quizbot import config as qconfig
 
@@ -229,15 +232,63 @@ def self_check(url: str, open_browser: bool, wait: float = 15.0, say=print) -> b
     return False
 
 
+def run_server(port: int, serve=None) -> None:
+    """서버 운영 모드: 127.0.0.1:port 에 waitress(운영용 WSGI 서버)로 연다. 듣기 실행기·자동 업데이트·브라우저 열기는
+    하지 않는다. 꺼지면 systemd(radio.service, Restart=always)가 다시 켠다."""
+    record_native_crashes()
+    if not _can_bind(port):
+        print(f"[오류] {port}번을 다른 프로그램이 쓰고 있습니다. .env 의 PORT 를 바꾸거나 그 프로그램을 끄세요.")
+        server_log(f"서버 모드 시작 못 함: {port}번을 다른 프로그램이 씀")
+        sys.exit(EXIT_NO_PORT)
+    app = create_app()
+    app.config["SERVER_PORT"] = port
+    conn = db.connect()
+    try:
+        # 서버에서는 듣지 않는다: PC에서 옮겨 온 데이터의 '청취 중'·'뭐로 들을지 묻는 중' 표시를 끈다 (PC 쪽 데이터는 그대로)
+        for key in ("live.active", "live.ask"):
+            db.set_setting(conn, key, "0")
+        db.set_setting(conn, "update.started_at", "")
+        has_password = remote.enabled(conn)
+        db.log(conn, "server", f"서버 모드 시작 — {server.public_url()} (127.0.0.1:{port}, 버전 {__version__})")
+    finally:
+        conn.close()
+    print("=" * 60)
+    print(f" 라디오 참여 도우미 {__version__} — 서버 운영 모드")
+    print(f" 밖에서: {server.public_url()}  (Cloudflare 터널 → http://127.0.0.1:{port})")
+    print(f" 데이터 위치: {db.data_dir()}")
+    if not has_password:
+        print(" [주의] 로그인 비밀번호가 없어 아직 아무도 열 수 없습니다. 서버에서 정하세요:")
+        print("        .venv/bin/python -m radio_helper.remote set-password")
+    print("=" * 60, flush=True)
+    server_log(f"서버 모드 시작 — 127.0.0.1:{port}")
+    if serve is None:
+        try:
+            from waitress import serve
+        except ImportError:
+            print("[경고] waitress 가 없어 개발용 서버로 엽니다. pip install -r requirements-server.txt 를 하세요.", flush=True)
+            run_simple(server.BIND, port, app, threaded=True)
+            return
+    serve(app, host=server.BIND, port=port, threads=8, ident="radio-helper", channel_timeout=120)
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser(description="SBS 라디오 참여 도우미 — 로컬 관리 화면")
-    ap.add_argument("--port", type=int, default=5000)
+    server.load_env()   # 프로그램 폴더의 .env (API 키·PORT·데이터 폴더). 이미 있는 환경 변수는 그대로
+    ap = argparse.ArgumentParser(description="SBS 라디오 참여 도우미 — 관리 화면")
+    ap.add_argument("--port", type=int, default=None,
+                    help="관리 화면 번호 (기본: 환경 변수 PORT, 없으면 PC 5000 · 서버 5002)")
+    ap.add_argument("--server", action="store_true", help="서버 운영 모드 (RADIO_HELPER_SERVER=1 과 같음)")
     ap.add_argument("--no-browser", action="store_true", help="실행 후 브라우저를 자동으로 열지 않음")
     ap.add_argument("--restarted", action="store_true", help="비정상 종료 뒤 start_windows.bat 이 다시 켠 경우")
     args = ap.parse_args()
+    if args.server:
+        os.environ[server.SERVER_ENV] = "1"
+    if server.is_server():
+        run_server(args.port or server.port())
+        return
     disable_console_quick_edit()
     record_native_crashes()
 
+    args.port = args.port or server.port()
     port, notes = pick_port(args.port)
     for note in notes:
         print(f"[알림] {note} → 다음 번호를 씁니다.")
@@ -295,9 +346,9 @@ def main() -> None:
     signal.signal(signal.SIGINT, ctrl_c_handler())
     # 개발 서버 시작 안내(빨간 WARNING)와 접속 기록은 오류처럼 보여 감춘다. 오류·경고는 그대로 보인다.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
-    # 이 PC에서만 접속 가능하도록 127.0.0.1 에만 연다.
+    # 이 PC에서만 접속 가능하도록 127.0.0.1 에만 연다 (밖에서는 Cloudflare 터널 + 로그인).
     try:
-        run_simple("127.0.0.1", port, app, threaded=True)   # Ctrl+C 는 안에서 받아 정상으로 끝남
+        run_simple(server.BIND, port, app, threaded=True)   # Ctrl+C 는 안에서 받아 정상으로 끝남
     except Exception:
         server_log("오류로 멈춤:\n" + traceback.format_exc())
         print("[오류] 관리 화면이 오류로 멈췄습니다. 잠시 뒤 자동으로 다시 켭니다. (기록: 데이터 폴더 logs/server.log)")

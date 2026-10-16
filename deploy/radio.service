@@ -1,0 +1,33 @@
+# /etc/systemd/system/radio.service — 라디오 참여 도우미 (서버 운영 모드)
+# 설치: deploy/server_setup.sh 가 복사하고 enable --now 한다. 바꾼 뒤: sudo systemctl daemon-reload && sudo systemctl restart radio
+[Unit]
+Description=Radio participation helper (radio.haetsallab.com, 127.0.0.1:5002)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/radio
+# 비밀값·포트·데이터 폴더 (권한 600). 앱도 같은 파일을 읽지만 이미 정해진 값은 덮어쓰지 않는다.
+EnvironmentFile=/opt/radio/.env
+# 기본값 (.env 에 같은 이름이 있으면 .env 가 이긴다)
+Environment=PORT=5002
+Environment=RADIO_HELPER_DATA_DIR=/opt/radio/data
+Environment=RADIO_HELPER_HEADLESS=1
+Environment=TZ=Asia/Seoul
+Environment=RADIO_HELPER_SERVER=1
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/opt/radio/.venv/bin/python -m radio_helper --server
+Restart=always
+RestartSec=5
+# 같은 서버의 다른 프로그램과 겹치지 않게: 새 권한을 얻지 못하고, 임시 폴더는 따로
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
