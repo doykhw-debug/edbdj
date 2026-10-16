@@ -35,6 +35,7 @@ SKIP_TOP = {".venv", "venv", "data", ".git", "__pycache__", ".pytest_cache"}
 BAT = "start_windows.bat"
 NEW_BAT = "start_windows.new.bat"
 EXIT_UPDATE = 3
+RESTART_FLAG = "update_restart.flag"   # start_windows.bat 이 이 파일이 있을 때만 코드 3 을 '업데이트 후 다시 켜기'로 본다
 CHECK_EVERY_HOURS = 6
 CONFIRM_AFTER_SECONDS = 120
 
@@ -221,6 +222,8 @@ def update_now(conn: sqlite3.Connection, root: Path, opener=None, restart=restar
     report = install(download(conn, opener), root, expect=latest)
     db.log(conn, "update", f"업데이트 설치: {__version__} → {report['version']} (파일 {report['written']}개"
                            + (", 시작 파일은 다시 켤 때 바꿈" if report["new_bat"] else "") + ") — 다시 켭니다")
+    # 종료 코드 3 은 윈도우의 '경로를 찾을 수 없음'과 같아서, 업데이트로 끝낸다는 표시 파일을 함께 둔다
+    (root / RESTART_FLAG).write_text(report["version"], encoding="utf-8")
     stop_helpers(conn)
     threading.Timer(2.0, restart).start()   # 응답 화면을 보낸 뒤 끝낸다
     return report

@@ -37,7 +37,10 @@
 
 ## 설치·실행 (Windows)
 
-1. [Python 3.11 이상](https://www.python.org/downloads/)을 설치합니다. 설치 화면에서 **"Add python.exe to PATH"** 를 체크하세요.
+1. Python 3.11 이상이 필요합니다. 없으면 2번의 `start_windows.bat` 이 (0.38) 흔한 설치 폴더에서 찾아보고, 없으면 윈도우 기본
+   설치 도구(winget)로 **Python 3.11 을 자동으로 설치**합니다 (몇 분, 윈도우가 물으면 허용). winget 도 없으면 python.org 내려받기 화면을 열고
+   멈추니, [Python 3.11 이상](https://www.python.org/downloads/)을 설치할 때 첫 화면에서 **"Add python.exe to PATH"** 를 체크한 뒤 다시 실행하세요.
+   ("Python was not found … Microsoft Store" 는 윈도우의 가짜 바로 가기가 띄우는 안내라 무시해도 됩니다.)
 2. 이 폴더의 **`start_windows.bat`** 을 더블클릭합니다.
    - 처음 한 번은 필요한 패키지(음성 인식 포함)를 설치하느라 몇 분 걸립니다.
    - 브라우저에 관리 화면(`http://127.0.0.1:5000`)이 열립니다. 이 PC에서만 접속됩니다.
@@ -343,7 +346,7 @@ macOS·Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.tx
   **어디서든 업데이트를 보고 누르는 곳**입니다. 6시간마다 새 버전을 확인하고(`VERSION` 번호가 올라간 것만),
   *새 버전이 나오면 자동으로 업데이트* (기본 켬, 새벽 4시 — 시각은 바꿀 수 있음) 또는 **지금 업데이트** 버튼으로 설치합니다.
 - 프로그램 파일만 바꿉니다: `.venv`·데이터 폴더(경험·사연·설정)는 그대로. 바뀌는 파일은 데이터 폴더 `updates\backup-…` 에 먼저 모아 둡니다.
-- 설치가 끝나면 관리 화면이 종료 코드 3 으로 끝나고 `start_windows.bat` 이 패키지를 확인한 뒤 다시 켭니다.
+- 설치가 끝나면 관리 화면이 종료 코드 3 과 표시 파일(`update_restart.flag`, 윈도우의 '경로 없음' 코드 3 과 구별)로 끝나고 `start_windows.bat` 이 패키지를 확인한 뒤 다시 켭니다.
   듣던 방송은 묻지 않고 이어서 듣습니다 (1~2분 끊김). 실행 중인 `start_windows.bat` 은 바로 바꾸지 않고 `start_windows.new.bat` 으로
   받아 두었다가 다시 켤 때 스스로 바꿉니다.
 - **되돌리기**: 새 버전이 켜지자마자 3번 연속 꺼지면 `start_windows.bat` 이 `rollback_update.py` 로 예전 파일을 되돌리고,

@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 platform-tools/
+update_restart.flag
+start_windows.new.bat
