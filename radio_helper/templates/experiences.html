@@ -7,7 +7,8 @@
   <a class="btn secondary" href="{{ url_for('import_page') }}">가져오기 (파일)</a>
   <span class="muted" style="margin-left:8px">정리된 사연 목록 파일로 받기:</span>
   <a class="btn secondary" href="{{ url_for('experiences_export') }}">읽기용 (.txt)</a>
-  <a class="btn secondary" href="{{ url_for('experiences_export', fmt='jsonl') }}">다시 가져오기용 (.jsonl)</a>
+  <a class="btn secondary" href="{{ url_for('experiences_export', fmt='jsonl', all=1, library=1) }}"
+     title="확인한 사연·확인 전 사연·보관함 전체. 가져오기에 넣으면 확인한 사연은 확인된 상태로 되살아남">사연 jsonl로 받기 (전체)</a>
   <a class="muted" href="{{ url_for('experiences_export', all=1) }}">확인 전 것도 함께</a></div>
 {% set es = enrich_status %}
 {% if enrich_left or es.state in ('running', 'stalled') %}
@@ -77,7 +78,8 @@
   <p class="muted"><b>사연 보관함</b>과 <b>실제 경험</b>(고치고 승인한 사연)·<b>원고</b>를 모두 지웁니다.
     인물 관계도·내 정보·고릴라 위치·채널·코너·설정은 그대로입니다. 지우기 전에 데이터 파일 전체를 데이터 폴더
     <code>backups</code> 에 자동으로 백업합니다 (되살릴 때는 그 파일을 <code>radio_helper.sqlite3</code> 로 바꿔 넣음).
-    필요하면 먼저 위 <b>사연 목록 파일로 받기</b>로 받아 두세요.</p>
+    필요하면 먼저 <a href="{{ url_for('experiences_export', fmt='jsonl', all=1, library=1) }}">사연 jsonl로 받기 (전체)</a>로
+    받아 두세요 — 나중에 가져오기에 넣으면 보관함과 확인한 사연이 그대로 돌아옵니다.</p>
   <form method="post" action="{{ url_for('experiences_reset') }}" class="actions"
         onsubmit="return confirm('사연 보관함과 실제 경험을 모두 지울까요? (백업은 자동으로 해 둡니다)')">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

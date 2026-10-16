@@ -610,7 +610,8 @@ def create_app(data_dir: str | None = None) -> Flask:
 
         from . import people as people_mod
 
-        rows = people_mod.export_rows(g.conn, include_unconfirmed=request.args.get("all") == "1")
+        rows = people_mod.export_rows(g.conn, include_unconfirmed=request.args.get("all") == "1",
+                                      include_library=request.args.get("library") == "1")
         stamp = datetime.now().strftime("%Y%m%d")
         if request.args.get("fmt") == "jsonl":
             data, ext, mime = people_mod.export_jsonl(rows), "jsonl", "application/x-ndjson; charset=utf-8"
@@ -1358,6 +1359,11 @@ def create_app(data_dir: str | None = None) -> Flask:
                     fiction = sum(1 for r in rows if r["kind"] == "fiction")
                     db.log(g.conn, "people", f"사연 보관함 가져오기: 새 사연 {added}편, 고침 {updated}편")
                     flash(f"사연 보관함에 {added + updated}편을 넣었습니다 (새 {added} · 고침 {updated}).")
+                    restored = people_mod.restore_confirmed(g.conn, text)
+                    if restored:
+                        db.log(g.conn, "people", f"내보낸 사연 되살리기: 확인한 사연 {restored}편 → 확인된 실제 경험")
+                        flash(f"내보낼 때 '실제로 있었던 일'로 확인해 둔 사연 {restored}편은 확인된 실제 경험으로 되살렸습니다 "
+                              "(바로 사연 재료로 씀).")
                     if fiction:
                         flash(f"그중 {fiction}편은 원본 사연을 각색한 가상 사연이라 읽기용으로만 둡니다. "
                               "실제로 있었던 일이 아니므로 이 프로그램은 보내지 않습니다.", "warn")

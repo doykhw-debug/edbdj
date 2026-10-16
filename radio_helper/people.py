@@ -317,10 +317,13 @@ def parse_story_log(text: str) -> list[dict]:
         if not isinstance(data, dict) or not data.get("body"):
             continue
         row = {k: str(data.get(src) or "").strip() for k, src in LIBRARY_FIELDS.items()}
+        if str(data.get("person") or "").strip():   # 이 도우미에서 내보낸 파일: 호칭 대신 인물 이름으로 정확히 붙인다
+            row["person_label"] = str(data["person"]).strip()
         # 원본 사연을 옮겨 쓴 글은 가상(각색)이다
         adapted = bool(data.get("source_id") or data.get("source_title") or data.get("source_site"))
         row["kind"] = "fiction" if adapted or data.get("kind") != "real" else "real"
-        row["origin"] = " ".join(str(data.get(k) or "") for k in ("source_site", "source_id", "source_title")).strip()
+        row["origin"] = str(data.get("origin") or "").strip() or \
+            " ".join(str(data.get(k) or "") for k in ("source_site", "source_id", "source_title")).strip()
         rows.append(row)
     if not rows:
         raise PeopleImportError("사연을 찾지 못했습니다.")
@@ -501,14 +504,17 @@ def reset_stories(conn: sqlite3.Connection, include_history: bool = False) -> di
 
 
 # ── 사연 목록 내보내기 ────────────────────────────────────────────────
-def export_rows(conn: sqlite3.Connection, include_unconfirmed: bool = False) -> list[dict]:
-    """정리된 사연 목록 (실제 경험). 인물은 호칭으로만 적는다 (실명 대신). 보관함에서 온 것은 그 번호를 쓴다."""
+def export_rows(conn: sqlite3.Connection, include_unconfirmed: bool = False, include_library: bool = False) -> list[dict]:
+    """정리된 사연 목록 (실제 경험). 인물은 호칭으로 적는다 (읽기용은 실명 대신). 보관함에서 온 것은 그 번호를 쓴다.
+    include_library: 아직 경험으로 옮기지 않은 보관함 사연도 (가상·실제 구분, 원본 출처 포함) — 'person' 에 인물 이름을
+    함께 적어 다른 PC·초기화 뒤에 그대로 되살릴 수 있게 한다."""
     from .quizbot import story as story_mod
 
     sent = story_mod.sent_broadcasters(conn)
     rows = conn.execute(
-        """SELECT e.*, p.alias AS about_alias, p.side AS about_side, l.code AS lib_code, l.category AS lib_category,
-                  l.theme AS lib_theme FROM experiences e LEFT JOIN people p ON p.id = e.about_person_id
+        """SELECT e.*, p.alias AS about_alias, p.side AS about_side, p.name AS about_name, l.code AS lib_code,
+                  l.category AS lib_category, l.theme AS lib_theme FROM experiences e
+           LEFT JOIN people p ON p.id = e.about_person_id
            LEFT JOIN story_library l ON l.id = e.from_library_id"""
         + ("" if include_unconfirmed else " WHERE e.user_confirmed = 1") + " ORDER BY COALESCE(l.code, ''), e.id").fetchall()
     out = []
@@ -522,7 +528,49 @@ def export_rows(conn: sqlite3.Connection, include_unconfirmed: bool = False) -> 
             "kind": "real" if e["user_confirmed"] else "", "confirmed": bool(e["user_confirmed"]),
             "sent_to": sorted(sent.get(e["id"], set())),
         })
+        if include_library:
+            out[-1]["person"] = e["about_name"] if about else "나"
+    if include_library:
+        for item in conn.execute(
+                """SELECT l.*, p.name AS person_name, p.alias AS person_alias, p.side AS person_side FROM story_library l
+                   LEFT JOIN people p ON p.id = l.person_id
+                   WHERE NOT EXISTS (SELECT 1 FROM experiences e WHERE e.from_library_id = l.id)
+                   ORDER BY l.code, l.id""").fetchall():
+            own = item["person_side"] == "self"
+            out.append({
+                "id": item["code"] or f"L{item['id']:04d}",
+                "character": "나" if own else (item["person_alias"] or item["person_label"] or ""),
+                "person": "나" if own else (item["person_name"] or item["person_label"] or ""),
+                "title": item["title"] or "", "intro": item["intro"] or "", "event_date": item["event_date"] or "",
+                "event_summary": item["summary"] or "", "broadcast_timing": item["timing"] or "", "song": item["song"] or "",
+                "closing": item["closing"] or "", "body": item["body"] or "", "category": item["category"] or "",
+                "theme": item["theme"] or "", "kind": item["kind"] or "fiction", "origin": item["origin"] or "",
+                "confirmed": False, "sent_to": [],
+            })
     return out
+
+
+def restore_confirmed(conn: sqlite3.Connection, text: str) -> int:
+    """이 도우미에서 내보낸 jsonl 을 다시 넣을 때: '확인함'(confirmed)으로 내보낸 실제 사연은 보관함에 넣은 뒤
+    확인된 실제 경험으로 바로 되살린다 (다시 하나하나 확인하지 않아도 됨). 되살린 수."""
+    restored = 0
+    for line in text.splitlines():
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if not (isinstance(data, dict) and data.get("confirmed") is True and data.get("kind") == "real" and data.get("id")):
+            continue
+        item = conn.execute("SELECT * FROM story_library WHERE code = ?", (str(data["id"]),)).fetchone()
+        if item is None:
+            continue
+        eid, created = library_to_experience(conn, item)
+        if created:
+            conn.execute("UPDATE experiences SET user_confirmed = 1, ending = ?, gorilla_line = ?, updated_at = ? WHERE id = ?",
+                         (str(data.get("closing") or ""), str(data.get("gorilla_line") or ""), db.now(), eid))
+            restored += 1
+    conn.commit()
+    return restored
 
 
 def export_jsonl(rows: list[dict]) -> str:

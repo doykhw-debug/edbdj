@@ -274,3 +274,47 @@ def test_reset_with_no_board_submissions_deletes_everything(client, conn):
     r = people.reset_stories(conn)
     assert (r["library"], r["experiences"], r["kept"]) == (3, 3, 0)
     assert conn.execute("SELECT COUNT(*) FROM experiences").fetchone()[0] == 0
+
+
+def test_full_jsonl_export_survives_reset_and_comes_back(client, conn):
+    """사연 jsonl로 받기(전체) → 초기화 → 가져오기: 보관함·확인한 사연(고친 글·한 줄·인물)이 그대로 돌아온다."""
+    load(conn)
+    people.import_person_records(conn, people.parse_person_records(collection()))
+    people.import_library(conn, people.parse_story_log(collection()))
+    lib = {r["code"]: r["id"] for r in conn.execute("SELECT id, code FROM story_library")}
+    e1, _ = people.library_to_experience(conn, conn.execute("SELECT * FROM story_library WHERE code = 'Y002'").fetchone())
+    e2, _ = people.library_to_experience(conn, conn.execute("SELECT * FROM story_library WHERE code = 'R002'").fetchone())
+    conn.execute("UPDATE experiences SET user_confirmed = 1, story = '병동에서 실제로 있었던 일 (내가 고침)', "
+                 "gorilla_line = '직접 쓴 한 줄', ending = '마무리' WHERE id = ?", (e1,))
+    manual = conn.execute("INSERT INTO experiences (label, story, user_confirmed, created_at, updated_at) "
+                          "VALUES ('직접 쓴 경험', '내가 직접 쓴 이야기', 1, ?, ?)", (db.now(), db.now())).lastrowid
+    conn.commit()
+    assert e2 and manual and len(lib) == 7
+    html = client.get("/library").get_data(as_text=True)
+    assert "사연 jsonl로 받기 (보관함 + 실제 경험 전체)" in html
+    assert "사연 jsonl로 받기 (전체)" in client.get("/experiences").get_data(as_text=True)
+
+    data = client.get("/experiences/export?fmt=jsonl&all=1&library=1").get_data(as_text=True)
+    rows = [json.loads(x) for x in data.splitlines()]
+    by_id = {r["id"]: r for r in rows}
+    assert len(rows) == 8                                              # 경험 3건(Y002·R002·직접) + 아직 안 옮긴 보관함 5편
+    assert by_id["Y002"]["confirmed"] and by_id["Y002"]["person"] == "다라" and by_id["Y002"]["character"] == "간호사 친구"
+    assert not by_id["R002"]["confirmed"] and by_id["R002"]["person"] == "홍길동 과장님"
+    assert by_id["Y001"]["kind"] == "fiction" and "shorts/x1" in by_id["Y001"]["origin"]
+    assert by_id[f"E{manual:04d}"]["person"] == "나"
+
+    people.reset_stories(conn, include_history=True)
+    assert conn.execute("SELECT COUNT(*) FROM experiences").fetchone()[0] == 0
+    token = csrf(client, "/import")
+    r = client.post("/import", data={"csrf_token": token, "text": data}, follow_redirects=True)
+    assert "확인해 둔 사연 2편은 확인된 실제 경험으로 되살렸습니다" in r.get_data(as_text=True)
+    assert conn.execute("SELECT COUNT(*) FROM story_library").fetchone()[0] == 8
+    exps = {e["label"]: e for e in conn.execute("SELECT * FROM experiences")}
+    assert set(exps) == {"병원 이야기", "직접 쓴 경험"} and all(e["user_confirmed"] for e in exps.values())
+    nurse = exps["병원 이야기"]
+    assert (nurse["story"], nurse["gorilla_line"], nurse["ending"]) == ("병동에서 실제로 있었던 일 (내가 고침)", "직접 쓴 한 줄", "마무리")
+    assert nurse["about_person_id"] == person(conn, "다라")["id"] and exps["직접 쓴 경험"]["about_person_id"] is None
+    y001 = conn.execute("SELECT * FROM story_library WHERE code = 'Y001'").fetchone()
+    assert y001["kind"] == "fiction" and "shorts/x1" in y001["origin"] and y001["person_id"] == person(conn, "김철수")["id"]
+    r002 = conn.execute("SELECT * FROM story_library WHERE code = 'R002'").fetchone()
+    assert r002["person_id"] == person(conn, "홍길동 과장님")["id"] and r002["kind"] == "fiction"   # 확인 전이던 것은 보관함으로
