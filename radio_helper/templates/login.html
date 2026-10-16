@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>로그인 · 라디오 참여 도우미</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<main style="max-width:420px">
+  <h1>라디오 참여 도우미</h1>
+  <form method="post" class="panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next }}">
+    <p class="muted">밖에서 여는 관리 화면입니다. PC에서 정한 원격 접속 비밀번호를 넣으세요.</p>
+    {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+    <label>비밀번호</label>
+    <input type="password" name="password" autocomplete="current-password" autofocus required>
+    <div class="actions"><button>로그인</button></div>
+  </form>
+</main>
+</body>
+</html>

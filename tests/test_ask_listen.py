@@ -14,7 +14,7 @@ from radio_helper.quizbot import config
 def boot(data_dir, monkeypatch):
     started = []
     monkeypatch.setattr(launcher, "pick_port", lambda first: (5099, []))
-    for name in ("self_check", "disable_console_quick_edit", "record_native_crashes", "watch_runner"):
+    for name in ("self_check", "disable_console_quick_edit", "record_native_crashes", "watch_runner", "watch_updates"):
         monkeypatch.setattr(launcher, name, lambda *a, **k: None)
     monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)
     monkeypatch.setattr(launcher, "run_simple", lambda *a, **k: None)
@@ -79,3 +79,16 @@ def test_skip_listening(client, conn):
     client.post("/listen/skip", data={"csrf_token": token})
     assert (config.get(conn, "live.ask"), config.get(conn, "live.active")) == ("0", "0")
     assert "뭐로 들으시겠어요?" not in client.get("/").get_data(as_text=True)
+
+
+def test_restart_after_update_continues_listening(boot, capsys):
+    conn = db.connect()
+    db.set_setting(conn, "update.started_at", db.now())        # 업데이트를 설치하고 다시 켬 (start_windows.bat 코드 3)
+    conn.close()
+    state, started = boot("--restarted")
+    out = capsys.readouterr().out
+    assert "[업데이트] 새 버전" in out and "예기치 않게" not in out
+    assert state["live.active"] == "1" and state["live.ask"] == "0" and started == [1]   # 묻지 않고 이어서 들음
+    conn = db.connect()
+    assert db.get_setting(conn, "update.started_at") == ""
+    conn.close()

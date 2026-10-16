@@ -9,12 +9,12 @@ import secrets
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import db, evidence, gates, generator, notices, quiz
+from . import __version__, db, evidence, gates, generator, notices, quiz, remote, updater
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -43,8 +43,11 @@ def create_app(data_dir: str | None = None) -> Flask:
     app = Flask(__name__)
     app.config.update(
         SECRET_KEY=session_key(),   # 데이터 폴더에 고정: 관리 화면을 다시 켜도 열려 있던 화면이 그대로 동작
-        SESSION_COOKIE_SAMESITE="Strict",
+        SESSION_COOKIE_SAMESITE="Lax",   # 위조 요청은 화면마다 붙는 확인값으로 막는다 (Cloudflare 인증 뒤 다시 로그인하지 않게)
         SESSION_COOKIE_HTTPONLY=True,
+        PERMANENT_SESSION_LIFETIME=timedelta(days=14),   # 원격 로그인 유지 기간
+        SERVER_PORT=5000,                                  # __main__ 이 실제 번호로 바꾼다
+        START_UPDATE=start_update_thread,                  # 시험에서는 가짜로 바꾼다
     )
     conn = db.connect()
     db.init_db(conn)
@@ -58,12 +61,19 @@ def create_app(data_dir: str | None = None) -> Flask:
         VIA={"sms": "문자", "board": "게시판", **{k: v["label"] for k, v in qconfig.CHAT_APPS.items()}},
     )
 
-    # ── 보안: 로컬 전용 + 위조 요청 차단 ─────────────────────────────
+    # ── 보안: 이 PC + 원격 주소(로그인) + 위조 요청 차단 ──────────────
     @app.before_request
     def guard():
-        host = (request.host or "").split(":")[0]
-        if host not in ("127.0.0.1", "localhost"):
+        host = (request.host or "").split(":")[0].lower()
+        g.conn = db.connect()
+        if not remote.allowed_host(g.conn, host):
             abort(403)
+        g.remote = remote.is_remote(host, request.headers)
+        if g.remote and request.endpoint not in remote.REMOTE_ENDPOINTS:
+            if not remote.enabled(g.conn):
+                return render_template("remote_off.html"), 403
+            if session.get("remote_ok") != remote.session_mark(g.conn):
+                return redirect(url_for("remote_login", next=request.full_path.rstrip("?")))
         if "csrf" not in session:
             session["csrf"] = secrets.token_hex(16)
         if request.method == "POST" and request.form.get("csrf_token") != session["csrf"]:
@@ -72,7 +82,6 @@ def create_app(data_dir: str | None = None) -> Flask:
                   "새로 불러온 이 화면에서 한 번 더 눌러 주세요.", "warn")
             back = request.referrer or ""
             return redirect(back if back.startswith(request.host_url) else url_for("home"))
-        g.conn = db.connect()
 
     @app.teardown_request
     def close_conn(_exc):
@@ -89,9 +98,100 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.context_processor
     def inject():
         if "conn" not in g:
-            return {"csrf_token": session.get("csrf", ""), "stopped": False, "nav_pending": {}, "listening": False}
+            return {"csrf_token": session.get("csrf", ""), "stopped": False, "nav_pending": {}, "listening": False,
+                    "is_remote": False}
         return {"csrf_token": session.get("csrf", ""), "stopped": db.is_stopped(g.conn),
-                "nav_pending": notices.unseen_counts(g.conn), "listening": live.is_active(g.conn)}
+                "nav_pending": notices.unseen_counts(g.conn), "listening": live.is_active(g.conn),
+                "is_remote": bool(g.get("remote"))}
+
+    # ── 밖에서 보기 (radio.haetsallab.com) · 업데이트 ───────────────────
+    @app.route("/login", methods=["GET", "POST"])
+    def remote_login():
+        nxt = request.values.get("next", "")
+        nxt = nxt if nxt.startswith("/") and not nxt.startswith("//") else url_for("home")
+        if not g.get("remote"):
+            return redirect(nxt)   # PC 앞에서는 로그인하지 않는다
+        if not remote.enabled(g.conn):
+            return render_template("remote_off.html"), 403
+        error = ""
+        if request.method == "POST":
+            error = remote.login(g.conn, request.form.get("password", ""),
+                                 request.headers.get("Cf-Connecting-Ip", ""), datetime.now()) or ""
+            if not error:
+                session.clear()
+                session.permanent = True
+                session["remote_ok"] = remote.session_mark(g.conn)
+                session["csrf"] = secrets.token_hex(16)
+                return redirect(nxt)
+        return render_template("login.html", error=error, next=nxt), (401 if error else 200)
+
+    @app.post("/logout")
+    def remote_logout():
+        session.clear()
+        return redirect(url_for("remote_login") if g.get("remote") else url_for("home"))
+
+    def remote_view() -> dict:
+        c = g.conn
+        latest = db.get_setting(c, "update.latest") or ""
+        rec = updater.last_record()
+        return {"domain": remote.domain(c), "enabled": remote.enabled(c), "port": app.config["SERVER_PORT"],
+                "tunnel_port": remote.TUNNEL_PORT, "cloudflared": remote.cloudflared_running(),
+                "probe": db.get_setting(c, "remote.probe") or "", "probe_at": db.get_setting(c, "remote.probe_at") or "",
+                "version": __version__, "latest": latest, "newer": bool(latest) and updater.newer(latest, __version__),
+                "checked_at": db.get_setting(c, "update.checked_at") or "", "error": db.get_setting(c, "update.error") or "",
+                "auto": (db.get_setting(c, "update.auto", "1") or "1") == "1",
+                "hour": db.get_setting(c, "update.hour", "4") or "4", "last": rec,
+                "updating": _fresh(db.get_setting(c, "update.started_at"), 300)}
+
+    @app.route("/remote", methods=["GET", "POST"])
+    def remote_page():
+        c = g.conn
+        if request.method == "POST":
+            action = form("action")
+            if action in ("password", "off", "domain") and g.get("remote"):
+                flash("원격 접속 비밀번호·주소는 PC 앞(이 PC의 관리 화면)에서만 바꿀 수 있습니다.", "error")
+            elif action == "password":
+                error = remote.set_password(c, request.form.get("password", ""), request.form.get("password2", ""))
+                flash(error or "비밀번호를 정했습니다. 이제 밖에서 그 주소로 열면 이 비밀번호로 로그인합니다.",
+                      "error" if error else "message")
+            elif action == "off":
+                remote.turn_off(c)
+                flash("원격 접속을 껐습니다. 밖에서 그 주소로 열어도 아무것도 보이지 않습니다.")
+            elif action == "domain":
+                value = form("domain").lower()
+                if not re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", value):
+                    flash("주소는 radio.haetsallab.com 처럼 적어 주세요.", "error")
+                else:
+                    db.set_setting(c, "remote.domain", value)
+                    flash(f"원격 주소를 {value} 로 정했습니다.")
+            elif action == "probe":
+                state, text = remote.probe(remote.domain(c))
+                db.set_setting(c, "remote.probe", text)
+                db.set_setting(c, "remote.probe_at", db.now())
+                flash(text, "message" if state in ("ok", "access") else "warn")
+            elif action == "check":
+                try:
+                    latest = updater.fetch_latest(c)
+                    flash(f"새 버전 {latest} 이(가) 있습니다." if updater.newer(latest, __version__)
+                          else f"최신 버전입니다 ({__version__}).")
+                except updater.UpdateError as e:
+                    flash(str(e), "error")
+            elif action == "auto":
+                db.set_setting(c, "update.auto", "1" if request.form.get("auto") else "0")
+                hour = form("hour")
+                if hour.isdigit() and 0 <= int(hour) <= 23:
+                    db.set_setting(c, "update.hour", str(int(hour)))
+                flash("자동 업데이트 설정을 저장했습니다.")
+            elif action == "update":
+                if _fresh(db.get_setting(c, "update.started_at"), 300):
+                    flash("업데이트가 이미 진행 중입니다.", "warn")
+                else:
+                    db.set_setting(c, "update.started_at", db.now())
+                    app.config["START_UPDATE"]()
+                    flash("업데이트를 시작했습니다. 받아서 설치한 뒤 관리 화면이 1~2분 안에 다시 켜집니다 "
+                          "(청취는 이어서). 잠시 뒤 이 화면을 새로 고침하세요.")
+            return redirect(url_for("remote_page"))
+        return render_template("remote.html", r=remote_view())
 
     @app.post("/notices/seen")
     def notices_seen():
@@ -1617,6 +1717,23 @@ def create_app(data_dir: str | None = None) -> Flask:
         return render_template("mock_view.html", post=one("SELECT * FROM mock_posts WHERE id = ?", mid))
 
     return app
+
+
+def start_update_thread() -> None:
+    """업데이트를 뒤에서 받고 설치한 뒤 관리 화면을 다시 켠다 (실패하면 기록만 남기고 그대로 돈다)."""
+    import threading
+
+    def run():
+        conn = db.connect()
+        try:
+            updater.update_now(conn, PROJECT_ROOT)
+        except Exception as e:
+            db.set_setting(conn, "update.error", f"{type(e).__name__}: {str(e)[:150]}")
+            db.set_setting(conn, "update.started_at", "")
+            db.log(conn, "update", f"업데이트 못 함: {str(e)[:150]}")
+        finally:
+            conn.close()
+    threading.Thread(target=run, daemon=True).start()
 
 
 def session_key() -> str:

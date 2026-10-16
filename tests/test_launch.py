@@ -131,6 +131,7 @@ def test_server_crash_is_logged_and_exits_for_restart(data_dir, monkeypatch):
     monkeypatch.setattr(launcher, "disable_console_quick_edit", lambda: None)
     monkeypatch.setattr(launcher, "record_native_crashes", lambda: None)
     monkeypatch.setattr(launcher, "watch_runner", lambda: None)                 # 시험 중엔 감시 스레드를 띄우지 않음
+    monkeypatch.setattr(launcher, "watch_updates", lambda: None)
     monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)            # 시험 프로세스의 Ctrl+C 처리는 그대로
 
     def boom(*a, **k):

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}원격 접속·업데이트 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>원격 접속·업데이트</h1>
+
+<div class="panel">
+  <h2>밖에서 관리 화면 보기 — <code>{{ r.domain }}</code></h2>
+  <p class="muted">휴대폰·다른 PC에서 <b>https://{{ r.domain }}</b> 을 열면 이 PC의 관리 화면이 열립니다 (Cloudflare 터널).
+    이 PC가 켜져 있고 이 도우미가 돌고 있어야 합니다. 밖에서 열 때는 아래 비밀번호로 로그인합니다.</p>
+  <table>
+    <tr><th>원격 접속</th><td>{% if r.enabled %}<span class="badge ok">켜짐</span> 비밀번호가 정해져 있음
+      {% else %}<span class="badge warn">꺼짐</span> 비밀번호를 정하면 켜집니다{% endif %}</td></tr>
+    <tr><th>터널 프로그램 (cloudflared)</th><td>
+      {% if r.cloudflared %}<span class="badge ok">이 PC에서 실행 중</span>
+      {% elif r.cloudflared is none %}<span class="muted">확인할 수 없음 (윈도우가 아님)</span>
+      {% else %}<span class="badge bad">실행 중이 아님</span> 아래 '처음 한 번 설정'을 하세요{% endif %}</td></tr>
+    <tr><th>관리 화면 번호</th><td>{{ r.port }}
+      {% if r.port != r.tunnel_port %}<span class="badge bad">터널은 {{ r.tunnel_port }}번을 가리킵니다</span>
+        — 예전 검은 창이 {{ r.tunnel_port }}번을 쓰고 있을 수 있습니다. 다른 검은 창을 닫고 다시 켜세요.{% endif %}</td></tr>
+    <tr><th>밖에서 연결</th><td>{{ r.probe or '아직 확인 안 함' }} <span class="muted">{{ r.probe_at }}</span></td></tr>
+  </table>
+  <form method="post" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button name="action" value="probe" class="secondary">밖에서 연결되는지 확인</button></form>
+
+  {% if not is_remote %}
+  <form method="post" class="actions" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="password" name="password" placeholder="새 비밀번호 (8자 이상)" autocomplete="new-password" style="max-width:220px">
+    <input type="password" name="password2" placeholder="한 번 더" autocomplete="new-password" style="max-width:220px">
+    <button name="action" value="password">{{ '비밀번호 바꾸기' if r.enabled else '비밀번호 정하고 켜기' }}</button>
+    {% if r.enabled %}<button name="action" value="off" class="secondary">원격 접속 끄기</button>{% endif %}
+  </form>
+  <p class="muted">비밀번호는 원본을 저장하지 않고 암호화한 값(해시)만 이 PC 데이터 폴더에 둡니다. 5번 틀리면 15분 잠깁니다.
+    비밀번호를 바꾸면 밖에서 로그인해 둔 화면은 모두 로그아웃됩니다. 비밀번호는 PC 앞에서만 정하고 바꿀 수 있습니다.</p>
+  <details>
+    <summary><b>처음 한 번 설정</b> (Cloudflare 에서 5분)</summary>
+    <ol>
+      <li>Cloudflare 대시보드 → <b>Zero Trust</b> → <b>Networks → Tunnels</b> → <b>Create a tunnel</b> → Cloudflared → 이름 <code>radio-helper</code>.</li>
+      <li>환경을 <b>Windows</b> 로 고르면 나오는 명령(<code>cloudflared.exe service install …</code>)을 이 PC의
+        <b>관리자 명령 프롬프트</b>에 그대로 붙여 넣습니다 (cloudflared 설치 파일도 그 화면에서 받음).
+        이 명령 안의 긴 토큰은 비밀번호와 같으니 채팅·메신저·GitHub 에 올리지 마세요. PC를 켜면 터널이 저절로 켜집니다.</li>
+      <li><b>Public Hostname</b>: Subdomain <code>radio</code>, Domain <code>haetsallab.com</code>,
+        Service <b>HTTP</b> · <code>localhost:{{ r.tunnel_port }}</code> 로 저장합니다.</li>
+      <li>(권장) Zero Trust → <b>Access → Applications → Add → Self-hosted</b> 에서 <code>{{ r.domain }}</code> 를 넣고
+        정책을 <i>Emails — 내 이메일</i> 로 정하면, 이 도우미 비밀번호 앞에 Cloudflare 가 이메일 인증을 한 번 더 받습니다.</li>
+      <li>위 <b>밖에서 연결되는지 확인</b>을 눌러 '연결됨'이 나오면 끝입니다.</li>
+    </ol>
+  </details>
+  {% else %}
+  <p class="muted">밖에서 열고 있습니다. 비밀번호·주소는 PC 앞에서만 바꿀 수 있습니다.</p>
+  {% endif %}
+  {% if not is_remote %}
+  <form method="post" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="muted">원격 주소</label><input type="text" name="domain" value="{{ r.domain }}" style="max-width:260px">
+    <button name="action" value="domain" class="secondary">주소 저장</button></form>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>업데이트</h2>
+  <table>
+    <tr><th>지금 버전</th><td>{{ r.version }}</td></tr>
+    <tr><th>새 버전</th><td>{% if r.newer %}<span class="badge warn">{{ r.latest }} 있음</span>
+      {% elif r.latest %}최신입니다 ({{ r.latest }}){% else %}아직 확인 안 함{% endif %}
+      <span class="muted">{{ ('· 확인 ' ~ r.checked_at) if r.checked_at }}</span>
+      {% if r.error %}<br><span class="badge bad">확인 오류</span> <span class="muted">{{ r.error }}</span>{% endif %}</td></tr>
+    {% if r.last %}<tr><th>최근 업데이트</th><td>{{ r.last.get('from') }} → {{ r.last.get('to') }} · {{ r.last.get('at') }}
+      {% if r.last.get('rolled_back') %}<span class="badge bad">켜자마자 꺼져서 되돌림</span>
+      {% elif r.last.get('confirmed') %}<span class="badge ok">잘 돌고 있음</span>{% endif %}</td></tr>{% endif %}
+  </table>
+  <form method="post" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button name="action" value="check" class="secondary">새 버전 확인</button>
+    {% if r.updating %}<span class="badge warn">업데이트 중 — 1~2분 뒤 새로 고침</span>
+    {% elif r.newer %}<button name="action" value="update">지금 업데이트 ({{ r.latest }})</button>{% endif %}
+  </form>
+  <form method="post" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="inline"><input type="checkbox" name="auto" value="1" {{ 'checked' if r.auto }}> 새 버전이 나오면 자동으로 업데이트</label>
+    <select name="hour" style="max-width:110px">{% for h in range(24) %}<option value="{{ h }}" {{ 'selected' if h|string == r.hour|string }}>{{ h }}시</option>{% endfor %}</select>
+    <button name="action" value="auto" class="secondary">저장</button>
+  </form>
+  <p class="muted">새 버전은 GitHub 에서 받고(6시간마다 확인), 프로그램 파일만 바꿉니다 — 경험·사연·설정(데이터 폴더)은 그대로입니다.
+    설치가 끝나면 검은 창이 패키지를 확인하고 다시 켜며, 듣던 방송은 묻지 않고 이어서 듣습니다 (1~2분 끊김).
+    새 버전이 켜지자마자 계속 꺼지면 예전 버전으로 저절로 되돌리고 그 버전은 다시 받지 않습니다.
+    자동 업데이트는 <code>start_windows.bat</code> 으로 켰을 때만 다시 켜집니다.</p>
+</div>
+{% endblock %}

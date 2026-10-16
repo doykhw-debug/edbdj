@@ -17,10 +17,16 @@
 </form>
 
 <div class="panel">
+  <h2>원격 접속·업데이트</h2>
+  <p>밖에서(휴대폰 등) <b>radio.haetsallab.com</b> 으로 이 관리 화면 열기, 새 버전 자동 업데이트 —
+    <a class="btn secondary" href="{{ url_for('remote_page') }}">원격 접속·업데이트 설정 →</a></p>
+</div>
+
+<div class="panel">
   <h2>저장 위치</h2>
   <p>데이터: <code>{{ data_dir }}</code> <span class="muted">— 프로그램 폴더 밖에 있어서 업데이트 파일을 새 폴더에 풀어도 경험·사연이 그대로 남습니다.
     백업은 이 폴더의 <code>radio_helper.sqlite3</code> 를 복사하면 됩니다.</span></p>
-  <p class="muted">비밀번호·쿠키·세션 정보는 저장하지 않습니다. 이 폴더를 GitHub나 채팅에 올리지 마세요(개인 경험이 들어 있습니다).</p>
+  <p class="muted">원격 접속 비밀번호는 원본이 아닌 암호화한 값(해시)만 둡니다. 이 폴더를 GitHub나 채팅에 올리지 마세요(개인 경험이 들어 있습니다).</p>
 </div>
 
 <div class="panel">

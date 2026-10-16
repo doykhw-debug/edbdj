@@ -13,10 +13,11 @@ import traceback
 import urllib.error
 import urllib.request
 import webbrowser
+from datetime import datetime
 
 from werkzeug.serving import run_simple
 
-from . import db
+from . import __version__, db
 from .app import create_app, ensure_runner, start_runner
 from .quizbot import config as qconfig
 
@@ -66,6 +67,34 @@ def ask_listen(conn, was_listening: bool) -> None:
         db.set_setting(conn, "live.active", "0")   # 고를 때까지 듣지도 보내지도 않는다 (채팅 앱도 켜지 않음)
     db.log(conn, "quizbot", f"프로그램 시작 — 무엇으로 들을지 묻는 중 (지난번: {last})")
     print(f" 무엇으로 들을지 관리 화면 첫 화면에서 골라 주세요 (지난번: {last}). 고르면 바로 청취를 시작합니다.")
+
+
+def watch_updates(interval: float = 600, clock=datetime.now) -> None:
+    """새 버전 확인(6시간마다)과 자동 업데이트(정한 시각, 기본 새벽 4시). 새 버전이 2분 넘게 잘 돌면 '확인됨'으로 표시."""
+    from . import updater
+    from .app import start_update_thread
+
+    time.sleep(updater.CONFIRM_AFTER_SECONDS)
+    updater.confirm_running(__version__)
+    while True:
+        try:
+            conn = db.connect()
+            try:
+                now = clock()
+                if updater.due_check(conn, now):
+                    try:
+                        updater.fetch_latest(conn)
+                    except updater.UpdateError:
+                        pass
+                if updater.should_auto_install(conn, now) and not db.get_setting(conn, "update.started_at"):
+                    db.set_setting(conn, "update.started_at", db.now())
+                    server_log(f"자동 업데이트 시작 ({__version__} → {db.get_setting(conn, 'update.latest')})")
+                    start_update_thread()
+            finally:
+                conn.close()
+        except Exception as e:   # 확인이 멈추지 않게
+            server_log(f"업데이트 확인 오류: {type(e).__name__}: {e}")
+        time.sleep(interval)
 
 
 def watch_runner(interval: float = WATCHDOG_SECONDS) -> None:
@@ -221,6 +250,7 @@ def main() -> None:
         sys.exit(EXIT_NO_PORT)
 
     app = create_app()
+    app.config["SERVER_PORT"] = port   # 원격 접속 화면: 터널이 가리키는 번호(5000)와 같은지 보여 줌
     url = f"http://127.0.0.1:{port}/"
     print("=" * 60)
     print(" 라디오 참여 도우미가 실행 중입니다.")
@@ -235,7 +265,12 @@ def main() -> None:
     server_log(f"시작 — {url}" + (" (비정상 종료 뒤 자동으로 다시 켬)" if args.restarted else ""))
     conn = db.connect()
     try:
-        if args.restarted:
+        updating = bool(db.get_setting(conn, "update.started_at"))   # 업데이트를 설치하고 다시 켠 것
+        db.set_setting(conn, "update.started_at", "")
+        if args.restarted and updating:
+            print(f"[업데이트] 새 버전 {__version__}(으)로 다시 켰습니다. 청취는 하던 대로 이어서 합니다.")
+            db.log(conn, "update", f"새 버전 {__version__}(으)로 다시 켬")
+        elif args.restarted:
             print("[재시작] 관리 화면이 예기치 않게 꺼져서 자동으로 다시 켰습니다. 열려 있던 화면은 그대로 쓰면 됩니다.")
             db.log(conn, "quizbot", "관리 화면이 예기치 않게 꺼져 자동으로 다시 켰습니다 (원인 기록: 데이터 폴더 logs/server.log)")
         listening = qconfig.get(conn, "live.active") == "1"
@@ -256,6 +291,7 @@ def main() -> None:
     # 서버가 실제로 뜬 뒤에 브라우저를 연다 (먼저 열면 '연결할 수 없음' 화면이 뜬다)
     threading.Thread(target=self_check, args=(url, not args.no_browser), daemon=True).start()
     threading.Thread(target=watch_runner, daemon=True).start()
+    threading.Thread(target=watch_updates, daemon=True).start()
     signal.signal(signal.SIGINT, ctrl_c_handler())
     # 개발 서버 시작 안내(빨간 WARNING)와 접속 기록은 오류처럼 보여 감춘다. 오류·경고는 그대로 보인다.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
