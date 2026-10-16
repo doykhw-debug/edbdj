@@ -586,6 +586,21 @@ def create_app(data_dir: str | None = None) -> Flask:
         return render_template("experiences.html", rows=rows, only=only, pending_events=pending_events,
                                pending_library=pending_library, enrich_left=ev["left"], enrich_status=ev)
 
+    @app.post("/experiences/reset")
+    def experiences_reset():
+        """사연 전체 초기화 (보관함 + 실제 경험 + 원고). '초기화'를 직접 적어야 하고, 먼저 데이터 파일을 백업한다."""
+        from . import people as people_mod
+
+        if form("confirm") != people_mod.RESET_WORD:
+            flash(f"지우지 않았습니다. 확인 칸에 '{people_mod.RESET_WORD}'라고 적어야 지웁니다.", "error")
+            return redirect(url_for("experiences") + "#reset")
+        r = people_mod.reset_stories(g.conn, include_history=bool(request.form.get("history")))
+        flash(f"사연을 초기화했습니다: 보관함 {r['library']}편 · 실제 경험 {r['experiences']}건 · 원고 {r['drafts']}건"
+              + (f" · 보낸 기록 {r['history']}건 · 증거 사진 {r['photos']}장" if request.form.get("history") else "")
+              + f". 지우기 전 데이터는 데이터 폴더 backups\\{Path(r['backup']).name} 에 백업해 두었습니다."
+              + (f" 게시판 제출 기록과 이어진 경험 {r['kept']}건은 기록을 지키려고 남겼습니다." if r["kept"] else ""))
+        return redirect(url_for("experiences"))
+
     @app.get("/experiences/export")
     def experiences_export():
         """정리된 사연 목록 파일 받기: 읽기용(.txt) / 다시 가져오기용(.jsonl). all=1 이면 확인 전 것도."""

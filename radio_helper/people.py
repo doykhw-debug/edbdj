@@ -454,6 +454,52 @@ def import_library(conn: sqlite3.Connection, rows: list[dict]) -> tuple[int, int
     return added, updated
 
 
+# ── 사연 초기화 ──────────────────────────────────────────────────────
+RESET_WORD = "초기화"
+
+
+def reset_stories(conn: sqlite3.Connection, include_history: bool = False) -> dict:
+    """사연 보관함과 실제 경험(고치고 승인한 사연)·원고를 모두 지운다. 먼저 데이터 파일을 통째로 백업한다.
+    인물 관계도·내 정보·고릴라 위치·채널·코너·설정은 그대로 둔다.
+    include_history=False 이면 보낸 사연·게시판 제출 기록과 증거 사진은 남긴다 (게시판 제출과 이어진 경험·원고는
+    기록이 깨지지 않게 남김). True 이면 그 기록과 증거 사진까지 지운다."""
+    from . import evidence
+
+    backup = db.backup_copy(conn, "before_story_reset")
+    out = {"backup": str(backup), "photos": 0, "history": 0}
+    if include_history:
+        for (eid,) in conn.execute("SELECT id FROM evidence WHERE item_table IN ('story_posts', 'submissions')").fetchall():
+            path = evidence.file_of(conn, eid)
+            if path is not None:
+                path.unlink(missing_ok=True)
+                out["photos"] += 1
+        conn.execute("DELETE FROM evidence WHERE item_table IN ('story_posts', 'submissions')")
+        out["history"] = conn.execute("SELECT COUNT(*) FROM story_posts").fetchone()[0] + \
+            conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
+        conn.execute("DELETE FROM submissions")
+        conn.execute("DELETE FROM story_posts")
+    keep_exp = {r[0] for r in conn.execute("SELECT experience_id FROM submissions")}
+    keep_drafts = {r[0] for r in conn.execute("SELECT draft_id FROM submissions WHERE draft_id IS NOT NULL")}
+    def except_(column: str, ids: set) -> tuple[str, tuple]:
+        """'남길 것 빼고' 조건. 남길 것이 없으면 조건 없음 (NOT IN () 은 쓸 수 없고 NOT IN (NULL) 은 아무것도 안 고른다)."""
+        return (f" WHERE {column} NOT IN ({','.join('?' * len(ids))})", tuple(ids)) if ids else ("", ())
+
+    where, args = except_("experience_id", keep_exp)
+    conn.execute("UPDATE story_posts SET experience_id = NULL" + (where or " WHERE 1"), args)
+    where, args = except_("id", keep_drafts)
+    out["drafts"] = conn.execute("DELETE FROM drafts" + where, args).rowcount
+    where, args = except_("id", keep_exp)
+    out["experiences"] = conn.execute("DELETE FROM experiences" + where, args).rowcount
+    out["kept"] = len(keep_exp)
+    conn.execute("UPDATE experiences SET from_library_id = NULL")
+    out["library"] = conn.execute("DELETE FROM story_library").rowcount
+    conn.commit()
+    db.log(conn, "people", f"사연 초기화: 보관함 {out['library']}편 · 실제 경험 {out['experiences']}건 · 원고 {out['drafts']}건 지움"
+                           + (f" · 보낸 기록 {out['history']}건·증거 사진 {out['photos']}장도 지움" if include_history else "")
+                           + f" (백업 {backup.name})")
+    return out
+
+
 # ── 사연 목록 내보내기 ────────────────────────────────────────────────
 def export_rows(conn: sqlite3.Connection, include_unconfirmed: bool = False) -> list[dict]:
     """정리된 사연 목록 (실제 경험). 인물은 호칭으로만 적는다 (실명 대신). 보관함에서 온 것은 그 번호를 쓴다."""

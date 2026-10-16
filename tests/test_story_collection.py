@@ -209,3 +209,68 @@ def test_export_story_list(client, conn):
     # 다시 가져오면 보관함에 '실제' 사연으로 (다른 PC·백업 복원용)
     back = people.parse_story_log(data)
     assert {x["kind"] for x in back} == {"real"} and back[1]["person_label"] == "와이프"
+
+
+# ── 사연 전체 초기화 ──────────────────────────────────────────────────
+def test_reset_stories_keeps_people_and_settings(client, conn):
+    from radio_helper.quizbot import config
+
+    load(conn)
+    people.import_person_records(conn, people.parse_person_records(collection()))
+    people.import_library(conn, people.parse_story_log(collection()))
+    token = csrf(client, "/library")
+    client.post("/library/to-experiences", data={"csrf_token": token})
+    conn.execute("UPDATE experiences SET user_confirmed = 1")
+    eids = [r[0] for r in conn.execute("SELECT id FROM experiences ORDER BY id")]
+    corner = conn.execute("SELECT id FROM corners LIMIT 1").fetchone()[0]
+    # 보낸 사연 기록 1건, 게시판 제출 1건(원고 포함), 그냥 원고 1건
+    conn.execute("INSERT INTO story_posts (program, broadcast_date, topic, experience_id, message, status, created_at, "
+                 "updated_at) VALUES ('p', '2026-10-16', '주제', ?, '보낸 글', 'entered', ?, ?)", (eids[0], db.now(), db.now()))
+    did = conn.execute("INSERT INTO drafts (experience_id, corner_id, title, body, created_at, updated_at) "
+                       "VALUES (?, ?, '제목', '본문', ?, ?)", (eids[1], corner, db.now(), db.now())).lastrowid
+    conn.execute("INSERT INTO submissions (draft_id, experience_id, corner_id, title, body, post_status, created_at, "
+                 "updated_at) VALUES (?, ?, ?, '제목', '본문', 'posted', ?, ?)", (did, eids[1], corner, db.now(), db.now()))
+    conn.execute("INSERT INTO drafts (experience_id, corner_id, title, body, created_at, updated_at) "
+                 "VALUES (?, ?, '안 보낸 원고', '본문', ?, ?)", (eids[2], corner, db.now(), db.now()))
+    db.set_setting(conn, "gorilla.input_point", "650,617")
+    conn.commit()
+    people_before = conn.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+    assert "사연 전체 초기화" in client.get("/experiences").get_data(as_text=True)
+
+    r = client.post("/experiences/reset", data={"csrf_token": token, "confirm": "아니"}, follow_redirects=True)
+    assert "지우지 않았습니다" in r.get_data(as_text=True)
+    n_lib = conn.execute("SELECT COUNT(*) FROM story_library").fetchone()[0]
+    assert n_lib == 7 and len(eids) == 7                                                  # 예시 3편 + 모음 4편
+
+    r = client.post("/experiences/reset", data={"csrf_token": token, "confirm": "초기화"}, follow_redirects=True)
+    page = r.get_data(as_text=True)
+    assert f"사연을 초기화했습니다: 보관함 {n_lib}편 · 실제 경험 {len(eids) - 1}건 · 원고 1건" in page and "backups" in page
+    assert "게시판 제출 기록과 이어진 경험 1건은" in page
+    assert conn.execute("SELECT COUNT(*) FROM story_library").fetchone()[0] == 0
+    assert [r[0] for r in conn.execute("SELECT id FROM experiences")] == [eids[1]]      # 게시판 제출과 이어진 것만 남김
+    assert conn.execute("SELECT COUNT(*) FROM submissions").fetchone()[0] == 1           # 기록은 그대로
+    assert conn.execute("SELECT experience_id, message FROM story_posts").fetchone()[:] == (None, "보낸 글")
+    assert conn.execute("SELECT COUNT(*) FROM people").fetchone()[0] == people_before    # 인물·설정은 그대로
+    assert config.get(conn, "gorilla.input_point") == "650,617"
+    backups = list((db.data_dir() / "backups").glob("before_story_reset_*.sqlite3"))
+    assert len(backups) == 1
+    import sqlite3
+    old = sqlite3.connect(str(backups[0]))
+    assert old.execute("SELECT COUNT(*) FROM story_library").fetchone()[0] == n_lib         # 백업에는 지우기 전 그대로
+    old.close()
+
+    # 기록까지 지우기
+    client.post("/experiences/reset", data={"csrf_token": token, "confirm": "초기화", "history": "1"})
+    for table in ("experiences", "drafts", "submissions", "story_posts", "story_library"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
+    assert conn.execute("SELECT COUNT(*) FROM people").fetchone()[0] == people_before
+
+
+def test_reset_with_no_board_submissions_deletes_everything(client, conn):
+    """게시판 제출 기록이 하나도 없을 때도 다 지운다 (NOT IN (NULL) 은 아무것도 지우지 않던 실수 방지)."""
+    load(conn)
+    people.library_to_experiences(conn)
+    assert conn.execute("SELECT COUNT(*) FROM experiences").fetchone()[0] == 3
+    r = people.reset_stories(conn)
+    assert (r["library"], r["experiences"], r["kept"]) == (3, 3, 0)
+    assert conn.execute("SELECT COUNT(*) FROM experiences").fetchone()[0] == 0

@@ -2,7 +2,7 @@
 {% block title %}사연 보관함 · 라디오 참여 도우미{% endblock %}
 {% block content %}
 <h1>사연 보관함 <span class="muted">가상 {{ counts.fiction }}편 · 실제 {{ counts.real }}편</span></h1>
-<p><a href="{{ url_for('people_page') }}">← 인물</a></p>
+<p><a href="{{ url_for('people_page') }}">← 인물</a> · <a href="{{ url_for('experiences') }}#reset">사연 전체 초기화</a></p>
 <div class="flash warn">원본 사연을 각색해 인물에게 붙인 <b>가상 사연</b>은 그대로는 보내지 않고, 사연 초안(AI)의 재료로도 쓰지 않습니다.
   인물에게 실제로 비슷한 일이 있었다면 사연을 열어 <b>실제 있었던 일로 옮기기</b> → 실제와 다르게 적힌 부분을 고치고 '실제로 있었던 일'을 체크하면
   <a href="{{ url_for('experiences') }}">실제 경험</a>으로 보냅니다 (같은 방송국에는 한 번만).</div>

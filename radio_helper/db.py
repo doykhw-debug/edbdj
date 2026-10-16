@@ -544,6 +544,20 @@ def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.commit()
 
 
+def backup_copy(conn: sqlite3.Connection, label: str) -> Path:
+    """데이터 파일을 통째로 복사해 둔다 (데이터 폴더 backups). 쓰는 중이어도 깨지지 않게 SQLite 백업으로 복사."""
+    folder = data_dir() / "backups"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{label}_{datetime.now():%Y%m%d_%H%M%S}.sqlite3"
+    out = sqlite3.connect(str(target))
+    try:
+        conn.commit()
+        conn.backup(out)
+    finally:
+        out.close()
+    return target
+
+
 def is_stopped(conn: sqlite3.Connection) -> bool:
     return get_setting(conn, "global_stop", "0") == "1"
 
