@@ -37,10 +37,15 @@
 
 ## 설치·실행 (Windows)
 
-1. Python 3.11 이상이 필요합니다. 없으면 2번의 `start_windows.bat` 이 (0.38) 흔한 설치 폴더에서 찾아보고, 없으면 윈도우 기본
-   설치 도구(winget)로 **Python 3.11 을 자동으로 설치**합니다 (몇 분, 윈도우가 물으면 허용). winget 도 없으면 python.org 내려받기 화면을 열고
-   멈추니, [Python 3.11 이상](https://www.python.org/downloads/)을 설치할 때 첫 화면에서 **"Add python.exe to PATH"** 를 체크한 뒤 다시 실행하세요.
+1. Python **3.12 또는 3.11** 이 필요합니다 (3.13·3.14 도 됨). 가장 새 Python(3.15)에는 음성 인식 부품(faster-whisper 가 쓰는
+   ctranslate2·onnxruntime)이 아직 없어 퀴즈 자동이 설치되지 않습니다. 2번의 `start_windows.bat` 이 (0.40) 3.12/3.11 을 먼저 찾고,
+   없으면 윈도우 기본 설치 도구(winget)로 **Python 3.11 을 자동으로 설치**합니다 (몇 분, 윈도우가 물으면 허용). 이미 3.15 로 만든
+   `.venv` 가 있으면 3.12/3.11 로 다시 만듭니다. winget 도 없으면 python.org 내려받기 화면을 열고 멈추니,
+   ["Looking for a specific release?"](https://www.python.org/downloads/) 에서 3.12 를 골라 설치할 때 첫 화면에서
+   **"Add python.exe to PATH"** 를 체크한 뒤 다시 실행하세요.
    ("Python was not found … Microsoft Store" 는 윈도우의 가짜 바로 가기가 띄우는 안내라 무시해도 됩니다.)
+   - 패키지는 관리 화면(Flask)과 퀴즈 자동을 따로 설치합니다. 퀴즈 부품 하나가 실패해도 관리 화면은 켜지고,
+     관리 화면 패키지가 없으면 끝없이 다시 켜지 않고 안내하고 멈춥니다.
 2. 이 폴더의 **`start_windows.bat`** 을 더블클릭합니다.
    - 처음 한 번은 필요한 패키지(음성 인식 포함)를 설치하느라 몇 분 걸립니다.
    - 브라우저에 관리 화면(`http://127.0.0.1:5000`)이 열립니다. 이 PC에서만 접속됩니다.

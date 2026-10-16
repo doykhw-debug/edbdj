@@ -315,9 +315,9 @@ def test_windows_launcher_handles_updates():
     assert ":updated" in text and "goto setup" in text and 'del /q "update_restart.flag"' in text
     # Python 이 없으면 끝없이 되풀이하지 않고 찾기 → winget 으로 설치 → 안내하고 멈춤
     assert 'if not exist ".venv\\Scripts\\python.exe" goto nopython' in text
-    assert "call :findpython" in text and "call :installpython" in text and "Python.Python.3.11" in text
+    assert "call :findsupported" in text and "call :installpython" in text and "Python.Python.3.11" in text
     assert ":nopython" in text and "python.org/downloads" in text
-    assert text.index("\r\n:end\r\n") < text.index("\r\n:findpython\r\n") and "pause\r\nexit /b" in text   # 함수로 흘러가지 않음
+    assert text.index("\r\n:end\r\n") < text.index("\r\n:findsupported\r\n") and "pause\r\nexit /b" in text   # 함수로 흘러가지 않음
     assert 'if exist "start_windows.new.bat"' in text and '--after-update' in text
     assert "rollback_update.py" in text and "if defined RH_UPDATED if %RH_TRIES% GEQ 3 goto rollback" in text
     assert json.loads(json.dumps(updater.SKIP_TOP, default=list))                    # .venv·data 는 건드리지 않음

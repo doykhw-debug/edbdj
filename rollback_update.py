@@ -11,6 +11,9 @@ import shutil
 import sys
 from pathlib import Path
 
+# start_windows.bat 은 되돌리지 않으므로(새 것이 이미 자리를 바꿨음) 그 배치 파일이 부르는 파일은 지우지 않는다
+KEEP = {"start_windows.bat", "setup_packages.py", "rollback_update.py"}
+
 
 def data_dir() -> Path:
     env = os.environ.get("RADIO_HELPER_DATA_DIR")
@@ -43,6 +46,8 @@ def main(root=None) -> int:
             shutil.copy2(src, root / rel)
             restored += 1
     for rel in rec.get("created", []):     # 새 버전에서 새로 생긴 파일은 지운다
+        if rel in KEEP:
+            continue
         try:
             (root / rel).unlink()
         except OSError:
