@@ -10,10 +10,10 @@
 <body>
 <main style="max-width:420px">
   <h1>라디오 참여 도우미</h1>
-  <form method="post" class="panel">
+  <form method="post" action="{{ url_for('remote_login') }}" class="panel">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="next" value="{{ next }}">
-    <p class="muted">밖에서 여는 관리 화면입니다. PC에서 정한 원격 접속 비밀번호를 넣으세요.</p>
+    <p class="muted">{% if SERVER_MODE %}관리 화면입니다. 서버에서 정한 로그인 비밀번호를 넣으세요.{% else %}밖에서 여는 관리 화면입니다. PC에서 정한 원격 접속 비밀번호를 넣으세요.{% endif %}</p>
     {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
     <label>비밀번호</label>
     <input type="password" name="password" autocomplete="current-password" autofocus required>

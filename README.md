@@ -447,12 +447,18 @@ MBC·KBS·SBS 어느 코너든 **코너 화면 주소**만 넣으면, 정한 시
 | 데이터 | `%LOCALAPPDATA%\RadioHelper` | `/opt/radio/data` (git 에 안 올라감) |
 | 업데이트 | 자동 업데이트 (공개 저장소) | `ssh haetsal 'bash /opt/radio/deploy.sh'` |
 
+- **준비 (한 번)**: GitHub 에서 비공개 저장소 `doykhw-debug/haetsal-radio` 를 만들고(README 없이) 코드를 올려 둡니다.
+  서버 키는 `C:\Users\khw\.ssh\haetsal-server.key` (ubuntu@161.33.169.81). `ssh haetsal` 설정이 없으면 배포 스크립트가
+  `%USERPROFILE%\.ssh\config` 에 추가하고(원래 파일은 `config.bak_radio`), 키 파일 권한이 넓어 거부되면 나만 읽게 바꿉니다.
 - **처음 배포 (PC 에서 한 번)**: 프로그램 폴더의 `deploy_to_server.bat` 더블클릭.
   1. `ssh haetsal` 연결 확인 → 2. PC 데이터 전체 백업(`%USERPROFILE%\RadioHelper_backups`) + 서버로 옮길 묶음
      (DB·증거 사진만 — 브라우저 로그인 쿠키·세션 키는 빼고) → 3. `.env.server`(API 키는 이 PC 에 저장된 키로 채움, 화면에 안 나옴)·묶음을
      `scp` 로 보냄 → 4. 서버 설치 `deploy/server_setup.sh`: apt 패키지, GitHub 비공개 저장소용 **읽기 전용 배포 키**
      (처음엔 브라우저가 열리면 키를 붙여 넣기), `/opt/radio` 에 clone, `.venv` + `requirements-server.txt`, 헤드리스 Chromium,
      데이터 풀기, `radio.service` 등록·시작, `curl -I http://127.0.0.1:5002` 확인 → 5. 로그인 비밀번호 → 6. 밖에서 열리는지 확인.
+- **로그인 없이는 아무것도 안 보입니다**: 서버는 127.0.0.1:5002 에만 열고(밖에서 직접 접속 불가), 모든 요청에 비밀번호 로그인을
+  받습니다. 첫 주소(`/`)는 그 자리에서 로그인 화면을 보여 줘 `curl -I http://127.0.0.1:5002` 가 **200** 이고, 다른 화면은 로그인으로
+  돌려보냅니다(302). 비밀번호를 정하기 전에는 아무도 못 엽니다(403). 배포 마지막 단계가 서버 안에서 이 200 과 127.0.0.1 바인딩을 확인합니다.
 - **방화벽은 열지 않습니다.** 관리 화면은 127.0.0.1 에만 열리고 밖에서는 Cloudflare 터널로만 들어옵니다.
   Cloudflare Zero Trust → Tunnels → **서버의 터널** → Public Hostname `radio.haetsallab.com` → `HTTP` · `127.0.0.1:5002`
   (예전에 PC 터널에 같은 주소를 넣었다면 그쪽에서는 지웁니다 — 한 주소는 한 터널로만 갑니다).

@@ -134,7 +134,15 @@ main() {
 
   step "확인"
   echo "--- curl -I http://127.0.0.1:$port"
-  curl -sS -I -m 5 "http://127.0.0.1:$port" | sed -n '1,4p' || true
+  local first
+  first="$(curl -sS -I -m 5 "http://127.0.0.1:$port" | head -n 1 || true)"
+  echo "  $first"
+  case "$first" in
+    *" 200"*) echo "  (로그인 화면 — 비밀번호를 넣어야 관리 화면이 열립니다)" ;;
+    *" 403"*) echo "  (아직 로그인 비밀번호가 없어 아무도 못 엽니다 — 다음 단계에서 정하면 200)" ;;
+  esac
+  echo "--- 열린 주소 (127.0.0.1 에만 열려 있어야 함)"
+  ss -ltn 2>/dev/null | grep ":$port " || echo "  확인 못 함"
   echo "--- 서비스: $(systemctl is-active "$SERVICE"), 부팅 시 자동 실행: $(systemctl is-enabled "$SERVICE")"
   .venv/bin/python -m radio_helper.remote status || true
   if systemctl list-unit-files 'cloudflared*' --no-legend 2>/dev/null | grep -q cloudflared; then

@@ -25,3 +25,12 @@ logs/
 browser_profile/
 inspect/
 evidence/
+uploads/
+*.db
+*.sqlite
+# 서버 접속 키·인증서, 배포용 압축 파일
+*.key
+*.pem
+id_rsa*
+id_ed25519*
+radio_helper_*.zip

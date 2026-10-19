@@ -81,6 +81,10 @@ def create_app(data_dir: str | None = None) -> Flask:
             if not remote.enabled(g.conn):
                 return render_template("remote_off.html"), 403
             if session.get("remote_ok") != remote.session_mark(g.conn):
+                if server.is_server() and request.endpoint == "home" and request.method in ("GET", "HEAD"):
+                    # 서버 첫 주소는 그 자리에서 로그인 화면(200, 관리 내용 없음): curl -I http://127.0.0.1:5002 점검이 200
+                    session.setdefault("csrf", secrets.token_hex(16))
+                    return render_template("login.html", error="", next="/"), 200
                 return redirect(url_for("remote_login", next=request.full_path.rstrip("?")))
         if "csrf" not in session:
             session["csrf"] = secrets.token_hex(16)

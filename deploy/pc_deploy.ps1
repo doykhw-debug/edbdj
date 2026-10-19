@@ -4,6 +4,9 @@
 # 방화벽(포트)은 건드리지 않는다. API 키는 화면에 나오지 않는다.
 param(
   [string]$Server = "haetsal",
+  [string]$HostName = "161.33.169.81",
+  [string]$User = "ubuntu",
+  [string]$KeyFile = (Join-Path $env:USERPROFILE ".ssh\haetsal-server.key"),
   [string]$Repo = "doykhw-debug/haetsal-radio",
   [string]$PublicUrl = "https://radio.haetsallab.com"
 )
@@ -23,9 +26,41 @@ if (-not (Get-Command ssh -ErrorAction SilentlyContinue) -or -not (Get-Command s
   Fail "ssh/scp 가 없습니다. 윈도우 설정 → 시스템 → 선택적 기능 → 'OpenSSH 클라이언트'를 추가하세요."
 }
 
-Step "1/6 서버 연결 확인 (ssh $Server)"
-& ssh -o BatchMode=yes -o ConnectTimeout=15 $Server "echo ok" | Out-Null
-if ($LASTEXITCODE -ne 0) { Fail "ssh $Server 로 접속하지 못했습니다. 명령 프롬프트에서 'ssh $Server' 가 되는지 확인하세요." }
+function Test-Ssh {
+  # 처음 접속하는 서버의 호스트 키는 저장하고(accept-new), 바뀐 키는 거부한다
+  # (윈도우 PowerShell 5.1 은 Stop 상태에서 ssh 의 안내 글(stderr)을 오류로 보고 멈추므로 여기서만 Continue)
+  $ErrorActionPreference = "Continue"
+  $out = & ssh -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new $Server "echo ok" 2>&1
+  return @{ ok = ($LASTEXITCODE -eq 0); text = ($out | Out-String) }
+}
+function Protect-Key {
+  # 윈도우 OpenSSH 는 다른 사용자도 읽을 수 있는 키를 거부한다 (UNPROTECTED PRIVATE KEY FILE) → 나만 읽게
+  & icacls $KeyFile /inheritance:r | Out-Null
+  & icacls $KeyFile /grant:r "$($env:USERNAME):(R)" | Out-Null
+}
+
+Step "1/6 서버 연결 확인 (ssh $Server → $User@$HostName)"
+$sshDir = Join-Path $env:USERPROFILE ".ssh"
+$sshConfig = Join-Path $sshDir "config"
+$hasAlias = (Test-Path $sshConfig) -and (Select-String -Path $sshConfig -Pattern "^\s*Host\s+(.+\s)?$Server(\s|$)" -Quiet)
+if (-not $hasAlias) {
+  if (-not (Test-Path $KeyFile)) { Fail "서버 키 파일이 없습니다: $KeyFile" }
+  New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+  if (Test-Path $sshConfig) { Copy-Item $sshConfig "$sshConfig.bak_radio" -Force }
+  $entry = "`nHost $Server`n  HostName $HostName`n  User $User`n  IdentityFile `"$KeyFile`"`n  IdentitiesOnly yes`n  ServerAliveInterval 30`n"
+  [IO.File]::AppendAllText($sshConfig, $entry, (New-Object System.Text.UTF8Encoding $false))
+  Write-Host "  ssh 설정에 '$Server' ($User@$HostName, 키 $KeyFile) 를 추가했습니다: $sshConfig"
+}
+$try = Test-Ssh
+if (-not $try.ok -and (Test-Path $KeyFile) -and $try.text -match "UNPROTECTED|bad permissions|too open") {
+  Write-Host "  키 파일 권한이 넓어 ssh 가 거부했습니다. 나만 읽을 수 있게 바꾸고 다시 시도합니다."
+  Protect-Key
+  $try = Test-Ssh
+}
+if (-not $try.ok) {
+  Write-Host $try.text
+  Fail "ssh $Server 로 접속하지 못했습니다. 명령 프롬프트에서 'ssh $Server' 가 되는지 확인하세요."
+}
 Write-Host "  연결됨"
 
 Step "2/6 PC 데이터 백업 + 서버로 보낼 묶음"
@@ -92,6 +127,16 @@ if ($setPassword) {
 }
 
 Step "6/6 확인"
+# 서버 안에서: 관리 화면이 127.0.0.1:5002 에서 답하는지 (로그인 화면, HTTP 200)
+$head = (& ssh $Server 'curl -sS -I -m 10 http://127.0.0.1:5002 | head -n 1') -join ""
+Write-Host "  서버에서 curl -I http://127.0.0.1:5002 → $head"
+if ($head -notmatch " 200") { Write-Host "  [주의] 200 이 아닙니다. 서버에서 'sudo journalctl -u radio -n 50' 으로 확인하세요." -ForegroundColor Yellow }
+$bound = (& ssh $Server 'ss -ltn | grep :5002 || true') -join " "
+if ($bound -match "0\.0\.0\.0:5002|\[::\]:5002|\*:5002") {
+  Write-Host "  [주의] 5002번이 모든 주소에 열려 있습니다: $bound" -ForegroundColor Red
+} elseif ($bound) {
+  Write-Host "  127.0.0.1 에만 열림 (밖에서 직접 접속 불가): $($bound.Trim())"
+}
 if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
   $http = & curl.exe -s -o NUL -w "%{http_code}" --max-time 20 "$PublicUrl/health"
 } else {

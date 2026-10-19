@@ -119,6 +119,12 @@ def test_server_requires_login_even_from_127_0_0_1(server_app):
     set_server_password()
     r = local.get("/experiences")
     assert r.status_code == 302 and "/login" in r.headers["Location"]
+    # 첫 주소는 그 자리에서 로그인 화면 (curl -I http://127.0.0.1:5002 → 200), 관리 내용은 없음
+    first = local.get("/")
+    html = first.get_data(as_text=True)
+    assert first.status_code == 200 and 'action="/login"' in html and 'name="password"' in html
+    assert "서버 운영 모드" not in html and "사연" not in html
+    assert local.c.head("/", base_url=local.base).status_code == 200
     assert login(local).status_code == 302
     page = local.get("/")
     assert page.status_code == 200 and "서버 운영 모드" in page.get_data(as_text=True)
