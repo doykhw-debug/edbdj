@@ -20,6 +20,54 @@
   </div>
 </div>
 
+<div class="panel" id="auto">
+  <h2>매일 자동 등록 <span class="muted">{{ station or '방송국 모름' }} · 매번 홈페이지 공지를 읽고 판단</span></h2>
+  {% if not station %}<p class="flash warn">SBS·MBC·KBS 의 https 코너 주소가 아니어서 자동 등록을 할 수 없습니다.</p>{% endif %}
+  <p class="muted">정한 시각에 하루 한 번: 코너 화면을 열어 <b>공지를 다시 읽고</b> (Claude) → 지금 받는지·무엇을(사연/짧은 한마디/신청곡)·
+    주제·글자 수·AI 글 제한·마감·방송 요일을 확인 → '실제로 있었던 일'로 확인한 경험 중 이 방송국({{ station }})에 아직 안 보낸 것에서
+    주제에 맞는 것 하나 → 입력 → <b>시험</b>이면 등록은 누르지 않고 증거 사진만, 아니면 등록까지 누르고 게시판에서 확인합니다.
+    맞는 사연이 없거나 공지가 막으면 올리지 않고 이유를 남깁니다. 로그인·보안 문자는 창이 뜨면 직접 합니다.</p>
+  {% if notice %}
+  <table>
+    <tr><th>공지 읽은 때</th><td>{{ (notice.read_at or '')[:16] }}</td></tr>
+    <tr><th>지금 받는지</th><td>{{ {'yes': '받음', 'no': '안 받음', 'unknown': '모름'}.get(notice.accepting, notice.accepting) }}</td></tr>
+    <tr><th>무엇을</th><td>{{ {'story': '사연', 'short': '짧은 한마디', 'song': '신청곡', 'photo': '사진 필요', 'other': '기타'}.get(notice.kind, notice.kind) }}
+      — {{ notice.theme }}</td></tr>
+    <tr><th>조건</th><td>{{ (notice.max_chars ~ '자 이내') if notice.max_chars else '글자 제한 없음' }}
+      {% if notice.ai_restricted %}<span class="badge bad">AI 글·대필 제한</span>{% endif %}
+      {% if notice.deadline %}· 마감 {{ notice.deadline }}{% endif %}
+      {% if notice.air_days %}· 방송 {{ notice.air_days | join('·') }}요일{% endif %}</td></tr>
+    <tr><th>판단 근거</th><td class="muted">{{ notice.reason }}</td></tr>
+  </table>
+  {% endif %}
+  {% if c.auto_result %}<p><b>마지막 결과</b> {{ c.auto_result }}</p>{% endif %}
+  <form method="post" action="{{ url_for('corner_auto', cid=c.id) }}" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="inline"><input type="checkbox" name="auto_on" value="1" {{ 'checked' if c.auto_on }}> 매일 자동</label>
+    <input type="time" name="auto_time" value="{{ c.auto_time or '10:30' }}" style="max-width:120px">
+    {% for d in days %}<label class="inline"><input type="checkbox" name="day_{{ d }}" value="1" {{ 'checked' if not c.auto_days or d in c.auto_days }}> {{ d }}</label>{% endfor %}
+    <label class="inline"><input type="checkbox" name="auto_test" value="1" {{ 'checked' if c.auto_test }}> 시험 (등록 안 누름)</label>
+    <button class="secondary">저장</button>
+    {% if next_run %}<span class="muted">다음: {{ next_run }}</span>{% endif %}
+  </form>
+  <p class="hint">요일을 모두 체크하면 매일입니다. 요일 코너는 요일을 비워 두면 공지의 방송 요일 전날에만 올립니다.</p>
+  <form method="post" action="{{ url_for('corner_auto_run', cid=c.id) }}" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button name="mode" value="test" {{ 'disabled' if stopped or not station }}>지금 공지 읽고 시험 (입력만)</button>
+    <button name="mode" value="real" class="secondary" {{ 'disabled' if stopped or not station }}
+            onclick="return confirm('공지를 읽고 맞는 사연을 실제로 등록합니다. 진행할까요?')">지금 공지 읽고 등록</button>
+  </form>
+  {% if found %}
+  <form method="post" action="{{ url_for('corner_add_found', cid=c.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <details><summary>이 화면에서 찾은 같은 프로그램의 다른 코너 {{ found | length }}개 — 골라서 추가</summary>
+      {% for f in found %}<label class="inline" style="display:block"><input type="checkbox" name="url" value="{{ f.url }}" checked>
+        {{ f.text or '(이름 없음)' }} <span class="muted">{{ f.url }}</span></label>{% endfor %}
+      <button class="secondary">고른 코너 추가</button></details>
+  </form>
+  {% endif %}
+</div>
+
 <form method="post" class="panel">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <h2>모집 조건 <span class="muted">공식 공지에서 확인한 내용</span></h2>

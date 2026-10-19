@@ -20,7 +20,7 @@ from datetime import datetime
 
 from werkzeug.serving import run_simple
 
-from . import __version__, db, remote, repair, server
+from . import __version__, boards, db, remote, repair, server
 from .app import create_app, ensure_runner, start_runner
 from .quizbot import config as qconfig
 
@@ -110,6 +110,7 @@ def watch_runner(interval: float = WATCHDOG_SECONDS) -> None:
             try:
                 done = ensure_runner(conn, restarts, time.monotonic())
                 fixed = repair.auto(conn)   # 음성 인식 부품이 없으면 스스로 고침 (설치 / Python 3.12 로 다시 켬)
+                boards.tick(conn)           # 코너 게시판 매일 자동 등록 (정한 시각이 된 코너)
             finally:
                 conn.close()
             if done and done != "limit":

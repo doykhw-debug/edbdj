@@ -355,6 +355,98 @@ def parse_gifts(text: str) -> list[dict]:
     return out
 
 
+# ── 코너 게시판 공지 읽기·사연 고르기 (boards.py — 방송국 상관없이) ────────────
+DAYS = ["월", "화", "수", "목", "금", "토", "일"]
+NOTICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "corner_title": {"type": "string", "description": "화면에 보이는 코너 이름 (예: 오프닝 한마디)"},
+        "program": {"type": "string", "description": "프로그램 이름 (예: 정오의 희망곡)"},
+        "notice": {"type": "string", "description": "코너 안내·공지 글 그대로 (메뉴·다른 청취자 글 목록은 빼고, 1500자 이내)"},
+        "accepting": {"type": "string", "enum": ["yes", "no", "unknown"],
+                      "description": "지금 글을 받는가 (마감·종료·쉼이면 no)"},
+        "kind": {"type": "string", "enum": ["story", "short", "song", "photo", "other"],
+                 "description": "story 사연·이야기 / short 짧은 한마디·한 줄 / song 신청곡 위주 / photo 사진·파일 필수 / other"},
+        "theme": {"type": "string", "description": "무엇을 써 달라는지 한 문장 (주제·조건)"},
+        "max_chars": {"type": "integer", "description": "글자 수 제한이 적혀 있으면 그 숫자, 없으면 0"},
+        "ai_restricted": {"type": "boolean",
+                          "description": "AI 작성·대필·창작물·남의 글을 금지하거나 '직접 쓴 글만' 받는다고 적혀 있으면 true"},
+        "needs_real": {"type": "boolean", "description": "실제로 겪은 일·실화를 받는다고 하면 true"},
+        "deadline": {"type": "string", "description": "마감 날짜가 적혀 있으면 YYYY-MM-DD, 없으면 빈 글"},
+        "air_days": {"type": "array", "items": {"type": "string", "enum": DAYS},
+                     "description": "이 코너가 방송되는 요일이 적혀 있으면 그 요일들 (매일이면 빈 배열)"},
+        "needs_attachment": {"type": "boolean", "description": "사진·파일 첨부가 꼭 필요하면 true"},
+        "reason": {"type": "string", "description": "판단 근거 한두 문장"},
+    },
+    "required": ["corner_title", "program", "notice", "accepting", "kind", "theme", "max_chars", "ai_restricted",
+                 "needs_real", "deadline", "air_days", "needs_attachment", "reason"],
+    "additionalProperties": False,
+}
+NOTICE_SYSTEM = """당신은 라디오 프로그램(SBS·MBC·KBS) 홈페이지의 코너 게시판 화면 글을 읽고,
+청취자가 이 코너에 글을 올리기 전에 지켜야 할 안내(공지)를 정리하는 도우미입니다.
+
+- 화면 글에는 메뉴, 다른 코너 이름, 다른 청취자들이 올린 글·소개된 글, 광고가 섞여 있습니다.
+  코너 안내·공지 문장만 골라 notice 에 원문 그대로 옮깁니다. 소개된 글 예시는 notice 에 넣지 않지만
+  어떤 글을 원하는지(kind, theme) 판단할 때는 참고합니다.
+- 공지에 적혀 있지 않은 조건은 지어내지 않습니다. 모르면 accepting 은 unknown, 숫자는 0, 날짜는 빈 글.
+- 'AI 로 쓴 글 금지', '대필·창작 금지', '직접 쓴 글만', '타인 글 도용 금지(본인 글만)' 같은 문구가 있으면 ai_restricted 를 true 로 합니다.
+- 응답은 JSON 하나만."""
+
+PICK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "experience_id": {"type": "integer", "description": "가장 잘 맞는 경험의 번호, 맞는 것이 없으면 0"},
+        "title": {"type": "string", "description": "게시판 글 제목 (30자 이내, 그 경험에 있는 말로만)"},
+        "line": {"type": "string",
+                 "description": "kind 가 short 일 때만: 그 경험에 있는 사실·말로만 만든 짧은 한마디. 아니면 빈 글"},
+        "reason": {"type": "string", "description": "고른 이유 또는 맞는 것이 없는 이유 한 문장"},
+    },
+    "required": ["experience_id", "title", "line", "reason"],
+    "additionalProperties": False,
+}
+PICK_SYSTEM = """당신은 청취자 본인('나')이 실제로 있었던 일이라고 확인한 경험들 가운데,
+라디오 코너 공지가 원하는 글에 가장 잘 맞는 것 하나를 고르는 도우미입니다.
+
+- 공지의 주제(theme)와 글 종류(kind)에 맞지 않으면 억지로 고르지 말고 experience_id 를 0 으로 합니다.
+- 제목과 한마디(line)에는 그 경험에 적힌 사실·인물·말만 씁니다. 새 사건·장면·숫자·인물·대사를 지어내지 않습니다.
+  가볍게 줄이거나 말투를 다듬는 것은 됩니다. 실명·회사명·연락처는 쓰지 않고 ○○ 로 가린 부분은 그대로 둡니다.
+- kind 가 short(짧은 한마디)이면 line 을 글자 수 제한(없으면 120자) 안에서 재치 있게, 그 경험 속 실제 말·상황으로 만듭니다.
+  다른 kind 이면 line 은 빈 글입니다 (본문은 사용자가 확인한 글을 그대로 씁니다).
+- 응답은 JSON 하나만."""
+
+
+def build_notice_message(station: str, url: str, page_text: str) -> str:
+    return f"방송국: {station}\n코너 주소: {url}\n\n화면 글:\n{page_text}"
+
+
+def build_pick_message(notice: dict, candidates: list[dict]) -> str:
+    lines = [f"코너: {notice.get('program', '')} · {notice.get('corner_title', '')}",
+             f"글 종류(kind): {notice.get('kind', '')}", f"주제: {notice.get('theme', '')}",
+             f"글자 수 제한: {notice.get('max_chars') or '없음'}", "", "확인한 경험들:"]
+    for c in candidates:
+        lines.append(f"[{c['id']}] {c.get('label') or ''} — {c.get('story') or ''}"
+                     + (f" / 말: {c['quotes']}" if c.get("quotes") else "")
+                     + (f" / 포인트: {c['highlight']}" if c.get("highlight") else ""))
+    return "\n".join(lines)
+
+
+def parse_notice(text: str) -> dict:
+    data = json.loads(text)
+    if not isinstance(data, dict) or "accepting" not in data:
+        raise ValueError("공지 정리 결과 형식이 다릅니다")
+    data["max_chars"] = max(0, int(data.get("max_chars") or 0))
+    data["air_days"] = [d for d in data.get("air_days") or [] if d in DAYS]
+    return data
+
+
+def parse_pick(text: str) -> dict:
+    data = json.loads(text)
+    if not isinstance(data, dict) or "experience_id" not in data:
+        raise ValueError("고른 결과 형식이 다릅니다")
+    data["experience_id"] = int(data.get("experience_id") or 0)
+    return data
+
+
 class AnswererError(RuntimeError):
     pass
 
@@ -447,6 +539,22 @@ class ClaudeAnswerer:
             return parse_gifts(text)
         except (ValueError, TypeError, AttributeError) as e:
             raise AnswererError(f"분석 결과를 읽지 못했습니다: {e}")
+
+    def read_notice(self, station: str, url: str, page_text: str) -> dict:
+        """코너 게시판 화면 글 → 공지 정리 (NOTICE_SCHEMA)."""
+        text = self._call(NOTICE_SYSTEM, build_notice_message(station, url, page_text), NOTICE_SCHEMA)
+        try:
+            return parse_notice(text)
+        except (ValueError, TypeError, AttributeError) as e:
+            raise AnswererError(f"공지 정리 결과를 읽지 못했습니다: {e}")
+
+    def pick_board_story(self, notice: dict, candidates: list[dict]) -> dict:
+        """공지에 맞는 확인한 경험 하나 (PICK_SCHEMA)."""
+        text = self._call(PICK_SYSTEM, build_pick_message(notice, candidates), PICK_SCHEMA)
+        try:
+            return parse_pick(text)
+        except (ValueError, TypeError, AttributeError) as e:
+            raise AnswererError(f"고른 결과를 읽지 못했습니다: {e}")
 
     def enrich_events(self, profile: dict, items: list[dict]) -> list[dict]:
         """실제 사건 한 줄들을 사연 재료로 풀어 쓴다. [{id, story, highlight, ending, added_facts}]"""

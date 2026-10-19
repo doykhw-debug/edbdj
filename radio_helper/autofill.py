@@ -25,9 +25,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import db, gates, server
+from . import db, gates, server, stations
 
-ALLOWED_HOSTS = {"programs.sbs.co.kr", "m.programs.sbs.co.kr"}
+ALLOWED_HOSTS = {"programs.sbs.co.kr", "m.programs.sbs.co.kr"}   # SBS (MBC·KBS 는 stations.py: imbc.com·kbs.co.kr)
 MOCK_SELECTORS = {
     "title": 'input[name="title"]',
     "body": 'textarea[name="content"]',
@@ -40,8 +40,10 @@ LOCK_STALE_SECONDS = 80 * 60  # 로그인 대기 + 입력 후 대기 시간보�
 POST_LOCK_WAIT_SECONDS = 45 * 60  # 게시판 자동 등록이 겹치면 앞의 등록(로그인 대기 포함)이 끝나기를 기다림
 READY_WAIT_SECONDS = 20       # 창 없이 열었을 때 글쓰기 칸이 나오기를 기다리는 시간 (안 나오면 로그인 필요로 봄)
 POSTED_WAIT_SECONDS = 30      # 등록을 누른 뒤 글쓰기 화면을 벗어나기를 기다리는 시간
-SUBMIT_TEXT = re.compile(r"^\s*(등록|등록하기|글\s*등록|작성\s*완료|완료|확인|올리기|저장)\s*$")
+SUBMIT_TEXT = re.compile(r"^\s*(등록|등록하기|등록\s*완료|글\s*등록|작성\s*완료|작성하기|완료|확인|올리기|저장|보내기|"
+                         r"사연\s*보내기|글\s*올리기)\s*$")
 CAPTCHA_HINT = re.compile(r"recaptcha|hcaptcha|captcha|자동입력\s*방지|자동등록\s*방지|보안\s*문자", re.I)
+DIALOGS: list[str] = []   # 이번 실행에서 뜬 알림 창 글 (결과 기록용)
 
 
 class AutofillError(RuntimeError):
@@ -101,19 +103,39 @@ def launch_browser(p, headless: bool):
 
 
 def locate(page, selector: str):
-    """'iframe선택자 || 내부선택자' 형식이면 iframe 안의 요소를 찾는다 (웹 에디터 대응)."""
-    if "||" in selector:
-        frame_sel, inner = (s.strip() for s in selector.split("||", 1))
-        return page.frame_locator(frame_sel).locator(inner).first
-    return page.locator(selector).first
+    """'iframe선택자 || 내부선택자' 형식이면 iframe 안의 요소를 찾는다 (웹 에디터 대응).
+    iframe 안의 iframe 은 'a || b || body' 처럼 이어 쓴다 (MBC 스마트 에디터 등)."""
+    parts = [s.strip() for s in selector.split("||")]
+    if len(parts) == 1:
+        return page.locator(selector).first
+    target = page
+    for frame_sel in parts[:-1]:
+        target = target.frame_locator(frame_sel)
+    return target.locator(parts[-1]).first
+
+
+SET_EDITOR_JS = """(el, text) => {
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  el.innerHTML = text.split('\\n').map(line => '<p>' + (esc(line) || '<br>') + '</p>').join('');
+  el.dispatchEvent(new Event('input', {bubbles: true}));
+}"""
 
 
 def fill_and_verify(page, selector: str, value: str) -> None:
     loc = locate(page, selector)
-    loc.fill(value)
     is_editable_div = loc.evaluate("el => el.isContentEditable && !('value' in el)")
-    actual = loc.inner_text() if is_editable_div else loc.input_value()
-    if " ".join(actual.split()) != " ".join(value.split()):
+
+    def actual() -> str:
+        return loc.inner_text() if is_editable_div else loc.input_value()
+
+    try:
+        loc.fill(value)
+    except Exception:
+        if not is_editable_div:
+            raise
+    if is_editable_div and " ".join(actual().split()) != " ".join(value.split()):
+        loc.evaluate(SET_EDITOR_JS, value)   # 웹 에디터(편집 모드 문서)는 줄마다 문단으로 넣는다
+    if " ".join(actual().split()) != " ".join(value.split()):
         raise AutofillError(f"입력 확인 실패: {selector} 에 넣은 값이 원고와 다릅니다.")
 
 
@@ -139,12 +161,32 @@ def _lf(text: str | None) -> str:
 
 
 def _allowed_real_url(url: str) -> bool:
+    """SBS·MBC·KBS 의 https 게시판 주소만 (stations.py)."""
+    return stations.station_of(url) is not None
+
+
+def _is_write_page(url: str, write_url: str | None = None) -> bool:
+    """글쓰기 화면인가: SBS 는 주소에 cornerboardwrite, 다른 방송국은 코너에 적어 둔 글쓰기 주소와 같은 화면."""
+    if not _allowed_real_url(url):
+        return False
     u = urlparse(url)
-    return u.scheme == "https" and u.hostname in ALLOWED_HOSTS
+    if "cornerboardwrite" in u.path:
+        return True
+    if write_url:
+        w = urlparse(write_url)
+        return (u.hostname, u.path.rstrip("/")) == (w.hostname, w.path.rstrip("/"))
+    return False
 
 
-def _is_write_page(url: str) -> bool:
-    return _allowed_real_url(url) and "cornerboardwrite" in urlparse(url).path
+def page_text(page, limit: int = 20000) -> str:
+    """화면 글자 전부 (iframe 안 포함). 게시판 목록에서 올린 글 찾기·공지 읽기용."""
+    out = []
+    for frame in [page.main_frame] + [f for f in page.frames if f is not page.main_frame]:
+        try:
+            out.append(frame.evaluate("() => document.body ? document.body.innerText : ''") or "")
+        except Exception:
+            continue
+    return "\n".join(out)[:limit]
 
 
 INSPECT_JS = r"""
@@ -209,7 +251,7 @@ def _open_and_wait_for_form(page, write_url: str, ready) -> None:
     page.goto(write_url)
     say("브라우저에서 직접 로그인한 뒤 글쓰기 화면을 열어 두세요. (최대 10분 대기)")
     say("CAPTCHA나 추가 인증이 나오면 직접 처리하세요. 이 도구는 우회하지 않습니다.")
-    if not wait_for(page, lambda: _is_write_page(page.url) and ready(), LOGIN_WAIT_SECONDS):
+    if not wait_for(page, lambda: _is_write_page(page.url, write_url) and ready(), LOGIN_WAIT_SECONDS):
         raise AutofillError("글쓰기 화면을 확인하지 못해 중단했습니다. (로그인 대기 시간 초과 또는 창 닫힘)")
 
 
@@ -272,10 +314,18 @@ GUESS_JS = r"""
     }
     return parts.join(' > ');
   };
-  const words = el => [el.name, el.id, el.placeholder, el.title, el.getAttribute('aria-label')].join(' ');
+  const near = el => {
+    const label = el.labels && el.labels[0] ? el.labels[0].innerText : '';
+    const row = el.closest('tr, li, dl, .row, .form-group');
+    const head = row ? (row.querySelector('th, dt, label, .tit, .title') || {}).innerText || '' : '';
+    return label + ' ' + head;
+  };
+  const words = el => [el.name, el.id, el.placeholder, el.title, el.getAttribute('aria-label'), near(el)].join(' ');
   const pick = (list, re) => list.find(el => re.test(words(el))) || null;
   const inputs = [...document.querySelectorAll('input')]
-    .filter(el => vis(el) && ['text', 'search', ''].includes((el.getAttribute('type') || '').toLowerCase()));
+    .filter(el => vis(el) && !el.readOnly && !el.disabled &&
+                  ['text', 'search', ''].includes((el.getAttribute('type') || '').toLowerCase()) &&
+                  !/검색|search|작성자|이름|writer|author|nick/i.test(words(el)));
   const song = pick(inputs, /song|music|신청곡|노래/i);
   const title = pick(inputs, /title|subject|제목/i) || inputs.find(el => el !== song) || null;
   let body = null;
@@ -299,13 +349,79 @@ GUESS_JS = r"""
 """
 
 
+PATH_JS = r"""el => {
+  const doc = el.ownerDocument;
+  if (el.id) return '#' + CSS.escape(el.id);
+  if (el.name && doc.querySelectorAll(el.tagName + '[name="' + el.name + '"]').length === 1)
+    return el.tagName.toLowerCase() + '[name="' + el.name + '"]';
+  const parts = [];
+  for (let e = el; e && e !== doc.body; e = e.parentElement) {
+    if (e.id) { parts.unshift('#' + CSS.escape(e.id)); break; }
+    const same = [...e.parentElement.children].filter(c => c.tagName === e.tagName);
+    parts.unshift(e.tagName.toLowerCase() + (same.length > 1 ? ':nth-of-type(' + (same.indexOf(e) + 1) + ')' : ''));
+  }
+  return parts.join(' > ');
+}"""
+EDITABLE_JS = """() => !!document.body && (document.body.isContentEditable || document.designMode === 'on')"""
+
+
+def _frame_chain(frame, stop=None) -> list[str]:
+    """frame 까지 가는 iframe 선택자들 (stop 프레임 기준, 없으면 화면 맨 위 기준)."""
+    chain = []
+    while frame is not None and frame.parent_frame is not None and frame is not stop:
+        el = frame.frame_element()
+        if not el.is_visible():
+            return []
+        chain.insert(0, el.evaluate(PATH_JS))
+        frame = frame.parent_frame
+    return chain
+
+
+def _editor_below(frame) -> str | None:
+    """frame 아래(iframe 안의 iframe 포함)에서 글을 쓸 수 있는 편집기 본문 — 'a || b || body'."""
+    for child in frame.child_frames:
+        try:
+            if child.evaluate(EDITABLE_JS):
+                chain = _frame_chain(child, stop=frame)
+                if chain:
+                    return " || ".join(chain + ["body"])
+        except Exception:
+            pass
+        deeper = _editor_below(child)
+        if deeper:
+            try:
+                chain = _frame_chain(child, stop=frame)
+            except Exception:
+                chain = []
+            if chain:
+                return " || ".join(chain + [deeper])
+    return None
+
+
 def guess_selectors(page) -> dict:
-    """입력 요소를 모를 때: 보이는 제목 칸(이름·안내 글에 '제목'·title)과 본문 칸(textarea → 편집 영역 → 편집기 iframe)."""
-    try:
-        found = page.evaluate(GUESS_JS)
-    except Exception:
-        return {"title": None, "body": None, "song": None}
-    return {k: found.get(k) for k in ("title", "body", "song")}
+    """입력 요소를 모를 때: 보이는 제목 칸(이름·안내 글에 '제목'·title)과 본문 칸(textarea → 편집 영역 → 편집기 iframe).
+    글쓰기 칸이 iframe 안에 있거나 본문이 iframe 안의 iframe(스마트 에디터)이어도 찾는다."""
+    empty = {"title": None, "body": None, "song": None}
+    frames = [page.main_frame] + [f for f in page.frames if f is not page.main_frame]
+    for frame in frames:
+        try:
+            found = frame.evaluate(GUESS_JS)
+        except Exception:
+            continue
+        if not found.get("title"):
+            continue
+        body = found.get("body") or _editor_below(frame)
+        if not body:
+            continue
+        try:
+            prefix = _frame_chain(frame)
+        except Exception:
+            continue
+        if frame is not page.main_frame and not prefix:
+            continue
+        join = lambda v: " || ".join(prefix + [v]) if v else None   # noqa: E731
+        return {"title": join(found["title"]), "body": join(body), "song": join(found.get("song"))}
+    return empty
 
 
 def profile_dir() -> Path:
@@ -328,30 +444,60 @@ def launch_profile(p, headless: bool):
         kwargs["channel"] = channel
     ctx = p.chromium.launch_persistent_context(str(profile_dir()), **kwargs)
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
-    page.on("dialog", lambda d: d.accept())   # '등록하시겠습니까?' 같은 확인 창은 확인
+    page.on("dialog", _accept_dialog)   # '등록하시겠습니까?' 같은 확인 창은 확인 (글은 결과 기록에 남김)
     return ctx, page
 
 
-def find_submit(page, selector: str | None):
-    """등록 버튼: 코너에 적어 둔 선택자, 없으면 '등록'·'확인' 같은 글자의 보이는 버튼."""
+def _accept_dialog(dialog) -> None:
+    DIALOGS.append((dialog.message or "").strip()[:200])
+    try:
+        dialog.accept()
+    except Exception:
+        pass
+
+
+def find_submit(page, selector: str | None, near: str | None = None):
+    """등록 버튼: 코너에 적어 둔 선택자, 없으면 '등록'·'확인' 같은 글자의 보이는 버튼.
+    near: 제목 칸 선택자 — 글쓰기 칸이 iframe 안에 있으면 그 iframe 안에서 먼저 찾는다."""
     if selector:
         loc = locate(page, selector)
         return loc if loc.count() else None
-    buttons = page.locator("button, input[type=submit], input[type=button], a")
-    for i in range(min(buttons.count(), 300)):
-        b = buttons.nth(i)
-        try:
-            text = (b.inner_text() if b.evaluate("el => el.tagName") != "INPUT" else b.input_value()) or ""
-            if SUBMIT_TEXT.match(text) and b.is_visible():
-                return b
-        except Exception:
-            continue
+    scopes = []
+    if near and "||" in near:
+        target = page
+        for frame_sel in [s.strip() for s in near.split("||")][:-1]:
+            target = target.frame_locator(frame_sel)
+        scopes.append(target)
+    scopes.append(page)
+    for scope in scopes:
+        buttons = scope.locator("button, input[type=submit], input[type=button], input[type=image], a")
+        for i in range(min(buttons.count(), 300)):
+            b = buttons.nth(i)
+            try:
+                tag = b.evaluate("el => el.tagName")
+                text = (b.input_value() or b.get_attribute("alt") or "") if tag == "INPUT" else b.inner_text()
+                if SUBMIT_TEXT.match(text or "") and b.is_visible():
+                    return b
+            except Exception:
+                continue
     return None
 
 
 def captcha_on(page) -> bool:
+    for frame in [page.main_frame] + [f for f in page.frames if f is not page.main_frame]:
+        try:
+            if CAPTCHA_HINT.search(frame.content()):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _field_empty(page, selector: str) -> bool:
+    """등록 뒤 제목 칸이 비었는가 (같은 주소에서 글이 올라가고 칸이 비는 게시판)."""
     try:
-        return bool(CAPTCHA_HINT.search(page.content()))
+        loc = locate(page, selector)
+        return loc.count() > 0 and not (loc.input_value() or "").strip()
     except Exception:
         return False
 
@@ -367,20 +513,24 @@ def set_story_status(conn, draft_id: int, status: str, decision: str) -> None:
     conn.commit()
 
 
-def run_post(conn, draft, corner, allow_window: bool = True) -> int:
-    """게시판 자동 등록: 입력하고 등록 버튼까지 누른다. 로그인·CAPTCHA 는 창을 띄워 사용자에게 맡긴다."""
+def run_post(conn, draft, corner, allow_window: bool = True, dry_run: bool = False) -> int:
+    """게시판 자동 등록: 입력하고 등록 버튼까지 누른다. 로그인·CAPTCHA 는 창을 띄워 사용자에게 맡긴다.
+    dry_run(시험): 입력하고 증거 사진만 남긴 뒤 등록은 누르지 않는다 (제출 이력 '시험 입력')."""
     from playwright.sync_api import sync_playwright
 
     write_url = corner["write_url"]
     if not write_url or not _allowed_real_url(write_url):
-        raise AutofillError("허용된 SBS 글쓰기 주소가 아닙니다.")
+        raise AutofillError("허용된 게시판 글쓰기 주소가 아닙니다 (SBS·MBC·KBS 의 https 주소만).")
+    station = stations.corner_station(corner) or "SBS"
+    board_url = corner["board_url"] if "board_url" in corner.keys() else None
+    DIALOGS.clear()
     sel, _borrowed = gates.corner_selectors(conn, corner)
     guessing = not (sel["title"] and sel["body"])
     submit_sel = corner["submit_selector"] if "submit_selector" in corner.keys() else None
 
     def ready(page):
         def check() -> bool:
-            if not _is_write_page(page.url):
+            if not _is_write_page(page.url, write_url):
                 return False
             if guessing:   # 입력 요소를 모르면 화면에서 찾는다
                 found = guess_selectors(page)
@@ -397,14 +547,14 @@ def run_post(conn, draft, corner, allow_window: bool = True) -> int:
         if not wait_for(page, ready(page), READY_WAIT_SECONDS) or captcha_on(page):
             ctx.close()
             if not allow_window:
-                raise AutofillError("SBS 로그인(또는 보안 문자)이 필요해 창을 띄워야 합니다."
+                raise AutofillError(f"{station} 로그인(또는 보안 문자)이 필요해 창을 띄워야 합니다."
                                     + (" 서버에서는 창을 띄울 수 없어 PC 프로그램에서 등록해야 합니다." if no_window() else ""))
             ctx, page = launch_profile(p, headless=False)
             shown = True
             page.goto(write_url)
-            say("SBS 로그인이 필요합니다. 뜬 창에서 직접 로그인하세요 (처음 한 번만 — 다음부터는 창 없이 등록).")
-            db.log(conn, "post", f"원고 #{draft['id']} 게시판 자동 등록: SBS 로그인 필요 — 뜬 브라우저 창에서 로그인하면 이어서 "
-                                 "등록합니다 (처음 한 번만)")
+            say(f"{station} 로그인이 필요합니다. 뜬 창에서 직접 로그인하세요 (처음 한 번만 — 다음부터는 창 없이 등록).")
+            db.log(conn, "post", f"원고 #{draft['id']} 게시판 자동 등록: {station} 로그인 필요 — 뜬 브라우저 창에서 로그인하면 "
+                                 "이어서 등록합니다 (처음 한 번만)")
             if not wait_for(page, ready(page), LOGIN_WAIT_SECONDS):
                 raise AutofillError("로그인 대기 시간(10분)이 지나 등록하지 못했습니다.")
         fill_and_verify(page, sel["title"], draft["title"])
@@ -419,34 +569,54 @@ def run_post(conn, draft, corner, allow_window: bool = True) -> int:
                                  f"본문 {sel['body']}")
         cur = conn.execute(
             """INSERT INTO submissions (draft_id, experience_id, corner_id, title, body, post_status, note,
-                   created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'filled', ?, ?, ?)""",
+                   created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (draft["id"], draft["experience_id"], corner["id"], draft["title"], draft["body"],
-             "게시판 자동 등록: 도우미가 입력하고 등록까지 누름 (방송에서 게시판 사연 모집)", db.now(), db.now()))
+             "test" if dry_run else "filled",
+             "게시판 자동 등록 시험: 입력만 하고 등록은 누르지 않음" if dry_run else
+             "게시판 자동 등록: 도우미가 입력하고 등록까지 누름", db.now(), db.now()))
         conn.commit()
         sub_id = cur.lastrowid
-        board_evidence(conn, page, sub_id, draft, "게시판 입력 완료 (등록 누르기 전)", "filled")
+        board_evidence(conn, page, sub_id, draft, "게시판 입력 완료 (등록 누르기 전)", "test" if dry_run else "filled")
+        if dry_run:
+            db.log(conn, "post", f"원고 #{draft['id']} → {corner['title']} 시험 입력 완료 — 등록은 누르지 않음 "
+                                 f"(제출 이력 #{sub_id}, 증거 사진에서 확인)")
+            say("시험: 입력까지 했고 등록은 누르지 않았습니다. 증거 사진에서 입력된 화면을 확인하세요.")
+            try:
+                ctx.close()
+            except Exception:
+                pass
+            return sub_id
         if captcha_on(page):
             # 보안 문자는 사람이 풀어야 한다 (우회하지 않음): 창에서 풀고 등록을 직접 누르게 기다린다
             say("보안 문자(CAPTCHA)가 있습니다. 창에서 직접 풀고 '등록'을 눌러 주세요.")
             db.log(conn, "post", f"제출 이력 #{sub_id}: 보안 문자가 있어 사용자가 풀고 등록하기를 기다립니다")
-            left = wait_for(page, lambda: not _is_write_page(page.url), AFTER_FILL_WAIT_SECONDS)
+            left = wait_for(page, lambda: not _is_write_page(page.url, write_url), AFTER_FILL_WAIT_SECONDS)
         else:
-            button = find_submit(page, submit_sel)
+            button = find_submit(page, submit_sel, near=sel["title"])
             if button is None:
                 raise AutofillError("등록 버튼을 찾지 못해 등록하지 못했습니다. 코너 화면의 '등록 버튼' 칸에 적어 주세요.")
             button.click()
-            left = wait_for(page, lambda: not _is_write_page(page.url), POSTED_WAIT_SECONDS)
+            # 글쓰기 화면을 벗어나거나, 같은 화면(코너 화면 = 글쓰기 화면)이면 제목 칸이 비면 올라간 것으로 본다
+            left = wait_for(page, lambda: not _is_write_page(page.url, write_url) or _field_empty(page, sel["title"]),
+                            POSTED_WAIT_SECONDS)
         final_url = None if page.is_closed() else page.url
         seen = False
+        want = " ".join(draft["title"].split())
         if left and final_url:
             try:
                 page.wait_for_load_state("load", timeout=5000)
-                seen = " ".join(draft["title"].split()) in " ".join(page.inner_text("body").split())
+                seen = want in " ".join(page_text(page).split())
+                if not seen and board_url and _allowed_real_url(board_url):   # 게시판 목록에서 다시 찾아본다
+                    page.goto(board_url)
+                    page.wait_for_load_state("load", timeout=15000)
+                    seen = want in " ".join(page_text(page).split())
             except Exception:
                 seen = False
         status = "posted" if seen else "unknown"
         note = ("게시판 자동 등록: 등록 후 게시판에서 제목을 확인함" if seen else
                 "게시판 자동 등록: 등록을 눌렀지만 게시판에서 제목을 확인하지 못함 — 게시판에서 확인 필요")
+        if DIALOGS:
+            note += " · 알림 창: " + " / ".join(DIALOGS[-3:])
         conn.execute("UPDATE submissions SET post_status = ?, post_url = ?, note = ?, updated_at = ? WHERE id = ?",
                      (status, final_url if left else None, note, db.now(), sub_id))
         conn.commit()
@@ -500,7 +670,7 @@ def run_fill(conn, draft, corner, headless: bool = False) -> int:
         say("입력을 마쳤습니다. 내용을 확인한 뒤 등록 버튼은 직접 누르세요. 이 도구는 누르지 않습니다.")
         say("다 끝나면 브라우저 창을 닫으세요.")
 
-        left_write_page = wait_for(page, lambda: not _is_write_page(page.url), AFTER_FILL_WAIT_SECONDS)
+        left_write_page = wait_for(page, lambda: not _is_write_page(page.url, write_url), AFTER_FILL_WAIT_SECONDS)
         final_url = None if page.is_closed() else page.url
         if left_write_page and final_url:
             conn.execute(

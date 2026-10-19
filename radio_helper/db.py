@@ -423,6 +423,16 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
 _ADDED_COLUMNS = {
     "corners": [
         ("submit_selector", "TEXT"),                    # 글쓰기 화면의 '등록' 버튼 (비면 글자로 찾음, 게시판 자동 등록용)
+        # 방송국 상관없는 게시판 자동 등록 (boards.py)
+        ("station", "TEXT"),                            # SBS / MBC / KBS (비면 주소로 판단)
+        ("notice_ai", "TEXT"),                          # 홈페이지 공지를 읽고 Claude 가 정리한 것 (JSON)
+        ("auto_on", "INTEGER NOT NULL DEFAULT 0"),      # 매일 자동 등록
+        ("auto_time", "TEXT NOT NULL DEFAULT '10:30'"), # 몇 시에
+        ("auto_days", "TEXT NOT NULL DEFAULT ''"),      # 무슨 요일에 (예: '월수금', 비면 매일)
+        ("auto_test", "INTEGER NOT NULL DEFAULT 1"),    # 시험: 입력만 하고 등록은 누르지 않음
+        ("auto_last_on", "TEXT"),                       # 마지막으로 자동 실행한 날 (하루 한 번)
+        ("auto_result", "TEXT"),                        # 마지막 결과 (화면 표시)
+        ("found_links", "TEXT"),                        # 공지 화면에서 찾은 같은 프로그램의 다른 코너 (JSON)
     ],
     "experiences": [
         ("gorilla_line", "TEXT"),                       # 공감로그용 한 줄 (사용자가 직접 씀, 200자 이내)

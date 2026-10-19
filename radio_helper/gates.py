@@ -9,7 +9,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from . import checks, db
+from . import checks, db, stations
 
 MODE_MOCK = "mock"        # 로컬 모의 화면. 실제 사이트에 아무것도 남기지 않는다.
 MODE_INSPECT = "inspect"  # 실제 글쓰기 화면 읽기 전용 점검.
@@ -162,23 +162,26 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
             result.blockers.append("원고가 승인되지 않았습니다. 사용자가 확인한 원고만 제출 대상입니다.")
         if not draft["fact_confirmed"]:
             result.blockers.append("원고의 사건·인물·결과가 실제와 같다는 확인이 없습니다.")
-    # 게시판은 SBS 뿐이다. 같은 방송국에 한 번 보낸 경험은 다시 보내지 않는다 (다른 방송국은 가능)
+    # 같은 방송국에 한 번 보낸 경험은 다시 보내지 않는다 (다른 방송국은 가능, 결과 불명이어도 다시 보내지 않음)
+    station = stations.corner_station(corner) or "SBS"
     active = conn.execute(
-        "SELECT s.id, c.title AS corner_title, s.post_status FROM submissions s "
+        "SELECT s.id, c.title AS corner_title, s.post_status, c.station, c.write_url, c.board_url FROM submissions s "
         "JOIN corners c ON c.id = s.corner_id "
         "WHERE s.experience_id = ? AND s.post_status IN ('filled','posted','unknown')",
         (draft["experience_id"],),
     ).fetchall()
     for s in active:
+        if (stations.corner_station(s) or "SBS") != station:
+            continue
         result.blockers.append(
             f"같은 경험이 이미 제출 이력 #{s['id']} ({s['corner_title']}, {STATUS_LABELS.get(s['post_status'], s['post_status'])})에 있습니다. "
-            "같은 방송국(SBS)에는 다시 보내지 않고, 결과 불명이어도 다시 보내지 않습니다.")
+            f"같은 방송국({station})에는 다시 보내지 않고, 결과 불명이어도 다시 보내지 않습니다.")
     from .quizbot.story import post_broadcaster
 
     for sp in conn.execute("SELECT * FROM story_posts WHERE experience_id = ? AND COALESCE(draft_id, -1) != ? "
                            "AND status IN ('entered','posted','unknown')", (draft["experience_id"], draft_id)):
-        if post_broadcaster(conn, sp) == "SBS":
-            result.blockers.append(f"같은 경험을 SBS 사연 #{sp['id']} ({sp['program']})로 이미 보냈습니다. "
+        if post_broadcaster(conn, sp) == station:
+            result.blockers.append(f"같은 경험을 {station} 사연 #{sp['id']} ({sp['program']})로 이미 보냈습니다. "
                                    "같은 방송국에는 다시 보내지 않습니다.")
     result.blockers += [f.message for f in findings if f.level == checks.BLOCK]
     if auto:   # 사람이 보지 않고 올리므로 '지어냈을 수 있음' 경고도 막는다
@@ -189,6 +192,7 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
 
 
 STATUS_LABELS = {
+    "test": "시험 입력 (등록 안 누름)",
     "filled": "입력만 완료·등록 미확인",
     "posted": "등록 확인",
     "unknown": "결과 불명",

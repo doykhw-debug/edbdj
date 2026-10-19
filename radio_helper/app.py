@@ -15,7 +15,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import __version__, db, evidence, gates, generator, notices, quiz, remote, repair, server, updater
+from . import __version__, boards, db, evidence, gates, generator, notices, quiz, remote, repair, server, stations, updater
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -36,7 +36,7 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
                 ("live.song_free", "song_free"))
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
-                     "draft_run", "corner_inspect", "repair_stt"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
+                     "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
@@ -570,8 +570,72 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("corner_edit", cid=cid))
         blockers, warnings = gates.corner_blockers(corner)
         reports = sorted((db.data_dir() / "inspect").glob(f"corner{cid}_*.json"), reverse=True)[:3]
+        try:
+            found = json.loads(corner["found_links"] or "[]")
+        except ValueError:
+            found = []
+        known = {r[0] for r in g.conn.execute("SELECT board_url FROM corners")}
         return render_template("corner_edit.html", c=corner, blockers=blockers, warnings=warnings,
-                               reports=[(r.name, r.read_text(encoding="utf-8")) for r in reports])
+                               reports=[(r.name, r.read_text(encoding="utf-8")) for r in reports],
+                               station=stations.corner_station(corner), notice=boards.notice_of(corner),
+                               next_run=boards.next_run(corner, datetime.now()),
+                               found=[f for f in found if f.get("url") not in known], days=boards.DAYS)
+
+    # ── 방송국 상관없는 코너 게시판 자동 등록 (boards.py) ─────────────
+    @app.post("/corners/add-url")
+    def corner_add_url():
+        try:
+            cid = boards.add_corner(g.conn, form("url"))
+        except ValueError as e:
+            flash(str(e), "error")
+            return redirect(url_for("corners"))
+        flash("코너를 추가했습니다. '지금 공지 읽고 시험'을 누르면 홈페이지 공지를 읽고 맞는 사연을 입력까지 해 봅니다 "
+              "(등록은 누르지 않음).")
+        return redirect(url_for("corner_edit", cid=cid))
+
+    @app.post("/corners/<int:cid>/auto")
+    def corner_auto(cid):
+        one("SELECT id FROM corners WHERE id = ?", cid)
+        at = form("auto_time")
+        at = at if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", at) else "10:30"
+        days = "".join(d for d in boards.DAYS if request.form.get(f"day_{d}"))
+        g.conn.execute("UPDATE corners SET auto_on = ?, auto_time = ?, auto_days = ?, auto_test = ?, updated_at = ? "
+                       "WHERE id = ?", (1 if request.form.get("auto_on") else 0, at,
+                                        "" if len(days) == 7 else days, 1 if request.form.get("auto_test") else 0,
+                                        db.now(), cid))
+        g.conn.commit()
+        flash("매일 자동 등록 설정을 저장했습니다.")
+        return redirect(url_for("corner_edit", cid=cid) + "#auto")
+
+    @app.post("/corners/<int:cid>/auto-run")
+    def corner_auto_run(cid):
+        corner = one("SELECT * FROM corners WHERE id = ?", cid)
+        if db.is_stopped(g.conn):
+            flash("일괄 중지가 켜져 있습니다.", "error")
+            return redirect(url_for("corner_edit", cid=cid))
+        mode = "--real" if form("mode") == "real" else "--test"
+        log_name = launch_module("radio_helper.boards", ["run", "--corner", str(cid), mode], "boards")
+        flash(f"{corner['title']}: 홈페이지 공지를 읽고 맞는 사연을 고른 뒤 "
+              + ("등록까지 합니다" if mode == "--real" else "입력까지만 합니다 (등록 안 누름)")
+              + f". 1~3분 뒤 새로 고치세요. 로그인이 필요하면 브라우저 창이 뜹니다. (기록: {log_name})")
+        return redirect(url_for("corner_edit", cid=cid) + "#auto")
+
+    @app.post("/corners/<int:cid>/add-found")
+    def corner_add_found(cid):
+        corner = one("SELECT * FROM corners WHERE id = ?", cid)
+        try:
+            found = json.loads(corner["found_links"] or "[]")
+        except ValueError:
+            found = []
+        wanted = set(request.form.getlist("url"))
+        added = 0
+        for f in found:
+            if f.get("url") in wanted and stations.station_of(f["url"]):
+                before = g.conn.execute("SELECT COUNT(*) FROM corners").fetchone()[0]
+                boards.add_corner(g.conn, f["url"], f.get("text") or "")
+                added += g.conn.execute("SELECT COUNT(*) FROM corners").fetchone()[0] - before
+        flash(f"코너 {added}개를 추가했습니다. 각 코너에서 '지금 공지 읽고 시험'을 해 보세요.")
+        return redirect(url_for("corners", program=corner["program"]))
 
     @app.post("/corners/<int:cid>/confirm-notice")
     def corner_confirm_notice(cid):

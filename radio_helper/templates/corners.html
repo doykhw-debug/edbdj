@@ -21,8 +21,15 @@
     {% endfor %}
   </div>
   {% endfor %}
-  <p class="muted" style="margin:8px 0 0">노란색 0 은 아직 게시판을 못 찾은 프로그램입니다. MBC·KBS 게시판은 다른 사이트라 여기서 모으지 않습니다.</p>
+  <p class="muted" style="margin:8px 0 0">노란색 0 은 아직 게시판을 못 찾은 프로그램입니다. MBC·KBS 코너는 아래 <b>코너 주소로 추가</b>로 넣습니다 (같은 프로그램의 다른 코너는 공지를 읽을 때 찾아 줌).</p>
 </div>
+
+<form method="post" action="{{ url_for('corner_add_url') }}" class="panel actions">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <b>코너 주소로 추가</b> <span class="muted">MBC·KBS·SBS 상관없이 — 코너(게시판) 화면 주소를 붙여 넣으세요</span>
+  <input type="url" name="url" placeholder="https://www.imbc.com/broad/radio/fm4u/…/corner/daily/….html" style="min-width:360px" required>
+  <button>추가</button>
+</form>
 
 <form method="get" class="actions" style="margin-bottom:12px">
   <select name="program" style="max-width:360px" onchange="this.form.submit()">
@@ -40,7 +47,8 @@
   <tr>
     <td><a href="{{ url_for('corner_edit', cid=c.id) }}">{{ c.title }}</a>
       <a class="muted" href="{{ c.board_url }}" target="_blank" rel="noopener">↗</a><br>
-      <span class="muted">{{ c.program }} · {{ c.kind }}</span></td>
+      <span class="muted">{{ c.program }} · {{ c.kind }}</span>
+      {% if c.auto_on %}<span class="badge info">매일 {{ c.auto_time }}{{ ' · 시험' if c.auto_test }}</span>{% endif %}</td>
     <td><span class="badge {{ 'ok' if c.recruiting == 'open' else ('bad' if c.recruiting == 'closed' else '') }}">{{ RECRUITING[c.recruiting] }}</span></td>
     <td>
       {% if c.notice_changed %}<span class="badge bad">공지 바뀜·재검토</span>

@@ -56,14 +56,17 @@ def post_broadcaster(conn: sqlite3.Connection, post) -> str:
 
 
 def sent_broadcasters(conn: sqlite3.Connection) -> dict[int, set[str]]:
-    """경험 → 이미 보냈거나 보내려고 줄 세운(보냈는지 모르는 것 포함) 방송국들. 게시판은 SBS 뿐."""
+    """경험 → 이미 보냈거나 보내려고 줄 세운(보냈는지 모르는 것 포함) 방송국들. 게시판은 코너 주소의 방송국."""
     out: dict[int, set[str]] = {}
     for r in conn.execute(
             f"SELECT * FROM story_posts WHERE experience_id IS NOT NULL AND status IN ({','.join('?' * len(ACTIVE))})",
             ACTIVE):
         out.setdefault(r["experience_id"], set()).add(post_broadcaster(conn, r))
-    for r in conn.execute("SELECT experience_id FROM submissions WHERE post_status IN ('filled', 'posted', 'unknown')"):
-        out.setdefault(r[0], set()).add("SBS")
+    from .. import stations
+
+    for r in conn.execute("SELECT s.experience_id, c.station, c.write_url, c.board_url FROM submissions s "
+                          "JOIN corners c ON c.id = s.corner_id WHERE s.post_status IN ('filled', 'posted', 'unknown')"):
+        out.setdefault(r["experience_id"], set()).add(stations.corner_station(r) or "SBS")
     return out
 
 
