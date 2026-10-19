@@ -332,3 +332,47 @@ def test_settings_page_switches_billing_and_checks(client, data_dir, monkeypatch
     client.post("/quizbot/settings", data={"csrf_token": token, "billing": "api"})
     assert config.get(conn, "quizbot.billing") == "api"
     conn.close()
+
+
+# ── 로그인 안 됨이라고만 나오던 것 (0.47) ─────────────────────────────
+def test_not_logged_in_says_app_login_is_separate_and_names_program(fake_claude):
+    fake_claude.auth({"loggedIn": False})
+    s = claude_cli.status()
+    assert s["subscription"] is False and "데스크톱 앱의 로그인과는 따로" in s["detail"]
+    assert str(fake_claude.path) in s["detail"]
+
+
+def test_open_login_window_runs_official_login_in_new_console(fake_claude, monkeypatch):
+    calls = []
+    monkeypatch.setattr(claude_cli, "_windows", lambda: True)
+    claude_cli.open_login(exe=[r"C:\Users\A B\.local\bin\claude.exe"],
+                          popen=lambda cmd, **kw: calls.append((cmd, kw)))
+    cmd, kw = calls[0]
+    assert cmd == 'cmd /s /k ""C:\\Users\\A B\\.local\\bin\\claude.exe" auth login --claudeai"'
+    assert "ANTHROPIC_API_KEY" not in kw["env"] and kw["creationflags"]
+    monkeypatch.setattr(claude_cli, "_windows", lambda: False)
+    with pytest.raises(claude_cli.ClaudeCliError, match="claude auth login"):
+        claude_cli.open_login(exe=["claude"], popen=lambda *a, **k: None)
+
+
+def test_login_button_and_auto_recheck_on_settings_page(client, data_dir, monkeypatch, fake_claude):
+    conn = db.connect()
+    db.init_db(conn)
+    db.set_setting(conn, "quizbot.billing", "subscription")
+    db.set_setting(conn, claude_cli.CHECK_KEY, json.dumps({"found": True, "subscription": False,
+                                                            "detail": "예전: 로그인 안 됨", "at": "2026-01-01 00:00:00"}))
+    fake_claude.auth({"loggedIn": True, "authMethod": "claude.ai", "apiProvider": "firstParty", "subscriptionType": "pro"})
+    html = client.get("/quizbot").get_data(as_text=True)          # 로그인한 뒤 화면을 열면 저절로 다시 확인
+    assert "Claude 구독으로 연결됨 (pro)" in html and "예전: 로그인 안 됨" not in html and "Claude Code 로그인" in html
+    assert claude_cli.saved_check(conn)["subscription"] is True
+
+    opened = []
+    monkeypatch.setattr(claude_cli, "open_login", lambda: opened.append(1))
+    token = csrf(client, "/quizbot")
+    page = client.post("/quizbot/claude-login", data={"csrf_token": token}, follow_redirects=True).get_data(as_text=True)
+    assert opened == [1] and "로그인 창(검은 창)을 열었습니다" in page
+    # 밖에서(터널로) 누르면 PC 화면에 창을 띄우지 않음
+    page = client.post("/quizbot/claude-login", data={"csrf_token": token}, follow_redirects=True,
+                       headers={"Cf-Connecting-Ip": "203.0.113.5"})
+    assert opened == [1]
+    conn.close()

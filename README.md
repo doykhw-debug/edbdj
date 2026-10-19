@@ -381,8 +381,10 @@ macOS·Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.tx
 이 PC 에 설치한 공식 **Claude Code** 에 claude.ai 계정으로 한 번 로그인해 두면, 프로그램이 Claude Code 를 화면 없이 실행해 결과만 받습니다.
 
 1. Claude Code 설치 — 명령 창(PowerShell)에서 `irm https://claude.ai/install.ps1 | iex`
-2. 로그인 — 명령 창에서 `claude` 실행 → **claude.ai 계정(구독)** 으로 로그인 → 창 닫기
-   (Console 계정·API 키로 로그인하면 충전 요금에서 나갑니다. *연결 확인*이 알려 줍니다.)
+2. 로그인 — 설정 → Claude 연결의 **Claude Code 로그인** 버튼(또는 명령 창에서 `claude auth login`) → 브라우저에서
+   **claude.ai 계정(구독)** 으로 로그인 → 검은 창 닫기. **claude.ai 웹·Claude 데스크톱 앱에 로그인되어 있어도 Claude Code 는 따로
+   한 번 로그인해야 합니다.** (Console 계정·API 키로 로그인하면 충전 요금에서 나갑니다. *연결 확인*이 알려 줍니다.)
+   로그인한 뒤 설정 화면을 열면 저절로 다시 확인합니다.
 3. 설정 → Claude 연결 → **Claude 구독** 고르고 저장 → **연결 확인** (설치·로그인 방식만 확인, 모델은 부르지 않음)
 
 - 사용량은 **claude.ai 채팅·Claude Code 와 함께 쓰는 5시간·주간 한도**에서 나갑니다. 한도에 걸리면 풀릴 때까지 분석을 못 하고

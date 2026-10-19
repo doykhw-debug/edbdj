@@ -1154,6 +1154,20 @@ def create_app(data_dir: str | None = None) -> Flask:
         return {"name": "Claude API 키", "ok": ok, "url": url_for("quizbot") + "#claude",
                 "detail": why or "퀴즈·사연 분석에 필요"}
 
+    def fresh_claude_check(c):
+        """구독으로 골랐는데 마지막 확인이 '안 됨'이면 화면을 열 때 다시 확인한다 (로그인한 뒤 예전 결과가 남아 있지 않게)."""
+        from .quizbot import answerer, claude_cli
+
+        check = claude_cli.saved_check(c)
+        if answerer.billing(c) != "subscription" or (check and check.get("subscription")):
+            return check
+        age = claude_cli.check_age(check)
+        if claude_cli.find_claude() and (age is None or age > 15):
+            check = claude_cli.status()
+            claude_cli.save_check(c, check)
+            check = claude_cli.saved_check(c)
+        return check
+
     @app.get("/quizbot")
     def quizbot():
         from .quizbot import answerer, claude_cli
@@ -1174,8 +1188,9 @@ def create_app(data_dir: str | None = None) -> Flask:
             "quizbot.html", schedules=schedules, active=active, nxt=nxt, by_id=by_id,
             alive=qconfig.runner_alive(c), state=db.get_setting(c, "quizbot.state"),
             heartbeat=db.get_setting(c, "quizbot.heartbeat"), check=check, has_key=bool(answerer.get_api_key()),
-            billing=answerer.billing(c), billings=answerer.BILLINGS, claude_check=claude_cli.saved_check(c),
+            billing=answerer.billing(c), billings=answerer.BILLINGS, claude_check=fresh_claude_check(c),
             claude_found=bool(claude_cli.find_claude()), billing_fallback=qconfig.get(c, "quizbot.billing_fallback") == "1",
+            can_open_login=not server.is_server() and not g.get("remote"),
             programs=programs_, days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
             autostart=qconfig.get(c, "quizbot.autostart") == "1",
             live_min_confidence=qconfig.get(c, "live.min_confidence"))
@@ -1240,6 +1255,25 @@ def create_app(data_dir: str | None = None) -> Flask:
         claude_cli.save_check(g.conn, info)
         flash(info["detail"] + (f" · {info['version']}" if info.get("version") else ""),
               "message" if info["subscription"] else "error")
+        return redirect(url_for("quizbot") + "#claude")
+
+    @app.post("/quizbot/claude-login")
+    def quizbot_claude_login():
+        """이 PC 에 Claude Code 로그인 창을 연다 (로그인은 사용자가 브라우저에서 직접)."""
+        from .quizbot import claude_cli
+
+        if server.is_server():
+            flash("서버에서는 ssh 로 들어가 ubuntu 사용자로 claude auth login 을 실행해 로그인하세요.", "warn")
+        elif g.get("remote"):
+            flash("로그인 창은 PC 화면에 열리므로 PC 앞에서 누르세요.", "warn")
+        else:
+            try:
+                claude_cli.open_login()
+                db.log(g.conn, "quizbot", "Claude Code 로그인 창을 열었음")
+                flash("Claude Code 로그인 창(검은 창)을 열었습니다. 브라우저가 열리면 claude.ai 계정(구독)으로 로그인하고, "
+                      "검은 창에 로그인 성공이 보이면 그 창을 닫은 뒤 '연결 확인'을 누르세요.")
+            except claude_cli.ClaudeCliError as e:
+                flash(str(e), "error")
         return redirect(url_for("quizbot") + "#claude")
 
     @app.post("/quizbot/schedules")

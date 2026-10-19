@@ -107,7 +107,8 @@ def _kind(text: str) -> str:
 
 MESSAGES = {
     "missing": "Claude Code(claude 프로그램)가 설치되어 있지 않습니다.",
-    "login": "Claude Code 에 로그인되어 있지 않습니다 — 명령 창에서 claude 를 한 번 실행해 로그인하세요.",
+    "login": ("Claude Code 에 로그인되어 있지 않습니다. claude.ai 웹·Claude 데스크톱 앱의 로그인과는 따로라서 Claude Code 에도 "
+              "한 번 로그인해야 합니다 — 'Claude Code 로그인' 버튼(또는 명령 창에서 claude auth login)."),
     "limit": "Claude 구독 사용량 한도에 걸렸습니다 (5시간·주간 한도, 시간이 지나면 풀림).",
     "timeout": "Claude Code 응답이 너무 늦어 멈췄습니다.",
 }
@@ -206,7 +207,7 @@ def status(exe: list[str] | None = None, timeout: float = 60) -> dict:
     out["method"], out["plan"] = method, plan
     if not out["logged_in"]:
         out["subscription"] = False
-        out["detail"] = MESSAGES["login"]
+        out["detail"] = MESSAGES["login"] + f" (확인한 프로그램: {out['path']})"
     elif method in ("api_key", "apiKey", "console") or info.get("apiProvider") not in (None, "", "firstParty"):
         out["subscription"] = False
         out["detail"] = ("Claude Code 가 구독이 아닌 방식(" + (method or str(info.get("apiProvider"))) +
@@ -215,6 +216,30 @@ def status(exe: list[str] | None = None, timeout: float = 60) -> dict:
         out["subscription"] = True
         out["detail"] = "Claude 구독으로 연결됨" + (f" ({plan})" if plan else "")
     return out
+
+
+def open_login(exe: list[str] | None = None, popen=None) -> None:
+    """PC 에 'Claude Code 로그인' 창(명령 창)을 연다: claude auth login --claudeai → 브라우저에서 사용자가 직접 로그인.
+    이 프로그램은 로그인 과정·결과(토큰)를 보지 않는다. 창은 결과를 읽을 수 있게 열어 둔다."""
+    exe = exe or find_claude()
+    if not exe:
+        raise ClaudeCliError(MESSAGES["missing"], "missing")
+    if not _windows():
+        raise ClaudeCliError("이 컴퓨터에서는 터미널에서 직접 실행하세요: claude auth login", "error")
+    command = subprocess.list2cmdline(exe + ["auth", "login", "--claudeai"])
+    (popen or subprocess.Popen)('cmd /s /k "' + command + '"', env=child_env(),
+                                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10))
+
+
+def check_age(check: dict | None, now=None) -> float | None:
+    """마지막 확인에서 지난 초 (모르면 None)."""
+    from datetime import datetime
+
+    try:
+        at = datetime.strptime((check or {}).get("at") or "", "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return ((now or datetime.now()) - at).total_seconds()
 
 
 def save_check(conn, info: dict) -> None:

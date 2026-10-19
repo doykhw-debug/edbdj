@@ -58,7 +58,8 @@
       이 프로그램은 로그인 정보를 읽거나 저장하지 않고 Claude Code 를 실행만 합니다. 한 번에 몇 초 더 걸립니다.</p>
       <ol class="muted" style="margin:4px 0 8px 18px;padding:0">
         <li>Claude Code 설치: 명령 창(PowerShell)에서 <code>irm https://claude.ai/install.ps1 | iex</code></li>
-        <li>로그인: 명령 창에서 <code>claude</code> 실행 → claude.ai 계정(구독)으로 로그인 → 창 닫기</li>
+        <li>로그인: 아래 <b>Claude Code 로그인</b> (또는 명령 창에서 <code>claude auth login</code>) → 브라우저에서 claude.ai 계정(구독)으로 로그인 → 창 닫기.
+          <span class="hint">claude.ai 웹·Claude 데스크톱 앱에 로그인되어 있어도 Claude Code 는 따로 한 번 로그인해야 합니다.</span></li>
         <li>아래 <b>연결 확인</b></li>
       </ol>
       {% if claude_check %}<p class="muted">마지막 확인 {{ claude_check.at }} · {{ claude_check.detail }}{% if claude_check.version %} · {{ claude_check.version }}{% endif %}</p>{% endif %}
@@ -80,6 +81,7 @@
   <div class="actions">
     <button class="secondary">저장</button>
     <button class="secondary" formaction="{{ url_for('quizbot_claude_check') }}">연결 확인 (Claude Code 설치·로그인)</button>
+    {% if can_open_login and claude_found %}<button class="secondary" formaction="{{ url_for('quizbot_claude_login') }}">Claude Code 로그인</button>{% endif %}
   </div>
 </form>
 
