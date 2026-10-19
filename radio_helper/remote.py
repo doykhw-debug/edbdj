@@ -134,16 +134,36 @@ def cloudflared_running() -> bool | None:
     return "cloudflared.exe" in out.lower()
 
 
-def probe(host: str, opener=None, timeout: float = 10, port: int = TUNNEL_PORT) -> tuple[str, str]:
-    """밖에서 그 주소로 이 도우미까지 오는지: (ok/access/tunnel_down/dns/error, 설명)."""
+def no_origin_message(port: int, cloudflared: bool | None) -> str:
+    """502: 터널은 연결돼 있는데 터널이 넘겨주는 곳(서비스 주소)에서 관리 화면이 답하지 않음."""
+    head = "Cloudflare 와 터널은 연결돼 있지만, 터널이 넘겨주는 곳에서 관리 화면이 답하지 않습니다 (HTTP 502). "
+    if cloudflared is False:
+        return head + ("이 PC 에는 터널 프로그램(cloudflared)이 돌고 있지 않으므로, 이 주소는 다른 컴퓨터(예: Oracle 서버)의 터널로 "
+                       "가고 있습니다. 서버에 아직 배포하지 않았다면 그쪽에는 관리 화면이 없습니다 — Cloudflare Zero Trust → "
+                       f"Networks → Tunnels 에서 이 주소(Public Hostname)를 이 PC 의 터널로 옮기고 서비스를 HTTP · localhost:{port} 로 "
+                       "하거나, 서버 배포를 마치세요.")
+    if cloudflared:
+        return head + (f"이 PC 의 터널은 돌고 있으니 Cloudflare 의 Public Hostname 서비스 주소가 HTTP · localhost:{port} 인지 "
+                       "확인하세요 (서버용 127.0.0.1:5002 로 바꿔 두었으면 이 PC 와 어긋납니다). 이 주소가 다른 컴퓨터(서버)의 "
+                       "터널에 들어 있어도 이렇게 됩니다.")
+    return head + (f"서비스 주소가 관리 화면 번호(localhost:{port})와 같은지, 그 컴퓨터에서 관리 화면이 켜져 있는지 확인하세요 "
+                   "(서버로 옮겨 두었는데 서버 배포 전이면 이렇게 됩니다).")
+
+
+def probe(host: str, opener=None, timeout: float = 10, port: int = TUNNEL_PORT,
+          cloudflared: bool | None = None) -> tuple[str, str]:
+    """밖에서 그 주소로 이 도우미까지 오는지: (ok/access/no_origin/tunnel_down/dns/error, 설명)."""
     opener = opener or urllib.request.build_opener()
     url = f"https://{host}/health"
     try:
         with opener.open(url, timeout=timeout) as r:
             final, body = r.geturl(), r.read(4000)
     except urllib.error.HTTPError as e:
-        if e.code in (502, 503, 521, 523, 530):
-            return "tunnel_down", f"Cloudflare 까지는 가지만 이 PC와 터널이 연결되지 않았습니다 (HTTP {e.code}). cloudflared 서비스를 확인하세요."
+        if e.code in (502, 504):
+            return "no_origin", no_origin_message(port, cloudflared)
+        if e.code in (503, 521, 523, 530):
+            return "tunnel_down", (f"Cloudflare 까지는 가지만 터널이 연결되지 않았습니다 (HTTP {e.code}). 터널 프로그램(cloudflared)이 "
+                                   "꺼졌거나 그 컴퓨터가 꺼져 있습니다.")
         return "error", f"HTTP {e.code} 응답"
     except urllib.error.URLError as e:
         reason = str(getattr(e, "reason", e))

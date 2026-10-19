@@ -165,6 +165,12 @@ def test_probe_reports_each_state():
     assert remote.probe(DOMAIN, access)[0] == "access"
     down = FakeOpener({"/health": urllib.error.HTTPError("u", 530, "x", {}, None)})
     assert remote.probe(DOMAIN, down)[0] == "tunnel_down"
+    # 502: 터널은 연결됐는데 넘겨주는 곳에 관리 화면이 없음 (예: 주소를 서버 터널로 옮겼는데 서버 배포 전)
+    bad = FakeOpener({"/health": urllib.error.HTTPError("u", 502, "x", {}, None)})
+    state, text = remote.probe(DOMAIN, bad, port=5000, cloudflared=False)
+    assert state == "no_origin" and "다른 컴퓨터" in text and "localhost:5000" in text
+    assert "127.0.0.1:5002" in remote.probe(DOMAIN, bad, port=5000, cloudflared=True)[1]
+    assert remote.probe(DOMAIN, bad)[0] == "no_origin"
     assert remote.probe(DOMAIN, FakeOpener({}))[0] == "dns"
 
 

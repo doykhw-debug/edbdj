@@ -197,7 +197,8 @@ def create_app(data_dir: str | None = None) -> Flask:
                     db.set_setting(c, "remote.domain", value)
                     flash(f"원격 주소를 {value} 로 정했습니다.")
             elif action == "probe":
-                state, text = remote.probe(remote.domain(c), port=app.config["SERVER_PORT"])
+                state, text = remote.probe(remote.domain(c), port=app.config["SERVER_PORT"],
+                                           cloudflared=None if server.is_server() else remote.cloudflared_running())
                 db.set_setting(c, "remote.probe", text)
                 db.set_setting(c, "remote.probe_at", db.now())
                 flash(text, "message" if state in ("ok", "access") else "warn")
