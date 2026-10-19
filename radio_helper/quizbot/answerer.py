@@ -447,6 +447,45 @@ def parse_pick(text: str) -> dict:
     return data
 
 
+# ── 전 채널 편성표 (schedules.py — MBC·KBS 는 웹 검색으로) ──────────────────
+SCHEDULE_RESEARCH_SYSTEM = """당신은 한국 라디오 채널의 '현재' 정규 편성표를 웹에서 찾아 정리하는 도우미입니다.
+- 방송국 공식 홈페이지(imbc.com, kbs.co.kr, sbs.co.kr)의 편성표·프로그램 소개를 먼저 찾고,
+  부족하면 최근 개편 기사 등 가장 최근 자료로 확인합니다. 오늘 날짜는 {today} 입니다. 지난 개편 전 편성은 쓰지 않습니다.
+- 확인하지 못한 시간대·진행자는 비워 둡니다. 지어내지 않습니다.
+- 평일과 주말 편성이 다르면 따로 적습니다. 자정을 넘기는 프로그램은 끝 시각을 그대로 적습니다 (예: 23:00~01:00).
+- 결과는 프로그램마다 한 줄: 프로그램 이름 | 진행자 | 시작 HH:MM | 끝 HH:MM | 요일(매일/평일/주말/월~금/토,일 …) | 공식 홈페이지 주소(모르면 빈칸)
+  마지막 줄에 근거로 삼은 자료(주소)와 그 자료의 날짜를 적습니다."""
+
+SCHEDULE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "programs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "프로그램 이름"},
+                    "host": {"type": "string", "description": "진행자 (모르면 빈 글)"},
+                    "start": {"type": "string", "description": "시작 HH:MM (24시간)"},
+                    "end": {"type": "string", "description": "끝 HH:MM (24시간, 자정 넘기면 그대로 예: 01:00)"},
+                    "days": {"type": "string", "description": "매일 / 평일 / 주말 / 월~금 / 토,일 처럼"},
+                    "homepage": {"type": "string", "description": "공식 홈페이지 주소 (모르면 빈 글)"},
+                },
+                "required": ["title", "host", "start", "end", "days", "homepage"],
+                "additionalProperties": False,
+            },
+        },
+        "sources": {"type": "array", "items": {"type": "string"}, "description": "근거 자료 주소"},
+        "as_of": {"type": "string", "description": "근거 자료의 날짜·개편 시점 (모르면 빈 글)"},
+    },
+    "required": ["programs", "sources", "as_of"],
+    "additionalProperties": False,
+}
+SCHEDULE_PARSE_SYSTEM = """라디오 편성표 조사 결과(글)를 정해진 JSON 으로 옮기는 도우미입니다.
+글에 있는 것만 옮기고, 없는 프로그램·시간을 만들지 않습니다. 시각은 24시간 HH:MM 으로 바꿉니다
+(예: 오후 2시 → 14:00, 새벽 1시 → 01:00). 응답은 JSON 하나만."""
+
+
 class AnswererError(RuntimeError):
     pass
 
@@ -539,6 +578,52 @@ class ClaudeAnswerer:
             return parse_gifts(text)
         except (ValueError, TypeError, AttributeError) as e:
             raise AnswererError(f"분석 결과를 읽지 못했습니다: {e}")
+
+    def research_schedule(self, channel: str, today: str, max_searches: int = 8) -> str:
+        """웹 검색(서버 도구)으로 채널의 현재 편성표를 찾아 글로 받는다. (구조화 출력은 웹 검색 인용과 함께 못 써서 두 단계)"""
+        a = self._anthropic
+        user = {"role": "user", "content": f"채널: {channel}\n이 채널의 현재 정규 편성표(모든 시간대)를 찾아 정리해 주세요."}
+        assistant: list = []
+        texts: list[str] = []
+        for _ in range(4):   # 서버 쪽 검색이 길어지면 pause_turn 으로 끊기므로 이어서 요청
+            messages = [user] + ([{"role": "assistant", "content": assistant}] if assistant else [])
+            try:
+                response = self.client.messages.create(
+                    model=self.model, max_tokens=16000,
+                    system=SCHEDULE_RESEARCH_SYSTEM.format(today=today),
+                    tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": max_searches}],
+                    output_config={"effort": self.effort}, messages=messages)
+            except a.AuthenticationError:
+                raise AnswererError("Claude API 키가 없거나 올바르지 않습니다.")
+            except a.BadRequestError as e:
+                raise AnswererError(f"웹 검색 요청이 거절됨 (Claude Console 에서 웹 검색이 꺼져 있을 수 있음): {str(e)[:120]}")
+            except a.RateLimitError:
+                raise AnswererError("API 사용량 한도에 걸렸습니다. 잠시 뒤 다시 시도합니다.")
+            except a.APIStatusError as e:
+                raise AnswererError(f"API 오류 {e.status_code}")
+            except a.APIConnectionError:
+                raise AnswererError("인터넷 연결 오류로 편성표를 찾지 못했습니다.")
+            if response.stop_reason == "refusal":
+                raise AnswererError("모델이 이 요청을 거절했습니다.")
+            texts += [b.text for b in response.content if getattr(b, "type", "") == "text"]
+            if response.stop_reason != "pause_turn":
+                break
+            assistant = assistant + list(response.content)
+        text = "\n".join(t for t in texts if t.strip())
+        if not text.strip():
+            raise AnswererError("편성표를 찾지 못했습니다 (빈 응답).")
+        return text
+
+    def parse_schedule(self, research: str) -> dict:
+        """조사 글 → {programs: [...], sources, as_of}."""
+        text = self._call(SCHEDULE_PARSE_SYSTEM, research, SCHEDULE_SCHEMA)
+        try:
+            data = json.loads(text)
+            if not isinstance(data.get("programs"), list):
+                raise ValueError("programs 가 없음")
+            return data
+        except (ValueError, TypeError, AttributeError) as e:
+            raise AnswererError(f"편성표 정리 결과를 읽지 못했습니다: {e}")
 
     def read_notice(self, station: str, url: str, page_text: str) -> dict:
         """코너 게시판 화면 글 → 공지 정리 (NOTICE_SCHEMA)."""

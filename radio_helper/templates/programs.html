@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}프로그램 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>프로그램 <span class="muted">SBS 파워FM · 러브FM · 고릴라M</span></h1>
+<h1>프로그램 <span class="muted">SBS · MBC · KBS 전 채널</span></h1>
 <div class="panel">
   <p>처음 목록은 2026-10-02 웹 검색으로 확인한 공식 페이지 주소와 방송 시간입니다. 공식 편성표 원문을 직접 연 것은 아니어서,
   <b>공식 페이지에서 새로고침</b>으로 이 PC에서 다시 확인하는 것을 권장합니다. 새로고침은 페이지를 읽기만 하고 로그인·입력은 하지 않습니다.</p>
@@ -13,8 +13,15 @@
   </ul>
   <form method="post" action="{{ url_for('programs_refresh') }}" class="actions">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button {{ 'disabled' if stopped }}>공식 페이지에서 새로고침</button>
+    <button {{ 'disabled' if stopped }}>공식 페이지에서 새로고침</button> <span class="muted">SBS</span>
     {% if last %}<span class="muted">마지막: {{ last.at }} · {{ last.message }}</span>{% endif %}
+  </form>
+  <form method="post" action="{{ url_for('programs_schedules') }}" class="actions">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button {{ 'disabled' if stopped }}>MBC·KBS 편성표 가져오기 (웹 검색)</button>
+    <span class="muted">듣는 채널 중 SBS 가 아닌 채널({{ other_channels | join(', ') }})의 현재 편성표를 Claude 가 웹에서 찾아
+      (공식 홈페이지 우선) 넣습니다. 채널마다 1~3분, 일주일마다 저절로 다시 확인합니다.</span>
+    {% if last_sched %}<br><span class="muted">마지막: {{ last_sched.at }} · {{ last_sched.message | truncate(300) }}</span>{% endif %}
   </form>
 </div>
 
@@ -26,7 +33,7 @@
   <tr>
     <td style="white-space:nowrap">{{ p.start_time or '?' }}~{{ p.end_time or '?' }}</td>
     <td><a href="{{ url_for('program_edit', pid=p.id) }}">{{ p.title }}</a><br>
-      <a class="muted" href="{{ p.main_url }}" target="_blank" rel="noopener">공식 페이지 ↗</a></td>
+      {% if p.main_url %}<a class="muted" href="{{ p.main_url }}" target="_blank" rel="noopener">공식 페이지 ↗</a>{% endif %}</td>
     <td>{{ p.host or '' }}</td>
     <td>{{ p.days or '' }}</td>
     <td>{% if p.boards %}<a href="{{ url_for('corners', program=p.title) }}">{{ p.boards }}개</a>{% else %}<span class="muted">0</span>{% endif %}</td>

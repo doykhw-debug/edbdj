@@ -360,7 +360,7 @@ class Runner:
         max_analyses = config.get_int(self.conn, "quizbot.max_analyses_per_window")
         max_story = config.get_int(self.conn, "quizbot.max_story_analyses_per_window")
         max_gift = config.get_int(self.conn, "quizbot.max_gift_analyses_per_window")
-        current, silent, chunks, slow = None, 0, 0, 0
+        current, cap_key, silent, chunks, slow = None, None, 0, 0, 0
         self.shots: list[tuple[str, bytes]] = []   # 키워드가 들린 뒤 찍은 채팅창 사진 (녹취와 교차 분석)
         self._shot_error = False
         self.silence, self._silence_events = silence.SilenceWatch(), []
@@ -375,9 +375,15 @@ class Runner:
             while keep_going(self.deps.now()) and not self.should_stop():
                 session, w = get_session(self.deps.now())
                 program = session["program"]
+                # 편성표에 없는 시간('MBC FM4U 방송' 처럼 채널 이름뿐)은 2시간마다 분석 상한을 새로 센다
+                # (예전에는 몇 시간을 한 프로그램으로 보아 상한에 걸린 뒤로 퀴즈를 분석하지 않았음)
+                now_key = program if not live.unscheduled(program, session["channel"]) else \
+                    f"{program}|{self.deps.now():%Y%m%d}|{self.deps.now().hour // 2}"
+                if now_key != cap_key:
+                    cap_key, self.analyses, self.story_analyses, self.gift_analyses = now_key, 0, 0, 0
                 if program != current:
-                    # 프로그램이 바뀌면 프로그램당 분석 상한을 새로 세고, 음성 인식 힌트(진행자·코너)를 바꾼다
-                    current, self.analyses, self.story_analyses, self.gift_analyses = program, 0, 0, 0
+                    # 프로그램이 바뀌면 음성 인식 힌트(진행자·코너)를 바꾼다
+                    current = program
                     if hasattr(transcriber, "set_context"):
                         transcriber.set_context(program, stt_hints(self.conn, program))
                 if not wait_for_gorilla and (self.deps.now() - gorilla_checked).total_seconds() >= 60:
@@ -484,6 +490,11 @@ class Runner:
         return list(getattr(self, "shots", []))
 
     def known_quizzes(self, program: str, date: str):
+        if program.endswith(" 방송"):   # 편성표에 없는 시간: 여러 프로그램이 한 이름으로 묶이므로 최근 3시간만 같은 문제로 본다
+            since = (self.deps.now() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+            return self.conn.execute(
+                "SELECT * FROM quizzes WHERE program = ? AND broadcast_date = ? AND source = 'auto' AND created_at >= ? "
+                "ORDER BY id", (program, date, since)).fetchall()
         return self.conn.execute(
             "SELECT * FROM quizzes WHERE program = ? AND broadcast_date = ? AND source = 'auto' ORDER BY id",
             (program, date)).fetchall()
@@ -813,6 +824,14 @@ class Runner:
     def try_send(self, qid: int, schedule) -> str | None:
         q = self.conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
         route = self.route_of(q)
+        if route == "app" and q["gorilla_accepted"] == "no" and not q["route"] and \
+                config.get(self.conn, "live.sms_fallback") == "1" and config.sms_number(self.conn, q["channel"]):
+            # 진행자가 앱 채팅이 아닌 문자로만 받는다고 함 → 사용자가 켠 '문자로 자동 전송'(유료)으로 보낸다
+            route = "sms"
+            self.conn.execute("UPDATE quizzes SET route = 'sms', updated_at = ? WHERE id = ?", (db.now(), qid))
+            self.conn.commit()
+            q = self.conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
+            db.log(self.conn, "quizbot", f"퀴즈 #{qid}: 진행자가 문자로만 받는다고 해서 문자로 보냄 (설정: 문자로 자동 전송)")
         reasons = decide(self.conn, q, schedule, self.deps.now(), route)
         if reasons:
             self._hold("quizzes", qid, "보류: " + " / ".join(reasons))

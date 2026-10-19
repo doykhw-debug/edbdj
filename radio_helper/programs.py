@@ -342,7 +342,9 @@ def _save_boards(conn: sqlite3.Connection, report: RefreshReport, title: str, fe
 def refresh(conn: sqlite3.Connection, fetch: Fetcher, discover: bool = True,
             say: Callable[[str], None] = lambda _msg: None) -> RefreshReport:
     report = RefreshReport()
-    programs = conn.execute("SELECT * FROM programs WHERE on_air = 1 ORDER BY channel, start_time").fetchall()
+    # SBS 프로그램만 (MBC·KBS 는 schedules.py 가 웹 검색으로 채움)
+    programs = conn.execute("SELECT * FROM programs WHERE on_air = 1 AND main_url LIKE '%programs.sbs.co.kr/%' "
+                            "ORDER BY channel, start_time").fetchall()
     for p in programs:
         try:
             text, links, final = _unpack(fetch(p["main_url"]), p["main_url"])

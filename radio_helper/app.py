@@ -15,7 +15,8 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import __version__, boards, db, evidence, gates, generator, notices, quiz, remote, repair, server, stations, updater
+from . import (__version__, boards, db, evidence, gates, generator, notices, quiz, remote, repair, schedules, server,
+               stations, updater)
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -33,7 +34,7 @@ STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": 
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
                 ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"),
                 ("live.board_auto", "board_auto"), ("live.story_approved", "story_approved"),
-                ("live.song_free", "song_free"))
+                ("live.song_free", "song_free"), ("live.sms_fallback", "sms_fallback"))
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
                      "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
@@ -512,10 +513,25 @@ def create_app(data_dir: str | None = None) -> Flask:
                FROM programs p WHERE p.on_air = 1
                ORDER BY CASE p.channel WHEN '파워FM' THEN 0 WHEN '러브FM' THEN 1 ELSE 2 END, p.channel, p.start_time"""
         ).fetchall()
-        candidates = g.conn.execute("SELECT * FROM programs WHERE on_air = 0 ORDER BY id").fetchall()
-        last = g.conn.execute(
-            "SELECT * FROM events WHERE kind = 'programs' ORDER BY id DESC LIMIT 1").fetchone()
-        return render_template("programs.html", rows=rows, candidates=candidates, last=last)
+        candidates = g.conn.execute("SELECT * FROM programs WHERE on_air = 0 AND main_url LIKE '%sbs.co.kr%' "
+                                    "ORDER BY id").fetchall()
+        last = g.conn.execute("SELECT * FROM events WHERE kind = 'programs' AND message NOT LIKE 'MBC·KBS 편성표%' "
+                              "ORDER BY id DESC LIMIT 1").fetchone()
+        last_sched = g.conn.execute("SELECT * FROM events WHERE kind = 'programs' AND message LIKE 'MBC·KBS 편성표%' "
+                                    "ORDER BY id DESC LIMIT 1").fetchone()
+        return render_template("programs.html", rows=rows, candidates=candidates, last=last, last_sched=last_sched,
+                               other_channels=schedules.channels_to_fetch(g.conn))
+
+    @app.post("/programs/schedules")
+    def programs_schedules():
+        if db.is_stopped(g.conn):
+            flash("일괄 중지가 켜져 있습니다.", "error")
+            return redirect(url_for("programs"))
+        db.set_setting(g.conn, "schedules.started_at", db.now())
+        log_name = launch_module("radio_helper.schedules", ["refresh"], "schedules")
+        flash("MBC·KBS 편성표를 웹에서 찾는 중입니다 (채널마다 1~3분). 끝나면 이 화면을 새로 고치세요. "
+              f"(기록: {log_name})")
+        return redirect(url_for("programs"))
 
     @app.post("/programs/refresh")
     def programs_refresh():
@@ -1044,7 +1060,9 @@ def create_app(data_dir: str | None = None) -> Flask:
                             "ORDER BY id DESC LIMIT 30").fetchall()
         auto = c.execute("SELECT * FROM quizzes WHERE source = 'auto' AND entry_status NOT IN ('pending', 'failed') "
                          "ORDER BY id DESC LIMIT 100").fetchall()
+        progs = c.execute("SELECT title, channel FROM programs WHERE on_air = 1 ORDER BY channel, start_time").fetchall()
         return render_template("quizzes.html", rows=[(q, quiz.hold_reasons(q, stopped)) for q in rows],
+                               report=live.listening_report(c), program_rows=progs,
                                pending=pending, auto=auto, YES_NO_KEYS=list(YES_NO),
                                today=time.strftime("%Y-%m-%d"), programs=[r["title"] for r in on_air],
                                channels=channel_list(), shots=evidence.counts(g.conn, "quizzes"))

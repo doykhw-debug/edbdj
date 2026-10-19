@@ -3,6 +3,20 @@
 {% block content %}
 <h1>퀴즈 기록</h1>
 
+{% if report %}
+<details class="panel" id="listen-check" {{ 'open' if report | selectattr('notes') | list }}>
+  <summary><b>최근 6시간 청취 점검</b> <span class="muted">채널마다 받아쓰기 → 퀴즈 신호 → 찾은 퀴즈 → 보낸 것</span></summary>
+  <table>
+    <tr><th>채널</th><th>받아쓴 줄</th><th>퀴즈 신호</th><th>찾은 퀴즈</th><th>보냄</th><th>프로그램</th><th>점검 결과</th></tr>
+    {% for r in report %}
+    <tr><td>{{ r.channel }}</td><td>{{ r.lines }}</td><td>{{ r.signals }}</td><td>{{ r.quizzes }}</td><td>{{ r.sent }}</td>
+      <td class="muted">{{ r.programs | join(', ') | truncate(80) }}</td>
+      <td>{% for n in r.notes %}<div>{{ n }}</div>{% else %}<span class="badge ok">이상 없음</span>{% endfor %}</td></tr>
+    {% endfor %}
+  </table>
+</details>
+{% endif %}
+
 <div class="panel" id="pending">
   <h2>확인 대기 <span class="muted">자동으로 들은 문제 중 자동 전송 조건을 못 채운 것</span>
   {% if nav_pending.quizzes %}
@@ -66,10 +80,11 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <h2>문제 기록</h2>
   <div class="row3">
-    <div><label>채널</label><input type="text" name="channel" value="파워FM" list="channel-list">
-      <datalist id="channel-list">{% for ch in channels %}<option value="{{ ch }}">{% endfor %}</datalist></div>
-    <div><label>프로그램</label><input type="text" name="program" value="김영철의 파워FM" list="onair-programs">
-      <datalist id="onair-programs">{% for t in programs %}<option value="{{ t }}">{% endfor %}</datalist></div>
+    <div><label>채널</label><select name="channel" id="quiz-channel">
+      {% for ch in channels %}<option value="{{ ch }}">{{ ch }}</option>{% endfor %}</select></div>
+    <div><label>프로그램 <span class="hint">(목록에서 고르거나 직접 적기)</span></label>
+      <input type="text" name="program" id="quiz-program" list="onair-programs" placeholder="프로그램 이름" required>
+      <datalist id="onair-programs">{% for p in program_rows %}<option value="{{ p.title }}" data-channel="{{ p.channel }}">{{ p.channel }}</option>{% endfor %}</datalist></div>
     <div><label>방송일</label><input type="date" name="broadcast_date" value="{{ today }}"></div>
   </div>
   <div class="row3">
@@ -117,4 +132,19 @@
   <div class="actions"><button class="secondary">저장</button></div>
 </form>
 {% endfor %}
+<script>
+(function () {   // 채널을 고르면 그 채널의 프로그램만 목록에
+  const sel = document.getElementById('quiz-channel'), list = document.getElementById('onair-programs');
+  if (!sel || !list) return;
+  const all = [...list.options].map(o => ({value: o.value, channel: o.dataset.channel}));
+  function update() {
+    list.innerHTML = '';
+    all.filter(o => o.channel === sel.value).forEach(o => {
+      const opt = document.createElement('option'); opt.value = o.value; list.appendChild(opt);
+    });
+  }
+  sel.addEventListener('change', () => { document.getElementById('quiz-program').value = ''; update(); });
+  update();
+})();
+</script>
 {% endblock %}

@@ -62,6 +62,11 @@ def current_program(conn: sqlite3.Connection, channel: str, now: datetime) -> st
     return None
 
 
+def unscheduled(program: str, channel: str | None) -> bool:
+    """편성표에 없는 시간의 이름('MBC FM4U 방송')인가."""
+    return program == f"{channel} 방송"
+
+
 def program_label(conn: sqlite3.Connection, channel: str, now: datetime) -> str:
     # 편성에 없는 시간은 채널 이름으로만 묶는다. 시각을 넣으면 정시가 지날 때 이름이 바뀌어
     # 같은 퀴즈의 재안내를 새 문제로 보고 또 보낼 수 있다.
@@ -230,3 +235,69 @@ def chunk_text(chunk: dict | None) -> str:
         return ""
     said = f"'{chunk['text']}'" if chunk.get("text") else "말소리 없음"
     return f"마지막 녹음 {chunk['at']} · 소리 {chunk['level']}/100 · 받아쓰기 {chunk['seconds']}초 → {said}"
+
+
+# ── 청취 점검: 최근 몇 시간 동안 왜 퀴즈를 (안) 풀었나 ─────────────────
+def listening_report(conn: sqlite3.Connection, now: datetime | None = None, hours: int = 6) -> list[dict]:
+    """채널마다: 받아쓴 줄·퀴즈 신호가 들린 줄·찾은 퀴즈·보낸 것·보류 이유·막힌 일 → 한 줄 결론."""
+
+    now = now or datetime.now()
+    since = (now - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
+    stats: dict[str, dict] = {}
+
+    def row(channel):
+        return stats.setdefault(channel or "채널 모름", {
+            "channel": channel or "채널 모름", "lines": 0, "signals": 0, "programs": set(), "quizzes": 0, "sent": 0,
+            "held": {}, "first": None, "last": None})
+
+    for t in conn.execute("SELECT channel, program, at, text FROM transcripts WHERE at >= ? ORDER BY id", (since,)):
+        r = row(t["channel"])
+        r["lines"] += 1
+        r["signals"] += 1 if is_quiz_signal(t["text"]) else 0
+        if t["program"]:
+            r["programs"].add(t["program"])
+        r["first"] = r["first"] or t["at"]
+        r["last"] = t["at"]
+    for q in conn.execute("SELECT channel, entry_status, decision FROM quizzes WHERE source = 'auto' AND created_at >= ?",
+                          (since,)):
+        r = row(q["channel"])
+        r["quizzes"] += 1
+        if q["entry_status"] in ("entered", "posted"):
+            r["sent"] += 1
+        elif q["decision"]:
+            why = re.sub(r"^보류:\s*", "", q["decision"]).split(" / ")[0][:60]
+            r["held"][why] = r["held"].get(why, 0) + 1
+    events = {"cap": 0, "fail": 0, "error": 0, "app": 0, "last_error": ""}
+    for e in conn.execute("SELECT message FROM events WHERE at >= ? AND kind = 'quizbot'", (since,)):
+        m = e["message"]
+        if "분석 횟수 상한" in m:
+            events["cap"] += 1
+        elif "분석 실패" in m or "분석 중 오류" in m:
+            events["fail"] += 1
+        elif "듣기 중 오류" in m:
+            events["error"] += 1
+            events["last_error"] = m[:160]
+        elif "창을 찾지 못했습니다" in m:
+            events["app"] += 1
+    out = []
+    for r in stats.values():
+        notes = []
+        if r["lines"] == 0:
+            notes.append("받아쓴 말이 없음 — 음성 인식이 돌지 않았습니다 (첫 화면의 오류·'지금 고치기'를 확인)")
+        elif r["signals"] == 0:
+            notes.append("퀴즈 신호(퀴즈·정답·문제 나갑니다 …)가 한 번도 들리지 않음 — 이 시간에 퀴즈가 없었거나 받아쓰기가 부정확")
+        elif r["quizzes"] == 0:
+            notes.append(f"퀴즈 신호가 {r['signals']}번 들렸지만 분석 결과 새 퀴즈가 아니었음"
+                         + (" · 분석 횟수 상한에 걸린 적 있음" if events["cap"] else ""))
+        if r["quizzes"] and r["sent"] < r["quizzes"] and r["held"]:
+            top = sorted(r["held"].items(), key=lambda kv: -kv[1])[:2]
+            notes.append("보류: " + " / ".join(f"{k} ({v}건)" for k, v in top))
+        if r["programs"] and all(unscheduled(p, r["channel"]) for p in r["programs"]):
+            notes.append("편성표가 없어 프로그램 이름을 모름 (프로그램 화면의 'MBC·KBS 편성표 가져오기')")
+        out.append({**r, "programs": sorted(r["programs"]), "notes": notes,
+                    "held": sorted(r["held"].items(), key=lambda kv: -kv[1])})
+    if events["error"]:
+        out.append({"channel": "전체", "lines": 0, "signals": 0, "programs": [], "quizzes": 0, "sent": 0, "held": [],
+                    "first": None, "last": None,
+                    "notes": [f"듣기 중 오류 {events['error']}번 — 마지막: {events['last_error']}"]})
+    return out
