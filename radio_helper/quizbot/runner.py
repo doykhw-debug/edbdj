@@ -1017,7 +1017,7 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
 def build_real_deps(conn: sqlite3.Connection) -> Deps:
     """윈도우에서 실제로 쓰는 구성."""
     from ..app import launch_autofill
-    from .answerer import ClaudeAnswerer
+    from .answerer import make as make_answerer
     from .audio import LoopbackRecorder
     from .gorilla import Gorilla
     from .sms import AdbSms
@@ -1034,7 +1034,7 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
         notify=notify,
         recorder_factory=lambda chunk: LoopbackRecorder(chunk),
         transcriber_factory=lambda model, program: make_transcriber(conn, model, program),
-        answerer=ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort")),
+        answerer=make_answerer(conn),
         sender=Gorilla(config.GorillaConfig.load(conn, "gorilla")),
         chat_senders={app: Gorilla(config.GorillaConfig.load(conn, app)) for app in config.CHAT_APPS},
         sms=AdbSms.from_settings(conn),

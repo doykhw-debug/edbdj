@@ -267,11 +267,12 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
         return finish(conn, cid, "SBS·MBC·KBS 의 https 코너 주소가 아니라 하지 않음")
     try:
         if answerer is None:
-            from .quizbot.answerer import ClaudeAnswerer, get_api_key
+            from .quizbot.answerer import make, ready
 
-            if not get_api_key():
-                raise BoardSkip("Claude API 키가 없어 공지를 읽지 못했습니다 (퀴즈 자동 화면에서 저장).")
-            answerer = ClaudeAnswerer()
+            ok, why = ready(conn)
+            if not ok:
+                raise BoardSkip(f"공지를 읽지 못했습니다 — {why}")
+            answerer = make(conn)
         page = reader(corner)
         notice = answerer.read_notice(stations.corner_station(corner) or "", corner["board_url"], page["text"][:12000])
         save_notice(conn, corner, notice, page)

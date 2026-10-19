@@ -265,7 +265,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         return out
 
     def setup_items() -> list[dict]:
-        from .quizbot.answerer import get_api_key
+        from .quizbot import answerer
 
         c = g.conn
         try:
@@ -306,8 +306,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         return [
             {"name": "받아쓰기 테스트", "ok": bool(stt.get("ok") or heard), "url": url_for("home") + "#stt",
              "detail": stt_detail},
-            {"name": "Claude API 키", "ok": bool(get_api_key()), "url": url_for("quizbot"),
-             "detail": "퀴즈·사연 분석에 필요"},
+            claude_item(c, answerer),
             send_item,
             {"name": "환경 점검", "ok": bool(check) and not failed, "url": url_for("quizbot"),
              "detail": ("확인 필요: " + ", ".join(failed)) if failed else ("" if check else "아직 안 함")},
@@ -1141,9 +1140,23 @@ def create_app(data_dir: str | None = None) -> Flask:
             """SELECT s.*, p.title AS program FROM quiz_schedules s JOIN programs p ON p.id = s.program_id
                ORDER BY s.start_time""").fetchall()
 
+    def claude_item(c, answerer) -> dict:
+        """첫 화면 준비 목록: 고른 방식(API 키 / 구독)대로 Claude 를 부를 수 있는지."""
+        ok, why = answerer.ready(c)
+        if answerer.billing(c) == "subscription":
+            from .quizbot import claude_cli
+
+            check = claude_cli.saved_check(c) or {}
+            if ok and check.get("subscription") is False:
+                ok, why = False, check.get("detail") or ""
+            return {"name": "Claude 구독 (Claude Code)", "ok": ok, "url": url_for("quizbot") + "#claude",
+                    "detail": why or check.get("detail") or "퀴즈·사연 분석에 필요 — 설정에서 '연결 확인'"}
+        return {"name": "Claude API 키", "ok": ok, "url": url_for("quizbot") + "#claude",
+                "detail": why or "퀴즈·사연 분석에 필요"}
+
     @app.get("/quizbot")
     def quizbot():
-        from .quizbot.answerer import get_api_key
+        from .quizbot import answerer, claude_cli
 
         c = g.conn
         schedules = schedule_rows()
@@ -1160,7 +1173,9 @@ def create_app(data_dir: str | None = None) -> Flask:
         return render_template(
             "quizbot.html", schedules=schedules, active=active, nxt=nxt, by_id=by_id,
             alive=qconfig.runner_alive(c), state=db.get_setting(c, "quizbot.state"),
-            heartbeat=db.get_setting(c, "quizbot.heartbeat"), check=check, has_key=bool(get_api_key()),
+            heartbeat=db.get_setting(c, "quizbot.heartbeat"), check=check, has_key=bool(answerer.get_api_key()),
+            billing=answerer.billing(c), billings=answerer.BILLINGS, claude_check=claude_cli.saved_check(c),
+            claude_found=bool(claude_cli.find_claude()), billing_fallback=qconfig.get(c, "quizbot.billing_fallback") == "1",
             programs=programs_, days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
             autostart=qconfig.get(c, "quizbot.autostart") == "1",
             live_min_confidence=qconfig.get(c, "live.min_confidence"))
@@ -1187,7 +1202,15 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.post("/quizbot/settings")
     def quizbot_settings():
+        from .quizbot.answerer import BILLINGS
+
         db.set_setting(g.conn, "quizbot.autostart", "1" if request.form.get("autostart") else "0")
+        chosen = form("billing")
+        if chosen in BILLINGS and chosen != qconfig.get(g.conn, "quizbot.billing"):
+            db.set_setting(g.conn, "quizbot.billing", chosen)
+            db.log(g.conn, "quizbot", f"Claude 연결 방식: {BILLINGS[chosen]}")
+        if chosen in BILLINGS:
+            db.set_setting(g.conn, "quizbot.billing_fallback", "1" if request.form.get("billing_fallback") else "0")
         if form("live_min_confidence"):
             db.set_setting(g.conn, "live.min_confidence", str(_confidence(form("live_min_confidence"))))
         key = (request.form.get("api_key") or "").strip()
@@ -1207,6 +1230,17 @@ def create_app(data_dir: str | None = None) -> Flask:
         else:
             flash("설정을 저장했습니다.")
         return redirect(url_for("quizbot"))
+
+    @app.post("/quizbot/claude-check")
+    def quizbot_claude_check():
+        """Claude Code 설치·로그인 확인 (모델은 부르지 않음, 몇 초)."""
+        from .quizbot import claude_cli
+
+        info = claude_cli.status()
+        claude_cli.save_check(g.conn, info)
+        flash(info["detail"] + (f" · {info['version']}" if info.get("version") else ""),
+              "message" if info["subscription"] else "error")
+        return redirect(url_for("quizbot") + "#claude")
 
     @app.post("/quizbot/schedules")
     def quizbot_schedule_new():
@@ -1929,19 +1963,20 @@ def launch_programs_refresh() -> str:
 def start_enrich(conn) -> str:
     """관계도 사건 풀어 쓰기를 뒤에서 시작하고 안내 글을 돌려준다 (풀어 쓸 것이 없으면 빈 글)."""
     from .quizbot import enrich
-    from .quizbot.answerer import get_api_key
+    from .quizbot.answerer import ready
 
     left = len(enrich.pending(conn))
     if not left:
         return ""
-    if not get_api_key():
-        return f"사연처럼 풀어 쓰기({left}건)는 Claude API 키를 설정 화면에 저장하면 시작할 수 있습니다. 그전에도 한 줄 그대로 사연 재료로 씁니다."
+    ok, why = ready(conn)
+    if not ok:
+        return f"사연처럼 풀어 쓰기({left}건)는 Claude 를 연결하면 시작할 수 있습니다 ({why}). 그전에도 한 줄 그대로 사연 재료로 씁니다."
     v = enrich.view(conn)
     if v["state"] == "running":
         return f"사연처럼 풀어 쓰는 중입니다 ({v['progress']}/{v.get('total', left)})."
     enrich.save_status(conn, running=True, done=0, kept=0, total=left, started=db.now())
     db.set_setting(conn, enrich.LOG_KEY, launch_quizbot(["enrich"]))
-    return f"{left}건을 사연처럼 풀어 쓰기 시작했습니다 (Claude API, 8건씩 · 첫 숫자가 바뀌는 데 1~2분). 끝난 사건부터 바로 사연에 씁니다."
+    return f"{left}건을 사연처럼 풀어 쓰기 시작했습니다 (Claude, 8건씩 · 첫 숫자가 바뀌는 데 1~2분). 끝난 사건부터 바로 사연에 씁니다."
 
 
 def log_tail(name: str, chars: int = 2500) -> str:

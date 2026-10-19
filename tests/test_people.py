@@ -300,7 +300,7 @@ def test_earlier_unconfirmed_events_get_confirmed(client, conn, monkeypatch):
     token = csrf(client, "/people")
     client.post("/people/events-to-experiences", data={"csrf_token": token})
     assert conn.execute("SELECT COUNT(*) FROM experiences WHERE user_confirmed = 1").fetchone()[0] == 5
-    assert "Claude API 키를 설정 화면에 저장하면" in client.get("/experiences").get_data(as_text=True)
+    assert "Claude 를 연결하면 시작할 수 있습니다" in client.get("/experiences").get_data(as_text=True)
 
 
 def test_move_one_persons_events(client, conn):

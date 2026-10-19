@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}설정 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>설정 <span class="muted">API 키 · 환경 점검 · 앱 채팅 · 문자 · 예약</span></h1>
+<h1>설정 <span class="muted">Claude 연결 · 환경 점검 · 앱 채팅 · 문자 · 예약</span></h1>
 
 <div class="actions" style="margin:0 0 16px">
   <a class="btn" href="{{ url_for('gorilla') }}">앱 채팅·인식 설정 (고릴라·mini·콩)</a>
@@ -34,22 +34,53 @@
   오디오는 저장하지 않고, 한 번 보낸(또는 보냈는지 모르는) 문제는 다시 보내지 않습니다.</p>
 </div>
 
-<form method="post" action="{{ url_for('quizbot_settings') }}" class="panel">
+<form method="post" action="{{ url_for('quizbot_settings') }}" class="panel" id="claude">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <h2>Claude API 키 {% if has_key %}<span class="badge ok">설정됨</span>{% else %}<span class="badge bad">없음</span>{% endif %}</h2>
-  <p class="muted">문제·정답 분석에 Claude API(유료)를 씁니다. 퀴즈 신호가 들릴 때만 호출하며, 예약 1회당 분석 횟수 상한을 둡니다.
-  키는 이 PC의 윈도우 자격 증명 관리자에 저장되고 화면·기록·GitHub에는 남지 않습니다.</p>
+  <h2>Claude 연결
+    {% if billing == 'subscription' %}
+      {% if claude_check and claude_check.subscription %}<span class="badge ok">구독 연결됨</span>
+      {% elif claude_found %}<span class="badge warn">구독 · 연결 확인 필요</span>
+      {% else %}<span class="badge bad">Claude Code 없음</span>{% endif %}
+    {% else %}
+      {% if has_key %}<span class="badge ok">API 키 설정됨</span>{% else %}<span class="badge bad">API 키 없음</span>{% endif %}
+    {% endif %}
+  </h2>
+  <p class="muted">문제·정답·사연·공지 분석과 편성표 찾기에 Claude 를 씁니다. 퀴즈 신호가 들릴 때만 부르며, 예약 1회당 분석 횟수 상한을 둡니다.</p>
+  <div class="actions" style="margin:6px 0 10px">
+    {% for value, label in billings.items() %}
+      <label class="inline"><input type="radio" name="billing" value="{{ value }}" {{ 'checked' if billing == value }}> {{ label }}</label>
+    {% endfor %}
+  </div>
   <div class="row">
-    <div><label>API 키 {% if has_key %}<span class="hint">(바꿀 때만 입력)</span>{% endif %}</label>
-      <input type="password" name="api_key" autocomplete="off" placeholder="sk-ant-..."></div>
-    <div><label class="inline" style="margin-top:34px"><input type="checkbox" name="autostart" value="1" {{ 'checked' if autostart }}> 관리 화면을 켜면 듣기 실행기도 함께 시작</label></div>
+    <div>
+      <p><b>Claude 구독</b> — 이 컴퓨터에 설치한 <b>Claude Code</b> 에 claude.ai 계정으로 한 번 로그인해 두면, 그 로그인으로 분석합니다.
+      충전 요금이 들지 않고 구독 사용량(5시간·주간 한도, claude.ai 채팅·Claude Code 와 함께 씀)에서 나갑니다.
+      이 프로그램은 로그인 정보를 읽거나 저장하지 않고 Claude Code 를 실행만 합니다. 한 번에 몇 초 더 걸립니다.</p>
+      <ol class="muted" style="margin:4px 0 8px 18px;padding:0">
+        <li>Claude Code 설치: 명령 창(PowerShell)에서 <code>irm https://claude.ai/install.ps1 | iex</code></li>
+        <li>로그인: 명령 창에서 <code>claude</code> 실행 → claude.ai 계정(구독)으로 로그인 → 창 닫기</li>
+        <li>아래 <b>연결 확인</b></li>
+      </ol>
+      {% if claude_check %}<p class="muted">마지막 확인 {{ claude_check.at }} · {{ claude_check.detail }}{% if claude_check.version %} · {{ claude_check.version }}{% endif %}</p>{% endif %}
+      <label class="inline"><input type="checkbox" name="billing_fallback" value="1" {{ 'checked' if billing_fallback }}>
+        구독 한도에 걸리거나 로그인이 풀리면 API 키로 이어서 (충전 요금)</label>
+    </div>
+    <div>
+      <p><b>API 키</b> — Claude Console 의 API 키로 분석합니다 (충전한 크레딧에서 나감).
+      키는 이 PC의 윈도우 자격 증명 관리자에 저장되고 화면·기록·GitHub에는 남지 않습니다.</p>
+      <label>API 키 {% if has_key %}<span class="hint">(바꿀 때만 입력)</span>{% endif %}</label>
+      <input type="password" name="api_key" autocomplete="off" placeholder="sk-ant-...">
+    </div>
   </div>
   <div class="row">
     <div><label>청취 중 퀴즈 자동 전송 확신도 기준 <span class="hint">0~1, 높을수록 확실할 때만 보냄</span></label>
       <input type="number" name="live_min_confidence" value="{{ live_min_confidence }}" min="0" max="1" step="0.05"></div>
-    <div></div>
+    <div><label class="inline" style="margin-top:34px"><input type="checkbox" name="autostart" value="1" {{ 'checked' if autostart }}> 관리 화면을 켜면 듣기 실행기도 함께 시작</label></div>
   </div>
-  <div class="actions"><button class="secondary">저장</button></div>
+  <div class="actions">
+    <button class="secondary">저장</button>
+    <button class="secondary" formaction="{{ url_for('quizbot_claude_check') }}">연결 확인 (Claude Code 설치·로그인)</button>
+  </div>
 </form>
 
 <div class="panel">

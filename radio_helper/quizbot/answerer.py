@@ -1,14 +1,17 @@
-"""방송 녹취(+채팅창 화면)에서 퀴즈 문제·정답·기발한 오답, 사연 주제를 정리한다 (Claude API, 유료).
+"""방송 녹취(+채팅창 화면)에서 퀴즈 문제·정답·기발한 오답, 사연 주제를 정리한다 (Claude).
 
 키워드가 들렸을 때만 호출한다. 호출 1회에 최근 몇 분 분량의 녹취(수천 토큰)와, 채팅창 영역을 지정했으면
 채팅창 사진 몇 장(장당 수백 토큰)을 보낸다.
-API 키는 환경 변수 ANTHROPIC_API_KEY 또는 윈도우 자격 증명 관리자(관리 화면에서 저장)에서 읽는다.
+Claude 를 부르는 길은 둘 (설정 'quizbot.billing'):
+- api: API 키(충전 요금). 키는 환경 변수 ANTHROPIC_API_KEY 또는 윈도우 자격 증명 관리자(관리 화면에서 저장)에서 읽는다.
+- subscription: Claude 구독. 이 PC 에 로그인해 둔 공식 Claude Code 를 실행한다 (claude_cli.py, 로그인 정보는 다루지 않음).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 
 KEYRING_SERVICE = "radio_helper"
@@ -508,15 +511,99 @@ def save_api_key(key: str) -> None:
     keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key)
 
 
-class ClaudeAnswerer:
-    def __init__(self, model: str = "claude-opus-5-5", effort: str = "medium", client=None):
-        import anthropic
+BILLINGS = {"api": "API 키 (충전 요금)", "subscription": "Claude 구독 (Claude Code 로그인)"}
 
-        self._anthropic = anthropic
+
+def billing(conn) -> str:
+    from . import config
+
+    value = config.get(conn, "quizbot.billing")
+    return value if value in BILLINGS else "api"
+
+
+def ready(conn) -> tuple[bool, str]:
+    """Claude 를 부를 수 있는지 (가볍게: 키가 있는지 / claude 프로그램이 있는지). (가능, 안 될 때 안내)"""
+    from . import claude_cli, config
+
+    has_key = bool(get_api_key())
+    if billing(conn) == "api":
+        return has_key, "" if has_key else "Claude API 키가 없습니다 (설정 화면에서 저장하거나 'Claude 구독'으로 바꾸세요)."
+    if claude_cli.find_claude():
+        return True, ""
+    if has_key and config.get(conn, "quizbot.billing_fallback") == "1":
+        return True, "Claude Code 가 없어 API 키로 대신합니다."
+    return False, "Claude 구독으로 쓰려면 이 컴퓨터에 Claude Code 를 설치하고 한 번 로그인하세요 (설정 화면 안내)."
+
+
+def _note(message: str) -> None:
+    """구독 → API 키로 대신한 일을 작업 기록에 (같은 내용은 30분에 한 번만)."""
+    now = time.time()
+    if now - _NOTED.get(message, 0) < 1800:
+        return
+    _NOTED[message] = now
+    try:
+        from .. import db
+
+        conn = db.connect()
+        try:
+            db.log(conn, "quizbot", message)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+_NOTED: dict[str, float] = {}
+
+
+def make(conn, **kwargs) -> "ClaudeAnswerer":
+    """설정(모델·노력·결제 방식)대로 만든다."""
+    from . import config
+
+    return ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort"),
+                          billing=billing(conn), fallback=config.get(conn, "quizbot.billing_fallback") == "1",
+                          note=_note, **kwargs)
+
+
+class ClaudeAnswerer:
+    def __init__(self, model: str = "claude-opus-5-5", effort: str = "medium", client=None, billing: str = "api",
+                 fallback: bool = False, cli=None, note=None):
         self.model = model
         self.effort = effort
-        key = get_api_key()
-        self.client = client or (anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic())
+        self.billing = billing if billing in BILLINGS else "api"
+        self.fallback = fallback          # 구독으로 안 될 때 API 키(충전 요금)로 이어서
+        self.note = note or (lambda _message: None)
+        self._client = client
+        if cli is None:
+            from . import claude_cli as cli
+        self.cli = cli
+        if self.billing == "api":
+            self.client   # API 키 방식은 바로 준비 (anthropic 이 없으면 여기서 알림)
+
+    @property
+    def client(self):
+        if self._client is None:
+            import anthropic
+
+            key = get_api_key()
+            self._client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
+        return self._client
+
+    @property
+    def _anthropic(self):
+        import anthropic
+
+        return anthropic
+
+    def _subscription(self, run, what: str):
+        """구독(Claude Code)으로 해 보고, 안 되면 설정에 따라 API 키로 대신하거나 오류."""
+        try:
+            return run()
+        except self.cli.ClaudeCliError as e:
+            if self.fallback and get_api_key():
+                self.note(f"Claude 구독으로 {what}하지 못해 API 키(충전 요금)로 대신함: {str(e)[:150]}")
+                return None
+            raise AnswererError(str(e))
 
     @staticmethod
     def _content(user: str, images=()) -> str | list:
@@ -534,6 +621,11 @@ class ClaudeAnswerer:
         return blocks
 
     def _call(self, system: str, user: str, schema: dict, images=()) -> str:
+        if self.billing == "subscription":
+            done = self._subscription(lambda: self.cli.run(system, self._content(user, images), schema=schema,
+                                                           model=self.model, effort=self.effort), "분석")
+            if done is not None:
+                return json.dumps(done["data"], ensure_ascii=False)
         a = self._anthropic
         try:
             response = self.client.beta.messages.create(
@@ -581,8 +673,18 @@ class ClaudeAnswerer:
 
     def research_schedule(self, channel: str, today: str, max_searches: int = 8) -> str:
         """웹 검색(서버 도구)으로 채널의 현재 편성표를 찾아 글로 받는다. (구조화 출력은 웹 검색 인용과 함께 못 써서 두 단계)"""
+        ask = f"채널: {channel}\n이 채널의 현재 정규 편성표(모든 시간대)를 찾아 정리해 주세요."
+        if self.billing == "subscription":
+            done = self._subscription(lambda: self.cli.run(
+                SCHEDULE_RESEARCH_SYSTEM.format(today=today) + f"\n- 웹 검색은 {max_searches}번 안에서 끝냅니다.",
+                ask, tools=("WebSearch",), model=self.model, effort=self.effort), "편성표를 찾")
+            if done is not None:
+                text = done["text"] if done["text"].strip() else "\n".join(done["texts"])
+                if not text.strip():
+                    raise AnswererError("편성표를 찾지 못했습니다 (빈 응답).")
+                return text
         a = self._anthropic
-        user = {"role": "user", "content": f"채널: {channel}\n이 채널의 현재 정규 편성표(모든 시간대)를 찾아 정리해 주세요."}
+        user = {"role": "user", "content": ask}
         assistant: list = []
         texts: list[str] = []
         for _ in range(4):   # 서버 쪽 검색이 길어지면 pause_turn 으로 끊기므로 이어서 요청

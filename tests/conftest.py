@@ -13,6 +13,15 @@ def no_gpu_probe(monkeypatch):
     monkeypatch.setattr(gpu, "probe", lambda timeout=0: (False, "테스트: 그래픽카드 점검 안 함"))
 
 
+@pytest.fixture(autouse=True)
+def no_real_claude_code(monkeypatch):
+    """테스트 중에는 이 컴퓨터의 진짜 Claude Code 를 찾지 않는다 (구독 사용량이 나가지 않게). 필요한 테스트는 가짜를 넣는다."""
+    from radio_helper.quizbot import claude_cli
+
+    monkeypatch.setattr(claude_cli, "candidates", lambda: [])
+    monkeypatch.setattr(claude_cli, "_limited_until", 0.0)
+
+
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("RADIO_HELPER_DATA_DIR", str(tmp_path))

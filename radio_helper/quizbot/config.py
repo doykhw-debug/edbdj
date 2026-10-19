@@ -49,9 +49,11 @@ DEFAULTS = {
     "live.board_auto": "1",               # 방송에서 게시판에 남겨 달라는 사연: 검사 경고 없으면 자동 승인·입력·등록
     "live.quiz_always": "1",              # 퀴즈는 확신도와 상관없이 정답 후보를 보냄 (객관식·주관식 모두, 틀려도 손해 없음)
     "live.captions": "1",                 # 자막 창 띄우기
-    # 분석 (Claude API)
+    # 분석 (Claude)
     "quizbot.model": "claude-opus-5-5",
     "quizbot.effort": "medium",
+    "quizbot.billing": "api",             # api: API 키(충전 요금) / subscription: Claude 구독(이 PC 의 Claude Code 로그인)
+    "quizbot.billing_fallback": "0",      # 구독으로 안 될 때(한도·로그인 풀림) API 키로 이어서 (충전 요금, 켜야 함)
     "quizbot.autostart": "0",
     # 고릴라 화면
     "gorilla.process_name": "",           # '자동 찾기'·'위치 지정'으로 저장되는 고릴라 프로그램(실행 파일) 이름

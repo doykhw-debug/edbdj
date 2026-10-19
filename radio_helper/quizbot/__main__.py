@@ -2,7 +2,7 @@
 
   run              실행기: '청취 시작'이 켜져 있으면 바로 듣고, 아니면 예약에 따라 듣는다
   captions         항상 위에 뜨는 자막 창
-  check            필요한 구성 요소·API 키·고릴라 창·스피커 점검
+  check            필요한 구성 요소·Claude 연결(API 키/구독)·고릴라 창·스피커 점검
   auto-setup       열린 창 중 고릴라 채팅창을 찾아 설정 저장 (읽기만 함)
   inspect-gorilla  고릴라 창의 화면 요소 목록 저장 (읽기만 함)
   select window    화면에 네모를 그려 고릴라 창 전체 영역 저장 (창 인식이 안 될 때)
@@ -97,9 +97,15 @@ def cmd_check(conn) -> int:
             item(label, True)
         except Exception as e:
             item(label, False, f"— 설치 안 됨 ({type(e).__name__})")
-    from .answerer import get_api_key
+    from . import answerer, claude_cli
 
-    item("Claude API 키", bool(get_api_key()), "" if get_api_key() else "— 관리 화면 '퀴즈 자동'에서 저장하세요")
+    if answerer.billing(conn) == "subscription":
+        cli = claude_cli.status()
+        claude_cli.save_check(conn, cli)
+        item("Claude 구독 (Claude Code 로그인)", bool(cli["subscription"]), "— " + cli["detail"])
+    else:
+        has_key = bool(answerer.get_api_key())
+        item("Claude API 키", has_key, "" if has_key else "— 관리 화면 '설정'에서 저장하거나 'Claude 구독'으로 바꾸세요")
     channel = config.get(conn, "live.channel")
     app = config.chat_app(conn, channel)
     if config.route(conn) == "sms" or app is None:
@@ -344,18 +350,18 @@ def cmd_stt_test(conn) -> int:
 def cmd_enrich(conn) -> int:
     """관계도 실제 사건을 사연처럼 풀어 쓴다 (Claude API)."""
     from . import enrich
-    from .answerer import ClaudeAnswerer, get_api_key
+    from .answerer import make, ready
 
     lock = config.instance_lock("enrich")
     if lock is None:
         say("이미 풀어 쓰는 중입니다.")
         return 0
-    if not get_api_key():
-        enrich.save_status(conn, running=False, done=0, kept=0, total=len(enrich.pending(conn)),
-                           error="Claude API 키가 없습니다. 설정 화면에서 저장하세요.")
-        say("[중단] Claude API 키가 없습니다.")
+    ok, why = ready(conn)
+    if not ok:
+        enrich.save_status(conn, running=False, done=0, kept=0, total=len(enrich.pending(conn)), error=why)
+        say(f"[중단] {why}")
         return 2
-    answerer = ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort"))
+    answerer = make(conn)
     done, kept = enrich.run(conn, answerer.enrich_events, say)
     say(f"끝: {done}건 풀어 씀, {kept}건은 원래 한 줄 유지")
     return 0

@@ -118,8 +118,8 @@ def run(conn: sqlite3.Connection, enrich: Callable[[dict, list[dict]], list[dict
             error = str(e)[:150]
             say(f"[오류] {type(e).__name__}: {error}")
             save_status(conn, running=True, done=done, kept=kept, total=total, started=started, error=error)
-            if "API 키" in error or "권한" in error:
-                break   # 키·권한 문제는 다음 묶음도 똑같이 실패한다
+            if any(w in error for w in ("API 키", "권한", "로그인", "한도", "설치되어 있지 않")):
+                break   # 키·권한·구독 로그인·한도 문제는 다음 묶음도 똑같이 실패한다
             continue
         for exp in batch:
             out = results.get(exp["id"]) or {}

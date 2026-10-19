@@ -128,14 +128,14 @@ def refresh_channel(conn, channel: str, answerer, today: str | None = None) -> s
 
 def refresh(conn, answerer=None, channels: list[str] | None = None, say=print) -> list[str]:
     if answerer is None:
-        from .quizbot import config
-        from .quizbot.answerer import ClaudeAnswerer, get_api_key
+        from .quizbot.answerer import make, ready
 
-        if not get_api_key():
-            msg = "Claude API 키가 없어 MBC·KBS 편성표를 찾지 못했습니다 (퀴즈 자동 화면에서 저장)."
+        ok, why = ready(conn)
+        if not ok:
+            msg = f"MBC·KBS 편성표를 찾지 못했습니다 — {why}"
             db.log(conn, "programs", msg)
             return [msg]
-        answerer = ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort"))
+        answerer = make(conn)
     results = []
     for channel in channels or channels_to_fetch(conn):
         try:
