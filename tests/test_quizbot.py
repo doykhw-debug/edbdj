@@ -121,10 +121,10 @@ def test_claude_answerer_request_and_parse():
     res = a.analyze("김영철의 파워FM", "[07:10:00] 오늘의 퀴즈", [(3, "이전 문제")])
     assert res.answer == "사과" and res.kind == "new_question"
     call = msgs.calls[0]
-    assert call["model"] == "claude-opus-5-5"
+    assert call["model"] == "claude-sonnet-5-5"
     assert call["fallbacks"] == "default" and call["betas"] == ["server-side-fallback-2026-07-01"]
     assert call["output_config"]["format"]["type"] == "json_schema"
-    assert call["output_config"]["effort"] == "medium"
+    assert call["output_config"]["effort"] == "low"
     assert "3. 이전 문제" in call["messages"][0]["content"]
     assert set(answerer.SCHEMA["required"]) == set(answerer.SCHEMA["properties"])
 

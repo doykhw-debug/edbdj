@@ -116,9 +116,18 @@ def cmd_check(conn) -> int:
         try:
             from .gorilla import Gorilla
 
-            w = Gorilla(config.GorillaConfig.load(conn, app)).find_window()
-            item(f"{label} 창 ({channel})", w is not None,
-                 f"— '{w.window_text()}'" if w is not None else f"— {label} PC 앱을 실행하세요")
+            from . import finder
+
+            sender = Gorilla(config.GorillaConfig.load(conn, app))
+            ok = sender.is_running() or sender.find_window() is not None
+            if ok:
+                item(f"{label} 창 ({channel})", True, "— 채팅 입력 자리 확인됨")
+            elif finder.running(conn, app):
+                item(f"{label} 창 ({channel})", False,
+                     f"— {label} 앱은 켜져 있지만 채팅 창(입력칸) 자리를 못 찾음: 채팅이 닫혔거나 창을 옮김 → "
+                     "'앱 채팅·인식 설정'의 '원버튼 찾기'")
+            else:
+                item(f"{label} 창 ({channel})", False, f"— {label} PC 앱이 꺼져 있습니다. 켜고 채팅 화면을 여세요")
         except Exception as e:
             item(f"{label} 창 ({channel})", False, f"— {type(e).__name__}")
     try:
@@ -153,6 +162,25 @@ def cmd_auto_setup(conn, app: str = "gorilla") -> int:
     out.write_text(dump(report), encoding="utf-8")
     _save(conn, app, report["settings"], "자동 찾기: " + report["message"])
     return 0 if report["settings"] else 1
+
+
+def cmd_find(conn, app: str = "gorilla", every: bool = False) -> int:
+    """원버튼 찾기: 앱이 켜져 있는지 → 입력칸·전송 버튼·채팅 목록 자리 → 저장 + 확인 사진 (every: 세 앱 모두)."""
+    from . import finder
+    from .runner import shared_input_lock
+
+    apps = list(config.CHAT_APPS) if every else [app]
+    found_any = False
+    for one in apps:
+        say(f"{config.app_label(one)} 찾는 중…")
+        with shared_input_lock():   # 보내는 중에 창을 앞으로 가져오거나 누르지 않게
+            report = finder.find(conn, one, use_claude=True, click_toggle=True)
+        report["file"] = finder.save_report(one, report)
+        _save(conn, one, report["settings"], "원버튼 찾기: " + report["message"])
+        if report["settings"]:
+            db.set_setting(conn, f"{one}.auto_found_at", "0")
+            found_any = True
+    return 0 if found_any else 1
 
 
 def cmd_inspect(conn, app: str = "gorilla") -> int:
@@ -321,12 +349,13 @@ def cmd_stt_test(conn) -> int:
         from . import stt
 
         config.migrate_stt_defaults(conn)
+        config.migrate_defaults(conn)
         model, device = config.get(conn, "quizbot.whisper_model"), config.get(conn, "quizbot.whisper_device")
         phase(f"음성 인식 준비 중 ({device} · {model}, 처음 한 번은 그래픽카드 점검과 모델 내려받기로 몇 분)")
         from . import gpu
 
         device, note = gpu.choose_device(conn, device)
-        tr = stt.WhisperTranscriber(model, "", device, beam_size=config.get_int(conn, "quizbot.whisper_beam"),
+        tr = stt.WhisperTranscriber(model, "", device, beam_size=config.whisper_beam(conn, device),
                                     hints=stt.build_hints((), config.get(conn, "quizbot.stt_hints")))
         step("음성 인식 모델", True, f"{tr.label} · {tr.load_seconds:.1f}초 · {note}")
         phase("받아쓰는 중")
@@ -390,12 +419,13 @@ def cmd_gpu_check() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
-    ap.add_argument("command", choices=["run", "captions", "check", "stt-test", "auto-setup", "inspect-gorilla",
+    ap.add_argument("command", choices=["run", "captions", "check", "stt-test", "auto-setup", "find", "inspect-gorilla",
                                         "select", "calibrate", "send-test", "chat-test", "sms-check", "sms-test",
                                         "gpu-check", "enrich"])
     ap.add_argument("target", nargs="?", choices=["window", "input", "send", "chat"])
     ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
+    ap.add_argument("--all", action="store_true", help="find: 세 앱(고릴라·콩·mini) 모두")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
     ignore_ctrl_c()
@@ -432,6 +462,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_sms_test(conn)
         if args.command == "auto-setup":
             return cmd_auto_setup(conn, args.app)
+        if args.command == "find":
+            return cmd_find(conn, args.app, args.all)
         if args.command == "inspect-gorilla":
             return cmd_inspect(conn, args.app)
         if args.command == "select":

@@ -57,6 +57,7 @@ def create_app(data_dir: str | None = None) -> Flask:
     )
     conn = db.connect()
     db.init_db(conn)
+    qconfig.migrate_defaults(conn)
     conn.close()
 
     app.jinja_env.globals.update(
@@ -1743,7 +1744,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             flash("휴대폰 문자 연결을 점검합니다. 10초쯤 뒤 이 화면이 새로 고쳐집니다." if tool == "sms-check" else
                   "시험 문자를 실제로 보냅니다 (요금 발생). 20초쯤 뒤 휴대폰 화면 사진이 아래에 나옵니다.")
             return redirect(url_for("sms_page", wait=10 if tool == "sms-check" else 20))
-        args = {"check": ["check"], "auto-setup": ["auto-setup"], "inspect": ["inspect-gorilla"],
+        args = {"check": ["check"], "auto-setup": ["auto-setup"], "find": ["find"], "find-all": ["find", "--all"],
+                "inspect": ["inspect-gorilla"],
                 "select-window": ["select", "window"], "select-input": ["select", "input"],
                 "select-send": ["select", "send"], "select-chat": ["select", "chat"], "chat-test": ["chat-test"],
                 "calibrate-input": ["calibrate", "input"],
@@ -1769,6 +1771,9 @@ def create_app(data_dir: str | None = None) -> Flask:
         messages = {
             "check": "환경을 점검합니다. 10~30초 뒤 이 화면을 새로 고치세요.",
             "auto-setup": "열린 창 중에서 고릴라 채팅창을 찾습니다 (읽기만 함). 10~30초 뒤 이 화면을 새로 고치세요.",
+            "find": "원버튼 찾기: 고릴라 앱이 켜져 있는지 보고 입력칸·전송 버튼·채팅 목록을 찾아 저장합니다. 고릴라 창이 잠깐 "
+                    "앞으로 나오고, 채팅이 닫혀 있으면 말풍선 버튼을 한 번 누릅니다 (20~60초, 글은 보내지 않음).",
+            "find-all": "원버튼 찾기: 고릴라·콩·mini 세 앱을 차례로 찾습니다 (켜져 있는 앱만, 1~2분, 글은 보내지 않음).",
             "inspect": "고릴라 창의 화면 요소를 읽습니다 (아무것도 누르지 않음).",
             "select-window": "화면이 어두워지면 고릴라 창 전체를 마우스로 끌어 네모로 감싸세요. 손을 떼면 저장됩니다.",
             "select-input": "화면이 어두워지면 고릴라의 '공감로그 글쓰기' 칸을 마우스로 끌어 네모로 그리세요.",
@@ -1781,7 +1786,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                          "끝나면 누르기 직전·보낸 뒤 사진이 아래에 나옵니다.",
         }
         flash(f"{qconfig.localize(app_, messages[tool])} (기록: {log_name})")
-        wait = 25 if tool.startswith(("select", "calibrate")) else 12
+        wait = 25 if tool.startswith(("select", "calibrate")) else 40 if tool.startswith("find") else 12
         if tool == "check":
             return redirect(url_for("quizbot", wait=wait))
         return redirect(url_for("gorilla", app=app_, wait=wait))
@@ -1848,6 +1853,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             data["file"] = files[0].name
             return data
 
+        found = latest(f"{app_}_found_*.json")   # 원버튼 찾기
         report = latest(f"{app_}_2*.json")       # 창 점검
         auto = latest(f"{app_}_auto_*.json")     # 자동 찾기
         if report and auto and report["file"][len(app_) + 1:] < auto["file"][len(app_) + 6:]:
@@ -1873,7 +1879,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             last_tool = (f.name, text[-1500:] or "(아직 진행 중이거나 출력 없음)")
             break
         label = qconfig.app_label(app_)
-        shots = image_list([(f"{app_}_chat", "④ 채팅창 읽기 — 키워드가 들리면 이 영역을 녹취와 함께 분석 (글자가 읽혀야 함)"),
+        shots = image_list([(f"{app_}_found", "원버튼 찾기 — 파랑 입력칸 · 초록 전송 버튼 · 보라 채팅 목록 (제자리에 있어야 함)"),
+                            (f"{app_}_chat", "④ 채팅창 읽기 — 키워드가 들리면 이 영역을 녹취와 함께 분석 (글자가 읽혀야 함)"),
                             (f"{app_}_select_chat", "④ 채팅 목록으로 지정한 영역"),
                             (f"{app_}_test", "③ 전송 테스트 — 누르기 직전, 또는 보내지 못했을 때 (빨강: 입력칸 클릭, 초록: 전송 버튼 클릭 위치)"),
                             (f"{app_}_test_sent", "③ 전송 테스트 — 보낸 뒤 (채팅에 글이 올라왔는지 확인)"),
@@ -1882,7 +1889,8 @@ def create_app(data_dir: str | None = None) -> Flask:
                             (f"{app_}_select_window", f"{label} 창으로 지정한 영역")])
         return render_template("gorilla.html", app=app_, label=label, apps=qconfig.CHAT_APPS,
                                keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
-                               labels=qconfig.LABELS, report=report, auto=auto, coords=coords, last_tool=last_tool,
+                               labels=qconfig.LABELS, report=report, auto=auto, found=found, coords=coords,
+                               last_tool=last_tool,
                                rects=rects, region=region, shots=shots,
                                waiting=request.args.get("wait", type=int))
 

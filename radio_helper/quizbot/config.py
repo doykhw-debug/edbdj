@@ -13,12 +13,12 @@ DEFAULTS = {
     "quizbot.chunk_seconds": "10",
     "quizbot.whisper_model": "auto",      # auto: 그래픽카드 large-v3 / CPU large-v3-turbo (코어 16개 미만 small)
     "quizbot.whisper_device": "auto",     # auto: 별도 프로세스로 그래픽카드를 점검해 통과하면 그래픽카드, 아니면 CPU
-    "quizbot.whisper_beam": "5",          # 받아쓰기 후보 수 (느리면 1)
+    "quizbot.whisper_beam": "auto",       # 받아쓰기 후보 수: auto = 그래픽카드 5 · CPU 1 (CPU 에서 5 는 녹음보다 느렸음)
     "quizbot.stt_overlap": "3",           # 겹쳐 듣기: 조각 끝 이 초 안에서 시작한 말은 다음 조각과 이어서 받아씀 (0=끔)
     "quizbot.stt_hints": "",              # 음성 인식 단어 힌트 (자주 틀리는 이름을 쉼표로)
     "quizbot.context_seconds": "180",     # 분석에 넘기는 최근 녹취 길이
     "quizbot.settle_seconds": "40",       # 퀴즈 신호 뒤 문제를 끝까지 듣고 분석하기까지 기다리는 시간
-    "quizbot.cooldown_seconds": "60",
+    "quizbot.cooldown_seconds": "90",     # 같은 퀴즈를 되풀이해 분석하지 않게 (60초일 때 1분마다 분석해 구독 한도를 빨리 씀)
     "quizbot.max_analyses_per_window": "15",
     "quizbot.max_sends_per_hour": "4",
     # 기발한 오답: 정답 대신 '웃긴 포인트'가 있는 오답을 섞어 보낸다
@@ -49,9 +49,9 @@ DEFAULTS = {
     "live.board_auto": "1",               # 방송에서 게시판에 남겨 달라는 사연: 검사 경고 없으면 자동 승인·입력·등록
     "live.quiz_always": "1",              # 퀴즈는 확신도와 상관없이 정답 후보를 보냄 (객관식·주관식 모두, 틀려도 손해 없음)
     "live.captions": "1",                 # 자막 창 띄우기
-    # 분석 (Claude)
-    "quizbot.model": "claude-opus-5-5",
-    "quizbot.effort": "medium",
+    # 분석 (Claude) — 구독 한도·요금을 아끼려고 Sonnet·low (Opus·medium 일 때 몇 시간 만에 구독 한도에 걸렸음)
+    "quizbot.model": "claude-sonnet-5-5",
+    "quizbot.effort": "low",
     "quizbot.billing": "api",             # api: API 키(충전 요금) / subscription: Claude 구독(이 PC 의 Claude Code 로그인)
     "quizbot.billing_fallback": "0",      # 구독으로 안 될 때(한도·로그인 풀림) API 키로 이어서 (충전 요금, 켜야 함)
     "quizbot.autostart": "0",
@@ -97,7 +97,7 @@ LABELS = {
     "quizbot.chunk_seconds": "녹음 단위(초)",
     "quizbot.whisper_model": "음성 인식 모델 (auto / large-v3 / large-v3-turbo / medium / small / base)",
     "quizbot.whisper_device": "음성 인식 장치 (auto 권장 / cpu / cuda)",
-    "quizbot.whisper_beam": "받아쓰기 후보 수 (1~5, 느리다는 안내가 뜨면 1)",
+    "quizbot.whisper_beam": "받아쓰기 후보 수 (auto=그래픽카드 5·CPU 1, 또는 1~5. 녹음보다 느리면 저절로 줄임)",
     "quizbot.stt_overlap": "겹쳐 듣기(초, 0=끔)",
     "quizbot.stt_hints": "음성 인식 단어 힌트 (자주 틀리는 이름을 쉼표로)",
     "quizbot.context_seconds": "분석에 쓰는 최근 녹취(초)",
@@ -115,8 +115,8 @@ LABELS = {
     "quizbot.witty_ratio": "기발한 오답 비율 (0~1, 정답이 확실할 때도)",
     "quizbot.min_wit_score": "기발한 오답 최소 점수 (0~1)",
     "quizbot.chat_shots": "분석 때 함께 보는 채팅창 사진 수 (0=녹취만)",
-    "quizbot.model": "Claude 모델",
-    "quizbot.effort": "분석 노력 수준 (low/medium/high)",
+    "quizbot.model": "Claude 모델 (claude-sonnet-5-5 권장 · 더 정확하게: claude-opus-5-5, 구독 한도를 빨리 씀)",
+    "quizbot.effort": "분석 노력 수준 (low 권장 / medium / high — 높을수록 한도를 빨리 씀)",
     "gorilla.process_name": "고릴라 프로그램 이름 (자동 찾기로 채워짐)",
     "gorilla.window_title": "고릴라 창 제목(정규식, 프로그램 이름이 없을 때)",
     "gorilla.input_mode": "입력칸 찾기 (screen=모니터 위치 / uia / coords)",
@@ -256,6 +256,52 @@ def migrate_stt_defaults(conn: sqlite3.Connection) -> bool:
     if changed:
         db.log(conn, "quizbot", "음성 인식 설정을 자동(auto)으로 바꿨습니다 — 예전 기본값(small · CPU)을 쓰던 경우만")
     return changed
+
+
+DEFAULTS_MIGRATED = "meta.defaults_050"
+# 0.50: 감지된 오류로 바꾼 기본값. 예전 기본값을 그대로 쓰던 PC 만 한 번 바꾼다 (직접 고른 다른 값은 그대로)
+CHANGED_DEFAULTS = (
+    ("quizbot.model", "claude-opus-5-5", "claude-sonnet-5-5"),   # 구독 한도(monthly spend limit)에 걸림
+    ("quizbot.effort", "medium", "low"),
+    ("quizbot.cooldown_seconds", "60", "90"),                     # 1분마다 같은 퀴즈를 다시 분석
+    ("quizbot.whisper_beam", "5", "auto"),                        # 받아쓰기가 녹음보다 느림 (23초/10초)
+)
+
+
+def migrate_defaults(conn: sqlite3.Connection) -> list[str]:
+    """예전 기본값을 그대로 쓰던 설정만 새 기본값으로 (한 번만). 바꾼 이름 목록."""
+    if db.get_setting(conn, DEFAULTS_MIGRATED) == "1":
+        return []
+    changed = []
+    for key, old, new in CHANGED_DEFAULTS:
+        if db.get_setting(conn, key) == old:
+            db.set_setting(conn, key, new)
+            changed.append(f"{LABELS.get(key, key).split(' (')[0]} {old}→{new}")
+    db.set_setting(conn, DEFAULTS_MIGRATED, "1")
+    if changed:
+        db.log(conn, "quizbot", "감지된 오류(구독 한도·느린 받아쓰기)에 맞춰 예전 기본값을 바꿨습니다: " + ", ".join(changed))
+    return changed
+
+
+def whisper_beam(conn: sqlite3.Connection, device: str) -> int:
+    """받아쓰기 후보 수: 숫자면 그대로(1~10), auto 면 그래픽카드 5 · CPU 1."""
+    raw = (get(conn, "quizbot.whisper_beam") or "").strip().lower()
+    if raw.isdigit():
+        return max(1, min(10, int(raw)))
+    return 5 if device == "cuda" else 1
+
+
+# 받아쓰기가 녹음보다 느릴 때 한 단계씩 작은 모델로
+SMALLER_MODEL = {"large-v3": "large-v3-turbo", "large-v3-turbo": "small", "medium": "small", "small": "base",
+                 "base": "tiny"}
+
+
+def stt_speedup(beam: int, model: str) -> tuple[str, str | None]:
+    """느릴 때 다음 단계 (순수 계산): ('beam', None) 후보 수 1로 / ('model', 더 작은 모델) / ('none', None)."""
+    if beam > 1:
+        return "beam", None
+    smaller = SMALLER_MODEL.get(model)
+    return ("model", smaller) if smaller else ("none", None)
 
 
 def get_float(conn: sqlite3.Connection, key: str) -> float | None:

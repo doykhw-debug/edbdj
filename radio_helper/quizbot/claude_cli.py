@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,10 @@ from pathlib import Path
 API_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")   # 있으면 구독 대신 이것으로 결제됨
 CHECK_KEY = "claude_cli.check"
 TIMEOUT = 300
-LIMIT_PAUSE = 600          # 구독 한도에 걸리면 10분 동안은 다시 부르지 않음 (매번 실패하며 시간 쓰지 않게)
+LIMIT_PAUSE = 1800         # 한도에 걸렸는데 풀리는 시각을 모르면 30분 동안은 다시 부르지 않음 (매번 실패하며 시간 쓰지 않게)
+MAX_LIMIT_PAUSE = 8 * 3600
+# 'your session limit resets 3:30am (Asia/Seoul)' / 'resets at 15:00' — 풀리는 시각
+RESET_AT = re.compile(r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", re.I)
 _limited_until = 0.0
 
 
@@ -96,8 +100,8 @@ def _run(cmd: list[str], stdin: str = "", timeout: float = TIMEOUT, cwd: str | N
 
 def _kind(text: str) -> str:
     low = (text or "").lower()
-    if any(w in low for w in ("usage limit", "limit reached", "hit your limit", "rate limit", "rate_limit",
-                              "사용량 한도", "한도")):
+    if any(w in low for w in ("usage limit", "limit reached", "hit your", "spend limit", "session limit",
+                              "weekly limit", "limit resets", "rate limit", "rate_limit", "사용량 한도", "한도")):
         return "limit"
     if any(w in low for w in ("not logged in", "/login", "log in", "login", "authentication", "unauthorized",
                               "oauth", "invalid api key", "로그인")):
@@ -118,12 +122,52 @@ def limited() -> bool:
     return time.time() < _limited_until
 
 
+def limited_until() -> float:
+    return _limited_until if limited() else 0.0
+
+
+def reset_time(text: str, now: float | None = None) -> float | None:
+    """한도 안내에서 풀리는 시각 (이 PC 시각 기준, 다음에 오는 그 시각). 모르면 None."""
+    from datetime import datetime, timedelta
+
+    m = RESET_AT.search(text or "")
+    if not m:
+        return None
+    hour, minute, half = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower()
+    if half:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if half == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return None
+    base = datetime.fromtimestamp(now if now is not None else time.time())
+    at = base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if at <= base:
+        at += timedelta(days=1)
+    return at.timestamp()
+
+
+def pause_for_limit(why: str, now: float | None = None) -> float:
+    """한도에 걸림: 풀리는 시각(+1분)까지, 모르면 30분 동안 부르지 않는다. 쉬는 끝 시각."""
+    global _limited_until
+    now = now if now is not None else time.time()
+    at = reset_time(why, now)
+    _limited_until = min(at + 60, now + MAX_LIMIT_PAUSE) if at else now + LIMIT_PAUSE
+    return _limited_until
+
+
+def pause_note() -> str:
+    """쉬는 중이면 '03:31 까지' 같은 안내, 아니면 빈 글."""
+    if not limited():
+        return ""
+    return time.strftime("%H:%M", time.localtime(_limited_until)) + " 까지"
+
+
 def run(system: str, content, schema: dict | None = None, tools: tuple[str, ...] = (), model: str | None = None,
         effort: str | None = None, timeout: float = TIMEOUT, exe: list[str] | None = None) -> dict:
     """claude -p 한 번. content: 글 또는 메시지 블록 목록(사진 포함). → {text, data(구조화 결과), texts(중간 글 포함)}"""
-    global _limited_until
     if limited():
-        raise ClaudeCliError(MESSAGES["limit"] + " 잠시 쉬는 중.", "limit")
+        raise ClaudeCliError(f"{MESSAGES['limit']} {pause_note()} 쉬는 중.", "limit")
     exe = exe or find_claude()
     if not exe:
         raise ClaudeCliError(MESSAGES["missing"], "missing")
@@ -168,7 +212,7 @@ def run(system: str, content, schema: dict | None = None, tools: tuple[str, ...]
                                          (done.stderr or "")[-400:]) if x).strip()
         kind = _kind(why) if why else "error"
         if kind == "limit":
-            _limited_until = time.time() + LIMIT_PAUSE
+            pause_for_limit(why)
         detail = MESSAGES.get(kind) or f"Claude Code 오류 (종료 코드 {done.returncode})"
         raise ClaudeCliError(f"{detail} {why[:200]}".strip(), kind)
     data = result.get("structured_output")

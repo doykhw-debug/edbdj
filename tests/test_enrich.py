@@ -125,7 +125,7 @@ def test_cli_runs_whole_path_with_claude_call(conn, monkeypatch):
     monkeypatch.setattr(answerer, "get_api_key", lambda: "sk-test")
     assert cli.cmd_enrich(conn) == 0
     req = FakeAnthropic.requests[0]
-    assert req["model"] == "claude-opus-5-5" and req["fallbacks"] == "default"
+    assert req["model"] == "claude-sonnet-5-5" and req["fallbacks"] == "default"
     assert req["output_config"]["format"]["schema"] == answerer.ENRICH_SCHEMA and req["system"] == answerer.ENRICH_SYSTEM
     assert conn.execute("SELECT COUNT(*) FROM experiences WHERE enriched_at IS NOT NULL AND enrich_note IS NULL "
                         "AND story = ?", (LONG.strip(),)).fetchone()[0] == 5

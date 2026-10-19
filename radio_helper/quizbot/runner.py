@@ -95,6 +95,7 @@ class Deps:
     sms: object | None = None                           # 휴대폰 문자: is_ready(), send(number, text)
     chat_senders: dict | None = None                    # 앱별 채팅 전송 {"mini": ..., "kong": ...} (없으면 sender)
     launch_board: Callable[[int], str] | None = None    # 원고 번호 → 게시판 자동 등록 도구를 띄우고 기록 파일 이름
+    refind: Callable[[sqlite3.Connection, str], dict | None] | None = None   # 채팅 창을 못 찾을 때 다시 찾기 (finder.auto)
 
 
 # ── 판단 ────────────────────────────────────────────────────────────
@@ -337,6 +338,7 @@ class Runner:
             db.log(self.conn, "quizbot", f"{label} 창을 찾지 못했습니다 — 듣기·자막은 계속하고, 보낼 글은 {label} 창을 찾으면 보냅니다.")
 
         config.migrate_stt_defaults(self.conn)
+        config.migrate_defaults(self.conn)
         model = config.get(self.conn, "quizbot.whisper_model")
         self.state(f"음성 인식 준비 중 ({config.get(self.conn, 'quizbot.whisper_device')} · {model}, "
                    "처음 한 번은 그래픽카드 점검과 모델 내려받기 약 1.6~3GB로 몇 분 걸릴 수 있음)")
@@ -388,7 +390,7 @@ class Runner:
                         transcriber.set_context(program, stt_hints(self.conn, program))
                 if not wait_for_gorilla and (self.deps.now() - gorilla_checked).total_seconds() >= 60:
                     gorilla_checked, was_ok = self.deps.now(), gorilla_ok
-                    gorilla_ok = self.chat_ok(session["channel"])
+                    gorilla_ok = self.chat_ok(session["channel"]) or self.refind_chat(session["channel"])
                     if gorilla_ok and not was_ok:
                         label = config.app_label(config.chat_app(self.conn, session["channel"]))
                         db.log(self.conn, "quizbot", f"{label} 창을 찾았습니다 — 보류한 글을 보냅니다.")
@@ -416,8 +418,10 @@ class Runner:
                 self.record_chunk(now, live.level_percent(level), took, text, first=chunks == 1)
                 slow = slow + 1 if took > chunk_seconds * 1.5 else 0
                 if slow == 3:
-                    self.event(f"받아쓰기가 녹음보다 느립니다 ({took:.0f}초/{chunk_seconds}초). "
-                               "고릴라·인식 설정에서 '받아쓰기 후보 수'를 1로 줄이세요. 그래도 느리면 모델을 small 로.")
+                    faster = self.speed_up_stt(transcriber, program, took, chunk_seconds)
+                    if faster is not None:
+                        transcriber, slow = faster, 0
+                        transcribe = getattr(transcriber, "feed", None) or transcriber.transcribe
                 if text:
                     buffer.add(now, text)
                     self.conn.execute(
@@ -499,8 +503,43 @@ class Runner:
             "SELECT * FROM quizzes WHERE program = ? AND broadcast_date = ? AND source = 'auto' ORDER BY id",
             (program, date)).fetchall()
 
+    def speed_up_stt(self, transcriber, program: str, took: float, chunk_seconds: int):
+        """받아쓰기가 녹음보다 느릴 때 한 단계 가볍게: 후보 수 1 → 더 작은 모델. 바꿨으면 (새) 받아쓰기, 못 바꾸면 None."""
+        beam = int(getattr(transcriber, "beam_size", 1) or 1)
+        model = getattr(transcriber, "model_size", "") or ""
+        step, smaller = config.stt_speedup(beam, model)
+        why = f"받아쓰기가 녹음보다 느립니다 ({took:.0f}초/{chunk_seconds}초)"
+        if step == "beam":
+            transcriber.beam_size = 1
+            db.set_setting(self.conn, "quizbot.whisper_beam", "1")
+            self.event(f"{why} → 받아쓰기 후보 수를 {beam}에서 1로 줄였습니다 (저절로, 설정에도 저장).")
+            return transcriber
+        if step == "model":
+            db.set_setting(self.conn, "quizbot.whisper_model", smaller)
+            self.event(f"{why} → 음성 인식 모델을 {model}에서 {smaller}(으)로 바꿉니다 (저절로, 설정에도 저장).")
+            try:
+                return self.deps.transcriber_factory(smaller, program)
+            except Exception as e:
+                self.event(f"작은 모델({smaller})을 준비하지 못해 그대로 씁니다: {type(e).__name__}: {str(e)[:80]}")
+                return None
+        self.event(f"{why}. 가장 가벼운 설정인데도 느립니다 — 다른 프로그램을 닫거나 그래픽카드를 쓰세요.")
+        return None
+
+    def claude_paused(self) -> bool:
+        """Claude 구독 한도로 쉬는 중이면 분석을 건너뛴다 (분석 횟수 상한도 쓰지 않음). 안내는 바뀔 때 한 번만."""
+        note = getattr(self.deps.answerer, "paused", lambda: "")()
+        if not note:
+            self._pause_logged = ""
+            return False
+        if note != getattr(self, "_pause_logged", ""):
+            self._pause_logged = note
+            db.log(self.conn, "quizbot", note)
+        return True
+
     def analyze(self, schedule, w: Window, transcript: str, images=()) -> int | None:
         program = schedule["program"]
+        if self.claude_paused():
+            return None
         known = self.known_quizzes(program, w.broadcast_date)
         self.analyses += 1
         self._images_used = len(images)
@@ -623,6 +662,8 @@ class Runner:
     # ── 선물 정보 ────────────────────────────────────────────────
     def analyze_gifts(self, schedule, w: Window, transcript: str) -> list[int]:
         program = schedule["program"]
+        if self.claude_paused():
+            return []
         self.gift_analyses += 1
         try:
             gifts = self.deps.answerer.analyze_gifts(program, transcript)
@@ -669,6 +710,8 @@ class Runner:
         exps = story.candidate_experiences(self.conn, config.broadcaster_of(schedule["channel"]))
         if not exps:
             return None  # 쓸 수 있는 실제 경험이 없으면 유료 분석을 하지 않는다
+        if self.claude_paused():
+            return None
         self.story_analyses += 1
         try:
             extra = {"images": list(images)} if images else {}
@@ -859,6 +902,23 @@ class Runner:
             return self.deps.chat_senders[app]
         return self.deps.sender
 
+    def refind_chat(self, channel: str | None) -> bool:
+        """채팅 창을 못 찾을 때(닫힘·옮겨짐): 5분에 한 번까지 다시 찾아 저장하고 전송 도구 설정을 새로 읽는다."""
+        app = config.chat_app(self.conn, channel)
+        if app is None or self.deps.refind is None or config.route(self.conn) != "app":
+            return False
+        try:
+            report = self.deps.refind(self.conn, app)
+        except Exception as e:
+            db.log(self.conn, "gorilla", f"[{config.app_label(app)}] 자동 다시 찾기 오류: {type(e).__name__}: {str(e)[:80]}")
+            return False
+        if not report or not report.get("settings"):
+            return False
+        sender = self.chat_sender(app)
+        if hasattr(sender, "cfg"):
+            sender.cfg = config.GorillaConfig.load(self.conn, app)
+        return self.chat_ok(channel)
+
     def chat_ok(self, channel: str | None) -> bool:
         app = config.chat_app(self.conn, channel)
         return app is None or self.chat_sender(app).is_running()
@@ -1007,7 +1067,7 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
     from .stt import WhisperTranscriber
 
     device, note = gpu.choose_device(conn, config.get(conn, "quizbot.whisper_device"))
-    tr = WhisperTranscriber(model, program, device, beam_size=config.get_int(conn, "quizbot.whisper_beam"),
+    tr = WhisperTranscriber(model, program, device, beam_size=config.whisper_beam(conn, device),
                             overlap_seconds=config.get_int(conn, "quizbot.stt_overlap"),
                             hints=stt_hints(conn, program))
     tr.device_note = note
@@ -1017,6 +1077,7 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
 def build_real_deps(conn: sqlite3.Connection) -> Deps:
     """윈도우에서 실제로 쓰는 구성."""
     from ..app import launch_autofill
+    from . import finder
     from .answerer import make as make_answerer
     from .audio import LoopbackRecorder
     from .gorilla import Gorilla
@@ -1040,4 +1101,5 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
         sms=AdbSms.from_settings(conn),
         lock=shared_input_lock,
         launch_board=lambda draft_id: launch_autofill(["--draft", str(draft_id), "--mode", "post"]),
+        refind=lambda c, app: finder.auto(c, app),
     )

@@ -11,7 +11,26 @@
 </div>
 
 <div class="panel">
-  <h2>1. {{ label }} 창 맞추기</h2>
+  <h2>원버튼 찾기 <span class="muted">앱 실행 여부 · 입력칸 · 전송 버튼 · 채팅 목록을 한 번에</span></h2>
+  <p class="muted">{{ label }} PC 앱을 켜 두고 누르세요. 앱 창을 잠깐 앞으로 가져와 찍은 뒤, 화면 요소 → Claude(사진 보기) → 알려진 배치 순서로
+    자리를 찾아 <b>모니터 기준 위치</b>로 저장합니다. 채팅이 닫혀 있으면 말풍선 버튼을 한 번 눌러 엽니다. 글은 보내지 않습니다.
+    로그인이 필요하면 알려 드리니 앱에서 직접 로그인하세요. 듣는 중에 채팅 창을 못 찾으면 5분에 한 번 저절로 다시 찾습니다.</p>
+  <div class="actions">
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="find"><button {{ 'disabled' if stopped }}>{{ label }} 원버튼 찾기</button></form>
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="find-all"><button class="secondary" {{ 'disabled' if stopped }}>세 앱 모두 찾기 (고릴라·콩·mini)</button></form>
+  </div>
+  {% if found %}
+    <div class="flash {{ '' if found.settings else 'warn' }}" style="margin-top:10px">
+      <b>{{ found.at }}</b> · {{ '켜져 있음' if found.running else '꺼져 있음' }}{% if found.process %} ({{ found.process }}){% endif %} — {{ found.message }}</div>
+    {% if found.found and found.found.how %}
+    <p class="muted">찾은 방법: {% for t, h in found.found.how.items() %}{{ {'input': '입력칸', 'send': '전송 버튼', 'chat': '채팅 목록'}[t] }} {{ {'uia': '화면 요소', 'claude': 'Claude', 'template': '알려진 배치'}.get(h, h) }}{{ ' · ' if not loop.last }}{% endfor %}
+      {% if found.found.login_required %} · <b>로그인 필요</b>{% endif %}</p>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>1. {{ label }} 창 맞추기 <span class="muted">원버튼 찾기가 어긋날 때 직접</span></h2>
   <p class="muted">{{ label }} PC 앱을 켜고 <b>듣는 채널의 채팅(글쓰기) 화면</b>을 열어 둔 상태에서 순서대로 하세요. {{ label }} 창을 최소화하지 마세요.
     세 앱은 원리가 같고, 앱마다 따로 한 번씩 맞추면 됩니다.</p>
   <ol>

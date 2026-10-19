@@ -489,6 +489,35 @@ SCHEDULE_PARSE_SYSTEM = """라디오 편성표 조사 결과(글)를 정해진 J
 (예: 오후 2시 → 14:00, 새벽 1시 → 01:00). 응답은 JSON 하나만."""
 
 
+BOX = {"type": "array", "items": {"type": "integer"}}
+LOCATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "app_visible": {"type": "boolean"},
+        "chat_open": {"type": "boolean"},
+        "login_required": {"type": "boolean"},
+        "input_box": BOX,
+        "send_box": BOX,
+        "chat_box": BOX,
+        "toggle_box": BOX,
+        "note": {"type": "string"},
+    },
+    "required": ["app_visible", "chat_open", "login_required", "input_box", "send_box", "chat_box", "toggle_box", "note"],
+    "additionalProperties": False,
+}
+
+LOCATE_SYSTEM = """당신은 한국 라디오 앱(SBS 고릴라, KBS 콩, MBC mini) 창을 찍은 화면 사진에서 채팅 부분의 위치를 찾는 도우미입니다.
+좌표는 받은 사진의 픽셀이며 왼쪽 위가 (0, 0) 입니다. 네모는 [왼쪽 x, 위 y, 오른쪽 x, 아래 y] 정수 4개로 적고, 보이지 않으면 빈 배열 [] 입니다.
+- input_box: 청취자가 채팅 글을 적는 입력칸 (예: '공감로그를 남기시려면 로그인 해주세요', '로그인 후 채팅에 참여할 수 있습니다',
+  'mini 메시지 작성 (200자 내외)'). 글자가 들어가는 칸 전체.
+- send_box: 그 입력칸의 글을 보내는 버튼 ('전송'·'등록'·'보내기'). 로그인 전이라 같은 자리에 '로그인' 버튼이 있으면 그 버튼.
+- chat_box: 다른 청취자 글이 올라오는 채팅 목록 (보통 입력칸 위). 공지 띠·탭·플레이어는 넣지 않습니다.
+- chat_open: 채팅 목록과 입력칸이 보이면 true. 채팅이 닫혀 있으면 false 로 하고, 채팅을 여는 버튼(말풍선 아이콘 등)이 보이면 toggle_box 에.
+- login_required: 로그인해야 글을 쓸 수 있다는 안내가 보이면 true.
+- app_visible: 사진에 라디오 앱 창이 보이면 true.
+확실하지 않은 것은 빈 배열로 둡니다. 지어내지 않습니다. 응답은 JSON 하나만."""
+
+
 class AnswererError(RuntimeError):
     pass
 
@@ -566,7 +595,7 @@ def make(conn, **kwargs) -> "ClaudeAnswerer":
 
 
 class ClaudeAnswerer:
-    def __init__(self, model: str = "claude-opus-5-5", effort: str = "medium", client=None, billing: str = "api",
+    def __init__(self, model: str = "claude-sonnet-5-5", effort: str = "low", client=None, billing: str = "api",
                  fallback: bool = False, cli=None, note=None):
         self.model = model
         self.effort = effort
@@ -594,6 +623,15 @@ class ClaudeAnswerer:
         import anthropic
 
         return anthropic
+
+    def paused(self) -> str:
+        """구독 한도로 쉬는 중이면 그 안내 (API 키로 이어 갈 수 있게 켜 두었으면 빈 글 — 그때는 API 키로 분석)."""
+        if self.billing != "subscription" or not getattr(self.cli, "limited", lambda: False)():
+            return ""
+        if self.fallback and get_api_key():
+            return ""
+        note = getattr(self.cli, "pause_note", lambda: "")()
+        return f"Claude 구독 한도에 걸려 {note + ' ' if note else ''}분석을 쉽니다 (듣기·자막·기록은 계속)"
 
     def _subscription(self, run, what: str):
         """구독(Claude Code)으로 해 보고, 안 되면 설정에 따라 API 키로 대신하거나 오류."""
@@ -742,6 +780,19 @@ class ClaudeAnswerer:
             return parse_pick(text)
         except (ValueError, TypeError, AttributeError) as e:
             raise AnswererError(f"고른 결과를 읽지 못했습니다: {e}")
+
+    def locate_chat_ui(self, app_label: str, jpeg: bytes, width: int, height: int) -> dict:
+        """앱 창 사진 → 입력칸·전송 버튼·채팅 목록·채팅 여는 버튼 네모 (사진 픽셀 좌표, LOCATE_SCHEMA)."""
+        user = (f"{app_label} 앱 창을 찍은 사진입니다 (가로 {width} × 세로 {height} 픽셀). "
+                "입력칸·전송 버튼·채팅 목록의 위치를 찾아 주세요.")
+        text = self._call(LOCATE_SYSTEM, user, LOCATE_SCHEMA, images=[("앱 창", jpeg)])
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                raise ValueError("JSON 객체가 아님")
+            return data
+        except (ValueError, TypeError) as e:
+            raise AnswererError(f"위치 찾기 결과를 읽지 못했습니다: {e}")
 
     def enrich_events(self, profile: dict, items: list[dict]) -> list[dict]:
         """실제 사건 한 줄들을 사연 재료로 풀어 쓴다. [{id, story, highlight, ending, added_facts}]"""

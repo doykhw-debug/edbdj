@@ -41,7 +41,7 @@ def test_migrate_keeps_other_choices(conn):
     db.set_setting(conn, "quizbot.whisper_device", "cpu")
     config.migrate_stt_defaults(conn)
     assert (config.get(conn, "quizbot.whisper_model"), config.get(conn, "quizbot.whisper_device")) == ("medium", "auto")
-    assert config.get(conn, "quizbot.whisper_beam") == "5" and config.get(conn, "quizbot.stt_overlap") == "3"
+    assert config.get(conn, "quizbot.whisper_beam") == "auto" and config.get(conn, "quizbot.stt_overlap") == "3"
 
 
 def test_choose_device_probes_once_and_rechecks(conn, monkeypatch):
