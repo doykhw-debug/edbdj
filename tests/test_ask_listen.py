@@ -14,7 +14,8 @@ from radio_helper.quizbot import config
 def boot(data_dir, monkeypatch):
     started = []
     monkeypatch.setattr(launcher, "pick_port", lambda first: (5099, []))
-    for name in ("self_check", "disable_console_quick_edit", "record_native_crashes", "watch_runner", "watch_updates"):
+    for name in ("self_check", "disable_console_quick_edit", "record_native_crashes", "watch_runner", "watch_updates",
+                 "watch_tunnel_port", "wait_for_port"):
         monkeypatch.setattr(launcher, name, lambda *a, **k: None)
     monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)
     monkeypatch.setattr(launcher, "run_simple", lambda *a, **k: None)

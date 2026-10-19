@@ -22,7 +22,8 @@
       {% else %}<span class="badge bad">실행 중이 아님</span> 아래 '처음 한 번 설정'을 하세요{% endif %}</td></tr>
     <tr><th>관리 화면 번호</th><td>{{ r.port }}
       {% if r.port != r.tunnel_port %}<span class="badge bad">터널은 {{ r.tunnel_port }}번을 가리킵니다</span>
-        — 예전 검은 창이 {{ r.tunnel_port }}번을 쓰고 있을 수 있습니다. 다른 검은 창을 닫고 다시 켜세요.{% endif %}</td></tr>
+        — 그래서 지금 밖에서는 안 열립니다. {{ r.tunnel_port }}번이 비면 20초 안에 저절로 이어 붙입니다.
+        계속 이러면 예전 검은 창이 {{ r.tunnel_port }}번을 쓰고 있을 수 있으니 다른 검은 창을 닫고 다시 켜세요.{% endif %}</td></tr>
     <tr><th>밖에서 연결</th><td>{{ r.probe or '아직 확인 안 함' }} <span class="muted">{{ r.probe_at }}</span></td></tr>
   </table>
   <form method="post" class="actions"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -76,13 +76,23 @@ def test_load_env_keeps_existing_and_ignores_server_keys_on_windows(tmp_path, mo
         monkeypatch.delenv(key)
     monkeypatch.setenv("RADIO_HELPER_DATA_DIR", "C:/pc-data")
     loaded = server.load_env(env, windows=True)          # PC 폴더에 서버용 .env 를 잘못 둬도
-    assert sorted(loaded) == ["ANTHROPIC_API_KEY", "PORT"]
+    assert sorted(loaded) == ["ANTHROPIC_API_KEY"]        # PORT=5002 를 따르면 밖에서 보기(5000번)가 끊김
     assert not server.is_server()                         # PC 가 서버 모드로 바뀌지 않는다
+    assert "PORT" not in server.os.environ
     assert server.os.environ["RADIO_HELPER_DATA_DIR"] == "C:/pc-data"   # 이미 있는 값은 그대로
-    monkeypatch.delenv("PORT")
     assert server.load_env(env, windows=False) == ["PORT", server.SERVER_ENV]
     assert server.is_server()
     assert server.load_env(tmp_path / "없음") == []
+
+
+def test_pc_env_file_may_still_set_port(tmp_path, monkeypatch):
+    """서버용이 아닌 PC 의 .env 에 일부러 적은 PORT 는 그대로 따른다."""
+    env = tmp_path / ".env"
+    env.write_text("PORT=5050\nTZ=Asia/Seoul\n", encoding="utf-8")
+    for key in ("PORT", "TZ"):
+        monkeypatch.setenv(key, "x")
+        monkeypatch.delenv(key)
+    assert server.load_env(env, windows=True) == ["PORT", "TZ"] and server.port() == 5050
 
 
 def test_port_defaults(monkeypatch):

@@ -6,6 +6,7 @@ import threading
 from werkzeug.serving import make_server
 
 from radio_helper import __main__ as launcher
+from radio_helper import db
 
 
 def free_port() -> int:
@@ -132,6 +133,8 @@ def test_server_crash_is_logged_and_exits_for_restart(data_dir, monkeypatch):
     monkeypatch.setattr(launcher, "record_native_crashes", lambda: None)
     monkeypatch.setattr(launcher, "watch_runner", lambda: None)                 # 시험 중엔 감시 스레드를 띄우지 않음
     monkeypatch.setattr(launcher, "watch_updates", lambda: None)
+    monkeypatch.setattr(launcher, "watch_tunnel_port", lambda *a: None)
+    monkeypatch.setattr(launcher, "wait_for_port", lambda *a, **k: "free")
     monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)            # 시험 프로세스의 Ctrl+C 처리는 그대로
 
     def boom(*a, **k):
@@ -246,3 +249,80 @@ def test_watchdog_restarts_dead_runner_only_when_listening(conn, monkeypatch):
         assert app_module.ensure_runner(conn, restarts, 50 + i).startswith("quizbot_")
     assert app_module.ensure_runner(conn, restarts, 60) == "limit" and len(started) == 5   # 30분에 5번까지
     assert app_module.ensure_runner(conn, restarts, 1900) == "quizbot_6.log"               # 30분 지나면 다시
+
+
+# ── 다시 켤 때 5000번(밖에서 보기 터널 번호)을 지키기 (0.46) ─────────────────
+def test_restart_waits_for_tunnel_port_instead_of_moving(monkeypatch):
+    states = iter(["busy", "busy", "free"])
+    monkeypatch.setattr(launcher, "port_state", lambda p: next(states))
+    slept, said = [], []
+    assert launcher.wait_for_port(5000, seconds=60, sleep=slept.append, say=said.append) == "free"
+    assert slept == [2, 2] and "5000번이 아직 비지 않았습니다" in said[0]
+    monkeypatch.setattr(launcher, "port_state", lambda p: "busy")        # 끝내 안 비면 다음 번호로 (예전처럼)
+    slept.clear()
+    assert launcher.wait_for_port(5000, seconds=6, sleep=slept.append, say=said.append) == "busy" and len(slept) == 3
+    monkeypatch.setattr(launcher, "port_state", lambda p: "free")
+    assert launcher.wait_for_port(5000, sleep=lambda s: 1 / 0) == "free"   # 비어 있으면 기다리지 않음
+
+
+def test_restarted_main_waits_before_picking(data_dir, monkeypatch):
+    calls = []
+    monkeypatch.setattr(launcher, "wait_for_port", lambda port: calls.append(("wait", port)))
+    monkeypatch.setattr(launcher, "pick_port", lambda first: calls.append(("pick", first)) or (5000, []))
+    for name in ("self_check", "disable_console_quick_edit", "record_native_crashes", "watch_runner", "watch_updates",
+                 "watch_tunnel_port"):
+        monkeypatch.setattr(launcher, name, lambda *a, **k: None)
+    monkeypatch.setattr(launcher.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(launcher, "run_simple", lambda *a, **k: None)
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.setattr("sys.argv", ["radio_helper", "--no-browser", "--restarted"])
+    launcher.main()
+    assert calls == [("wait", 5000), ("pick", 5000)]
+    calls.clear()
+    monkeypatch.setattr("sys.argv", ["radio_helper", "--no-browser"])     # 처음 켤 때는 기다리지 않음
+    launcher.main()
+    assert calls == [("pick", 5000)]
+
+
+def test_attach_tunnel_port_when_it_frees_up(app, data_dir, monkeypatch):
+    made = []
+
+    class Srv:
+        def serve_forever(self):
+            made.append("serving")
+
+    def make(host, port, app_, threaded):
+        made.append((host, port, threaded))
+        return Srv()
+
+    app.config["SERVER_PORT"] = 5001
+    assert launcher.attach_tunnel_port(app, 5001, state=lambda p: "busy", make=make) is False and made == []
+    assert launcher.attach_tunnel_port(app, 5000, state=lambda p: "free", make=make) is False   # 이미 5000번
+    assert launcher.attach_tunnel_port(app, 5001, state=lambda p: "free", make=make) is True
+    import time as _t
+    for _ in range(50):
+        if "serving" in made:
+            break
+        _t.sleep(0.02)
+    assert made[0] == ("127.0.0.1", 5000, True) and "serving" in made and app.config["SERVER_PORT"] == 5000
+    conn = db.connect()
+    assert conn.execute("SELECT COUNT(*) FROM events WHERE kind = 'remote' AND message LIKE '%다시 이었습니다%'").fetchone()[0] == 1
+    conn.close()
+
+
+def test_attach_really_serves_on_a_free_port(app, monkeypatch):
+    """진짜 소켓으로: 비어 있는 번호를 터널 번호로 보고 이어 붙이면 그 번호로 /health 가 답한다."""
+    port = free_port()
+    monkeypatch.setattr(launcher.remote, "TUNNEL_PORT", port)
+    assert launcher.attach_tunnel_port(app, port + 1) is True
+    import json as _json
+    import time as _t
+    for _ in range(50):
+        try:
+            with launcher._local.open(f"http://127.0.0.1:{port}/health", timeout=2) as r:
+                assert _json.loads(r.read().decode("utf-8"))["app"] == "radio_helper"
+                break
+        except OSError:
+            _t.sleep(0.05)
+    else:
+        raise AssertionError("이어 붙인 번호가 답하지 않음")

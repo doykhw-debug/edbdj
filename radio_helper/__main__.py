@@ -18,7 +18,7 @@ import urllib.request
 import webbrowser
 from datetime import datetime
 
-from werkzeug.serving import run_simple
+from werkzeug.serving import make_server, run_simple
 
 from . import __version__, boards, db, remote, repair, schedules, server
 from .app import create_app, ensure_runner, start_runner
@@ -26,6 +26,8 @@ from .quizbot import config as qconfig
 
 APP_NAME = "radio_helper"
 PORT_TRIES = 20
+PORT_WAIT_SECONDS = 60      # 다시 켤 때 방금 꺼진 관리 화면이 번호(5000)를 놓을 때까지 기다리는 시간
+TUNNEL_WATCH_SECONDS = 20   # 다른 번호로 켜졌을 때 5000번이 비었는지 보는 간격
 # 끝날 때 돌려주는 값: start_windows.bat 이 보고 비정상 종료(그 밖의 값)일 때만 자동으로 다시 켠다
 EXIT_OK, EXIT_CRASH, EXIT_NO_PORT = 0, 1, 2
 _crash_file = None   # 파이썬 밖(라이브러리)에서 꺼질 때 위치를 남기는 파일 (닫히지 않게 잡아 둠)
@@ -208,6 +210,55 @@ def pick_port(first: int, tries: int = PORT_TRIES) -> tuple[int | None, list[str
     return None, notes
 
 
+def wait_for_port(port: int, seconds: float = PORT_WAIT_SECONDS, sleep=time.sleep, say=print) -> str:
+    """다시 켤 때(업데이트·오류 뒤) 방금 꺼진 관리 화면이 번호를 아직 놓지 않았으면 잠깐 기다린다.
+    바로 다음 번호(5001)로 켜면 밖에서 보기(Cloudflare 터널 → 5000번)가 끊기기 때문. 마지막 상태를 돌려준다."""
+    state = port_state(port)
+    if state != "busy":
+        return state
+    say(f"[알림] {port}번이 아직 비지 않았습니다 (방금 꺼진 관리 화면을 정리하는 중). "
+        f"밖에서 보기 주소가 이 번호를 써서 최대 {seconds:.0f}초 기다립니다.")
+    waited = 0.0
+    while waited < seconds:
+        sleep(2)
+        waited += 2
+        state = port_state(port)
+        if state != "busy":
+            break
+    return state
+
+
+def attach_tunnel_port(app, port: int, state=None, make=None) -> bool:
+    """관리 화면이 5000번이 아닌 번호로 켜져 있을 때 5000번이 비면 그 번호로도 연다 → 밖에서 보기가 다시 이어진다."""
+    target = remote.TUNNEL_PORT
+    if port == target or (state or port_state)(target) != "free":
+        return False
+    srv = (make or make_server)(server.BIND, target, app, threaded=True)
+    threading.Thread(target=srv.serve_forever, daemon=True, name="tunnel-port").start()
+    app.config["SERVER_PORT"] = target   # 원격 접속 화면: 이제 터널 번호와 같음
+    server_log(f"{target}번이 비어 그 번호로도 열었습니다 (밖에서 보기 다시 연결, 처음 켠 번호 {port})")
+    try:
+        conn = db.connect()
+        try:
+            db.log(conn, "remote", f"관리 화면을 {target}번으로도 열어 밖에서 보기(radio.haetsallab.com)를 다시 이었습니다")
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return True
+
+
+def watch_tunnel_port(app, port: int, interval: float = TUNNEL_WATCH_SECONDS) -> None:
+    while True:
+        time.sleep(interval)
+        try:
+            if attach_tunnel_port(app, port):
+                print(f"[알림] {remote.TUNNEL_PORT}번이 비어 그 번호로도 열었습니다. 밖에서 보기 주소가 다시 열립니다.", flush=True)
+                return
+        except Exception as e:   # 열지 못하면 다음에 다시
+            server_log(f"{remote.TUNNEL_PORT}번 이어 붙이기 실패: {type(e).__name__}: {e}")
+
+
 def self_check(url: str, open_browser: bool, wait: float = 15.0, say=print) -> bool:
     """서버가 뜰 때까지 기다렸다가 브라우저를 열고, 첫 화면이 실제로 열리는지 확인해 결과를 알려 준다."""
     deadline = time.time() + wait
@@ -296,6 +347,8 @@ def main() -> None:
     record_native_crashes()
 
     args.port = args.port or server.port()
+    if args.restarted:
+        wait_for_port(args.port)
     port, notes = pick_port(args.port)
     for note in notes:
         print(f"[알림] {note} → 다음 번호를 씁니다.")
@@ -317,6 +370,9 @@ def main() -> None:
     print(" 이 검은 창을 닫으면 관리 화면과 청취·퀴즈 참여가 멈춥니다.")
     print(" 켜 둔 채로 최소화하세요. 끝낼 때는 이 창에서 Ctrl+C 를 두 번 (3초 안에).")
     print(f" 데이터 위치: {db.data_dir()}  (업데이트 파일을 어디에 풀어도 그대로 남음)")
+    if port != remote.TUNNEL_PORT:
+        print(f" [주의] 밖에서 보기(radio.haetsallab.com)는 {remote.TUNNEL_PORT}번으로 들어옵니다. "
+              f"지금은 {port}번이라 밖에서는 안 열립니다 — {remote.TUNNEL_PORT}번이 비면 저절로 이어 붙입니다.")
     if db.ADOPTED_FROM:
         print(f" 예전 폴더의 경험·사연 데이터를 옮겨 왔습니다: {db.ADOPTED_FROM.parent}")
     print("=" * 60)
@@ -350,6 +406,8 @@ def main() -> None:
     threading.Thread(target=self_check, args=(url, not args.no_browser), daemon=True).start()
     threading.Thread(target=watch_runner, daemon=True).start()
     threading.Thread(target=watch_updates, daemon=True).start()
+    if port != remote.TUNNEL_PORT:
+        threading.Thread(target=watch_tunnel_port, args=(app, port), daemon=True).start()
     signal.signal(signal.SIGINT, ctrl_c_handler())
     # 개발 서버 시작 안내(빨간 WARNING)와 접속 기록은 오류처럼 보여 감춘다. 오류·경고는 그대로 보인다.
     logging.getLogger("werkzeug").setLevel(logging.WARNING)

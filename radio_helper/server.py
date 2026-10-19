@@ -73,6 +73,9 @@ def parse_env(text: str) -> dict[str, str]:
 
 # 윈도우 PC 에서는 읽지 않는 값: 서버용 .env 를 PC 폴더에 잘못 두어도 PC 가 서버 모드로 바뀌지 않게
 SERVER_ONLY_KEYS = {SERVER_ENV, "RADIO_HELPER_DATA_DIR"}
+# 서버용 .env(RADIO_HELPER_SERVER=1 이 적힌 파일)를 PC 에서 읽을 때 더 빼는 값: PORT=5002 를 따르면 PC 관리 화면이
+# 5002번으로 켜져 밖에서 보기(터널 → 5000번)가 끊기고, TZ=Asia/Seoul 은 윈도우에서 시각을 틀리게 만들 수 있다.
+SERVER_FILE_KEYS = SERVER_ONLY_KEYS | {"PORT", "PUBLIC_URL", "RADIO_HELPER_HEADLESS", "TZ"}
 
 
 def load_env(path: Path | None = None, windows: bool | None = None) -> list[str]:
@@ -83,9 +86,13 @@ def load_env(path: Path | None = None, windows: bool | None = None) -> list[str]
         values = parse_env(path.read_text(encoding="utf-8-sig"))
     except OSError:
         return []
+    skip = set()
+    if windows:
+        server_file = values.get(SERVER_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+        skip = SERVER_FILE_KEYS if server_file else SERVER_ONLY_KEYS
     loaded = []
     for key, value in values.items():
-        if windows and key in SERVER_ONLY_KEYS:
+        if key in skip:
             continue
         if key not in os.environ:
             os.environ[key] = value
