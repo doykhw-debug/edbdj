@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 # start_windows.bat 은 되돌리지 않으므로(새 것이 이미 자리를 바꿨음) 그 배치 파일이 부르는 파일은 지우지 않는다
-KEEP = {"start_windows.bat", "setup_packages.py", "rollback_update.py"}
+KEEP = {"start_windows.bat", "setup_packages.py", "rollback_update.py", "find_python.py"}
 
 
 def data_dir() -> Path:

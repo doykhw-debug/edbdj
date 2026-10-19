@@ -6,6 +6,9 @@ __pycache__/
 .pytest_cache/
 platform-tools/
 update_restart.flag
+rebuild_venv.flag
+.python_choice
+.pyok
 start_windows.new.bat
 
 # 비밀값 (.env.example 만 올린다)

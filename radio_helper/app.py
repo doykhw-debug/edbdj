@@ -15,7 +15,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import __version__, db, evidence, gates, generator, notices, quiz, remote, server, updater
+from . import __version__, db, evidence, gates, generator, notices, quiz, remote, repair, server, updater
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -36,7 +36,7 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
                 ("live.song_free", "song_free"))
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
-                     "draft_run", "corner_inspect"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
+                     "draft_run", "corner_inspect", "repair_stt"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
 
@@ -320,6 +320,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         vm["chunk_text"] = live.chunk_text(vm["last_chunk"])
         vm["log_tail"] = runner_log_tail(g.conn) if vm["status"] in ("stalled", "launching") else ""
         vm["sms_today"] = sms_today(g.conn)
+        vm["repair_text"] = repair.message(repair.status(g.conn))
         return vm
 
     @app.get("/")
@@ -342,6 +343,15 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.get("/live.json")
     def live_json():
         return home_vm()
+
+    @app.post("/repair/stt")
+    def repair_stt():
+        """첫 화면 '지금 고치기': 음성 인식 부품 설치, 또는 Python 3.12 로 다시 설치하고 다시 켜기."""
+        if not repair.status(g.conn)["missing"]:
+            flash("음성 인식 부품이 이미 설치되어 있습니다.")
+        else:
+            flash(repair.repair_now(g.conn))
+        return redirect(url_for("home"))
 
     @app.post("/listen/stt-test")
     def stt_test():

@@ -4,6 +4,8 @@ cd /d "%~dp0"
 set RH_ARGS=
 set RH_UPDATED=
 set RH_REBUILT=
+rem The helper uses this to know it can restart through this window (e.g. to rebuild .venv).
+set RADIO_HELPER_LAUNCHER=bat
 if /i "%~1"=="--after-update" (
   set RH_ARGS=--no-browser --restarted
   set RH_UPDATED=1
@@ -17,16 +19,28 @@ if exist "start_windows.new.bat" (
 )
 if exist ".venv\Scripts\python.exe" goto packages
 echo [setup] First run: creating .venv ...
-rem Prefer Python 3.12/3.11: the newest Python (e.g. 3.15) has no speech recognition parts yet.
-call :findsupported
-if not defined RH_PY call :installpython
-if not defined RH_PY call :findany
-if not defined RH_PY goto nopython
+rem Any Python that really runs is enough to start find_python.py, which picks Python 3.12/3.11
+rem (the newest Python, e.g. 3.15, has no speech recognition parts yet) and installs it if needed.
+call :bootpython
+if not defined RH_BOOT call :installpython
+if not defined RH_BOOT goto nopython
+call :choosepython
+if defined RH_PY goto makevenv
+echo [setup] Using the Python that is here: the admin screen works, quiz listening may not.
+set "RH_PY=%RH_BOOT%"
+set "RH_PYV=%RH_BOOTV%"
+:makevenv
 "%RH_PY%" %RH_PYV% -m venv .venv
 if not exist ".venv\Scripts\python.exe" goto nopython
 ".venv\Scripts\python.exe" -m pip install -q --upgrade pip
 :packages
 echo [setup] Checking packages...
+rem A rebuild was asked for by the helper (speech recognition parts missing because this Python is too new).
+if exist "rebuild_venv.flag" (
+  del /q "rebuild_venv.flag" >nul 2>nul
+  set RH_REBUILT=
+  goto newpython
+)
 rem setup_packages.py installs the admin screen and quiz parts separately and checks what is really there.
 rem 0 all ok, 1 some quiz parts missing, 2 admin screen parts missing, 3/4 = 1/2 because this Python is too new.
 if not exist "setup_packages.py" goto oldpackages
@@ -64,7 +78,7 @@ goto run
 :updated
 del /q "update_restart.flag" >nul 2>nul
 echo.
-echo [update] A new version was installed. Checking packages and starting again...
+echo [update] A new version was installed (or a repair was asked for). Checking packages and starting again...
 set RH_ARGS=--no-browser --restarted
 set RH_UPDATED=1
 goto setup
@@ -81,10 +95,15 @@ set RH_REBUILT=1
 echo.
 echo [setup] This Python is too new for the quiz speech recognition parts.
 echo [setup] Making .venv again with Python 3.12 or 3.11 - a few minutes...
-call :findsupported
-if not defined RH_PY call :installpython
+set "RH_BOOT=%CD%\.venv\Scripts\python.exe"
+set RH_BOOTV=
+if not exist "%RH_BOOT%" call :bootpython
+if not defined RH_BOOT goto oldpythonmissing
+call :choosepython
 if not defined RH_PY goto oldpythonmissing
-"%RH_PY%" %RH_PYV% -m venv --clear .venv
+rem Close anything still running from .venv (e.g. the captions window) so it can be cleared.
+powershell -NoProfile -Command "Get-Process | Where-Object { $_.Path -like (Join-Path (Get-Location) '.venv\*') } | Stop-Process -Force" >nul 2>nul
+"%RH_PY%" -m venv --clear .venv
 if not exist ".venv\Scripts\python.exe" goto setup
 ".venv\Scripts\python.exe" -m pip install -q --upgrade pip
 goto packages
@@ -116,55 +135,48 @@ echo [restart] It stopped too many times. Please send a screenshot of this windo
 pause
 exit /b
 
-:findsupported
-rem Sets RH_PY (python.exe or the py launcher) and RH_PYV (its version option) to a Python 3.12/3.11/3.13/3.14 that works.
-rem Paths are kept without quotes inside the variables so folders with spaces or brackets are safe.
+:choosepython
+rem find_python.py runs each candidate to check its real version (the new "py" install manager can
+rem report success for a version that is not installed) and installs Python 3.12 if none fits.
+rem Sets RH_PY to the full path of python.exe, or leaves it empty.
 set RH_PY=
 set RH_PYV=
-for %%V in (3.12 3.11 3.13 3.14) do (
-  if not defined RH_PY (
-    py -%%V -c "pass" <nul >nul 2>nul
-    if not errorlevel 1 (
-      set "RH_PY=py"
-      set "RH_PYV=-%%V"
-    )
-  )
+del /q ".python_choice" >nul 2>nul
+if not exist "find_python.py" goto :eof
+"%RH_BOOT%" %RH_BOOTV% find_python.py --install --out .python_choice
+if exist ".python_choice" set /p RH_PY=<".python_choice"
+del /q ".python_choice" >nul 2>nul
+goto :eof
+
+:bootpython
+rem Sets RH_BOOT/RH_BOOTV to any Python that really runs (checked by making a file, not by the exit code).
+set RH_BOOT=
+set RH_BOOTV=
+call :trypython "py" "-3"
+if not defined RH_BOOT call :trypython "python" ""
+for %%D in (Python312 Python311 Python313 Python314 Python315) do (
+  if not defined RH_BOOT if exist "%LOCALAPPDATA%\Programs\Python\%%D\python.exe" call :trypython "%LOCALAPPDATA%\Programs\Python\%%D\python.exe" ""
 )
-for %%D in (Python312 Python311 Python313 Python314) do (
-  if not defined RH_PY if exist "%LOCALAPPDATA%\Programs\Python\%%D\python.exe" set "RH_PY=%LOCALAPPDATA%\Programs\Python\%%D\python.exe"
-  if not defined RH_PY if exist "%ProgramFiles%\%%D\python.exe" set "RH_PY=%ProgramFiles%\%%D\python.exe"
-)
-for %%D in (pythoncore-3.12-64 pythoncore-3.11-64 pythoncore-3.13-64 pythoncore-3.14-64) do (
-  if not defined RH_PY if exist "%LOCALAPPDATA%\Python\%%D\python.exe" set "RH_PY=%LOCALAPPDATA%\Python\%%D\python.exe"
+for /d %%D in ("%LOCALAPPDATA%\Python\pythoncore-*") do (
+  if not defined RH_BOOT if exist "%%~D\python.exe" call :trypython "%%~D\python.exe" ""
 )
 goto :eof
 
-:findany
-rem Last resort: any Python on PATH (the admin screen works; quiz parts are checked later).
-set RH_PY=
-set RH_PYV=
-py -3 -c "pass" <nul >nul 2>nul
-if not errorlevel 1 (
-  set "RH_PY=py"
-  set "RH_PYV=-3"
+:trypython
+del /q ".pyok" >nul 2>nul
+"%~1" %~2 -c "open('.pyok','w').write('ok')" <nul >nul 2>nul
+if exist ".pyok" (
+  set "RH_BOOT=%~1"
+  set "RH_BOOTV=%~2"
 )
-if defined RH_PY goto :eof
-python -c "pass" <nul >nul 2>nul
-if not errorlevel 1 set "RH_PY=python"
+del /q ".pyok" >nul 2>nul
 goto :eof
 
 :installpython
-rem winget (built into Windows), or the new Python install manager ("py install") when winget is missing or fails.
+rem No Python at all: winget (built into Windows). find_python.py then picks it up.
 where winget >nul 2>nul
-if errorlevel 1 goto installpymanager
-echo [setup] Installing Python 3.11 with winget - a few minutes. Allow it if Windows asks.
-winget install -e --id Python.Python.3.11 --scope user --accept-package-agreements --accept-source-agreements
-call :findsupported
-if defined RH_PY goto :eof
-:installpymanager
-py list <nul >nul 2>nul
 if errorlevel 1 goto :eof
-echo [setup] Installing Python 3.12 with the Python install manager - a few minutes...
-py install 3.12 <nul
-call :findsupported
+echo [setup] Installing Python 3.12 with winget - a few minutes. Allow it if Windows asks.
+winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
+call :bootpython
 goto :eof

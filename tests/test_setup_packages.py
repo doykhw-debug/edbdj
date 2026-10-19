@@ -110,7 +110,11 @@ def test_launcher_uses_setup_packages_and_prefers_older_python():
     assert 'if "%RH_SETUP%"=="2" goto nopackages' in text                        # 끝없이 다시 켜지 않음
     assert 'if "%RH_SETUP%"=="3" if not defined RH_REBUILT goto newpython' in text
     assert "-m venv --clear .venv" in text                                       # 3.12/3.11 로 다시 만들기
-    assert text.index("for %%V in (3.12 3.11 3.13 3.14)") < text.index("py -3 -c")  # 새 Python 보다 3.12/3.11 먼저
+    # 버전은 find_python.py 가 실제로 실행해 확인하고 고른다 (py 의 종료 코드를 믿지 않음 — 0.41 까지의 문제)
+    assert "find_python.py --install --out .python_choice" in text and 'set /p RH_PY=<".python_choice"' in text
+    assert "open('.pyok','w')" in text and 'if exist ".pyok"' in text      # 파이썬이 실제로 돌았는지 파일로 확인
+    assert 'if exist "rebuild_venv.flag"' in text                          # 관리 화면이 고치기를 요청함
+    assert "Stop-Process" in text and text.index("Stop-Process") < text.index("-m venv --clear .venv")
     assert '<nul >nul 2>nul' in text                                             # 묻는 화면에서 멈추지 않음
     assert 'if not exist "setup_packages.py" goto oldpackages' in text
     # 모든 goto/call 대상이 있는 이름표인지

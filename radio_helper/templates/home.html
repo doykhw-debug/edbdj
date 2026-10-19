@@ -37,6 +37,9 @@
   </div>
   <div class="meter" title="PC에서 나오는 소리 크기"><div id="live-meter" style="width:{{ vm.level }}%"></div></div>
   <div id="live-state" class="muted">{{ vm.state or ('청취 시작을 누르면 PC 소리를 자막으로 바꾸기 시작합니다.' if not vm.active else '') }}</div>
+  {% if vm.repair_text %}<form method="post" action="{{ url_for('repair_stt') }}" id="repair-box" class="flash warn actions" style="margin:6px 0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <span>{{ vm.repair_text }}</span> <button>지금 고치기</button></form>{% endif %}
   <div id="last-chunk" class="last-chunk">{{ vm.chunk_text }}</div>
   <div id="silence" class="flash error" style="margin:0" {{ 'hidden' if not vm.silence_text }}>{{ vm.silence_text }}</div>
   <div id="last-quiz" class="last-quiz" {{ 'hidden' if not vm.quiz_text }}><a href="{{ url_for('quizzes') }}">{{ vm.quiz_text }}</a></div>
@@ -211,6 +214,7 @@
     el('live-program').textContent = vm.channel + ' · ' + vm.program;
     el('live-meter').style.width = vm.level + '%';
     el('live-state').textContent = vm.state || '';
+    if (el('repair-box')) el('repair-box').hidden = !vm.repair_text;
     el('last-chunk').textContent = vm.chunk_text || '';
     el('silence').hidden = !vm.silence_text;
     el('silence').textContent = vm.silence_text || '';

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import sqlite3
@@ -284,6 +285,10 @@ class Runner:
             fn()
         except Exception as e:  # 녹음 장치·모델 내려받기 등 실패 → 기록하고 30초 뒤 다시 시도
             msg = f"{type(e).__name__}: {str(e)[:150]}"
+            if isinstance(e, ImportError) and "faster_whisper" in str(e):
+                msg = ("음성 인식 부품(faster-whisper)이 설치되지 않음 — 관리 화면이 스스로 고치는 중 "
+                       "(첫 화면 '지금 고치기')")
+            importlib.invalidate_caches()   # 뒤에서 설치한 부품도 다음 시도에서 보이게
             try:
                 db.log(self.conn, "quizbot", f"듣기 중 오류 — 30초 뒤 다시 시도: {msg}")
                 self.state(f"오류 후 대기 중 — {msg}")

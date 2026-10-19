@@ -38,14 +38,18 @@
 ## 설치·실행 (Windows)
 
 1. Python **3.12 또는 3.11** 이 필요합니다 (3.13·3.14 도 됨). 가장 새 Python(3.15)에는 음성 인식 부품(faster-whisper 가 쓰는
-   ctranslate2·onnxruntime)이 아직 없어 퀴즈 자동이 설치되지 않습니다. 2번의 `start_windows.bat` 이 (0.40) 3.12/3.11 을 먼저 찾고,
-   없으면 윈도우 기본 설치 도구(winget)로 **Python 3.11 을 자동으로 설치**합니다 (몇 분, 윈도우가 물으면 허용). 이미 3.15 로 만든
-   `.venv` 가 있으면 3.12/3.11 로 다시 만듭니다. winget 도 없으면 python.org 내려받기 화면을 열고 멈추니,
-   ["Looking for a specific release?"](https://www.python.org/downloads/) 에서 3.12 를 골라 설치할 때 첫 화면에서
-   **"Add python.exe to PATH"** 를 체크한 뒤 다시 실행하세요.
+   ctranslate2·onnxruntime)이 아직 없어 퀴즈 자동이 설치되지 않습니다. 2번의 `start_windows.bat` 이 알아서 맞춥니다 (0.42):
+   - `find_python.py` 가 후보(py 3.12·3.11…, 설치 폴더, 등록부)를 **실제로 실행해 버전을 확인**하고 고릅니다
+     (새 Python 설치 관리자 `py` 는 3.12 가 없는데도 '성공'을 돌려줄 때가 있어 종료 코드를 믿지 않음 — 0.41 까지 이 때문에 3.15 로 다시 켜졌음).
+   - 없으면 **Python 3.12 를 자동 설치**: ① `py install 3.12` (묻는 것이 있으면 Y) ② winget ③ python.org 설치 파일(조용히, 내 계정에만).
+   - 이미 3.15 로 만든 `.venv` 는 3.12 로 다시 만듭니다. 그래도 안 되면 python.org 내려받기 화면을 열고 멈추니,
+     ["Looking for a specific release?"](https://www.python.org/downloads/) 에서 3.12 를 골라 설치한 뒤 다시 실행하세요.
    ("Python was not found … Microsoft Store" 는 윈도우의 가짜 바로 가기가 띄우는 안내라 무시해도 됩니다.)
    - 패키지는 관리 화면(Flask)과 퀴즈 자동을 따로 설치합니다. 퀴즈 부품 하나가 실패해도 관리 화면은 켜지고,
      관리 화면 패키지가 없으면 끝없이 다시 켜지 않고 안내하고 멈춥니다.
+   - **음성 인식 부품이 없을 때 스스로 고침**: 듣기를 켜 두었는데 faster-whisper 가 없으면 관리 화면이
+     Python 이 맞으면 뒤에서 설치하고(6시간에 한 번), 너무 새 Python 이면 하루 한 번 Python 3.12 로 다시 설치하고 다시 켭니다
+     (5~10분, 듣던 방송은 이어서). 첫 화면에 안내와 **지금 고치기** 버튼이 나옵니다.
 2. 이 폴더의 **`start_windows.bat`** 을 더블클릭합니다.
    - 처음 한 번은 필요한 패키지(음성 인식 포함)를 설치하느라 몇 분 걸립니다.
    - 브라우저에 관리 화면(`http://127.0.0.1:5000`)이 열립니다. 이 PC에서만 접속됩니다 (밖에서는 https://radio.haetsallab.com).

@@ -20,7 +20,7 @@ from datetime import datetime
 
 from werkzeug.serving import run_simple
 
-from . import __version__, db, remote, server
+from . import __version__, db, remote, repair, server
 from .app import create_app, ensure_runner, start_runner
 from .quizbot import config as qconfig
 
@@ -109,11 +109,16 @@ def watch_runner(interval: float = WATCHDOG_SECONDS) -> None:
             conn = db.connect()
             try:
                 done = ensure_runner(conn, restarts, time.monotonic())
+                fixed = repair.auto(conn)   # 음성 인식 부품이 없으면 스스로 고침 (설치 / Python 3.12 로 다시 켬)
             finally:
                 conn.close()
             if done and done != "limit":
                 server_log(f"듣기 실행기가 꺼져 있어 다시 켬 ({done})")
                 print(f"[알림] 듣기 실행기가 꺼져 있어 자동으로 다시 켰습니다. (기록: {done})")
+            if fixed == "pip":
+                print("[알림] 음성 인식 부품이 없어 뒤에서 설치합니다. 설치되면 듣기가 이어집니다.")
+            elif fixed == "rebuild":
+                print("[알림] 음성 인식 부품이 이 Python 에 없어 Python 3.12 로 다시 설치하고 다시 켭니다 (5~10분).")
         except Exception as e:   # 감시가 멈추지 않게
             server_log(f"듣기 실행기 감시 오류: {type(e).__name__}: {e}")
 
