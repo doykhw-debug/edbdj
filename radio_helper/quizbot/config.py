@@ -52,7 +52,7 @@ DEFAULTS = {
     # 분석 (Claude) — 구독 한도·요금을 아끼려고 Sonnet·low (Opus·medium 일 때 몇 시간 만에 구독 한도에 걸렸음)
     "quizbot.model": "claude-sonnet-5-5",
     "quizbot.effort": "low",
-    "quizbot.billing": "api",             # api: API 키(충전 요금) / subscription: Claude 구독(이 PC 의 Claude Code 로그인)
+    "quizbot.billing": "",                # 비우면 PC 는 subscription(Claude 구독, Claude Code 로그인) · 서버는 api(API 키, 충전 요금)
     "quizbot.billing_fallback": "0",      # 구독으로 안 될 때(한도·로그인 풀림) API 키로 이어서 (충전 요금, 켜야 함)
     "quizbot.autostart": "0",
     # 고릴라 화면
@@ -281,6 +281,23 @@ def migrate_defaults(conn: sqlite3.Connection) -> list[str]:
     if changed:
         db.log(conn, "quizbot", "감지된 오류(구독 한도·느린 받아쓰기)에 맞춰 예전 기본값을 바꿨습니다: " + ", ".join(changed))
     return changed
+
+
+BILLING_MIGRATED = "meta.billing_subscription"
+
+
+def migrate_billing(conn: sqlite3.Connection, server_mode: bool) -> bool:
+    """PC 는 Claude 구독이 기본 (0.51). 예전 기본값 'api' 가 저장돼 있던 PC 만 한 번 구독으로 바꾼다
+    (예전 설정 화면은 저장할 때 기본값 api 를 같이 저장했음). 그 뒤에 API 키를 고르면 그대로 둔다."""
+    if server_mode or db.get_setting(conn, BILLING_MIGRATED) == "1":
+        return False
+    db.set_setting(conn, BILLING_MIGRATED, "1")
+    if db.get_setting(conn, "quizbot.billing") != "api":
+        return False
+    db.set_setting(conn, "quizbot.billing", "subscription")
+    db.log(conn, "quizbot", "Claude 연결을 'Claude 구독(Claude Code 로그인)'으로 바꿨습니다 — PC 기본값. "
+                            "API 키(충전 요금)로 쓰려면 설정 → Claude 연결에서 다시 고르세요.")
+    return True
 
 
 def whisper_beam(conn: sqlite3.Connection, device: str) -> int:

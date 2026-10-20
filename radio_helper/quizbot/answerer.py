@@ -540,14 +540,18 @@ def save_api_key(key: str) -> None:
     keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key)
 
 
-BILLINGS = {"api": "API 키 (충전 요금)", "subscription": "Claude 구독 (Claude Code 로그인)"}
+BILLINGS = {"subscription": "Claude 구독 (Claude Code 로그인) — PC 기본", "api": "API 키 (충전 요금)"}
 
 
 def billing(conn) -> str:
     from . import config
 
+    from .. import server
+
     value = config.get(conn, "quizbot.billing")
-    return value if value in BILLINGS else "api"
+    if value in BILLINGS:
+        return value
+    return "api" if server.is_server() else "subscription"   # 기본: PC 는 Claude 구독, 서버는 API 키
 
 
 def ready(conn) -> tuple[bool, str]:
@@ -556,7 +560,7 @@ def ready(conn) -> tuple[bool, str]:
 
     has_key = bool(get_api_key())
     if billing(conn) == "api":
-        return has_key, "" if has_key else "Claude API 키가 없습니다 (설정 화면에서 저장하거나 'Claude 구독'으로 바꾸세요)."
+        return has_key, "" if has_key else "API 키 방식인데 API 키가 없습니다 (설정 → Claude 연결에서 'Claude 구독'을 고르거나 키 저장)."
     if claude_cli.find_claude():
         return True, ""
     if has_key and config.get(conn, "quizbot.billing_fallback") == "1":

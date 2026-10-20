@@ -90,22 +90,27 @@ def cmd_check(conn) -> int:
         results.append({"name": name, "ok": bool(ok), "detail": detail})
         say(f"[{'OK' if ok else '확인 필요'}] {name} {detail}")
 
-    for mod, label in [("pyaudiowpatch", "PC 소리 녹음 (PyAudioWPatch)"), ("pywinauto", "고릴라 화면 조작 (pywinauto)"),
-                       ("faster_whisper", "음성 인식 (faster-whisper)"), ("anthropic", "Claude API (anthropic)")]:
+    from . import answerer, claude_cli
+
+    subscription = answerer.billing(conn) == "subscription"
+    parts = [("pyaudiowpatch", "PC 소리 녹음 (PyAudioWPatch)"), ("pywinauto", "고릴라 화면 조작 (pywinauto)"),
+             ("faster_whisper", "음성 인식 (faster-whisper)")]
+    if not subscription:   # 구독(Claude Code)으로 쓰면 API 부품은 필요 없다
+        parts.append(("anthropic", "Claude API 부품 (anthropic, API 키 방식)"))
+    for mod, label in parts:
         try:
             __import__(mod)
             item(label, True)
         except Exception as e:
             item(label, False, f"— 설치 안 됨 ({type(e).__name__})")
-    from . import answerer, claude_cli
-
-    if answerer.billing(conn) == "subscription":
+    if subscription:
         cli = claude_cli.status()
         claude_cli.save_check(conn, cli)
         item("Claude 구독 (Claude Code 로그인)", bool(cli["subscription"]), "— " + cli["detail"])
     else:
         has_key = bool(answerer.get_api_key())
-        item("Claude API 키", has_key, "" if has_key else "— 관리 화면 '설정'에서 저장하거나 'Claude 구독'으로 바꾸세요")
+        item("Claude 연결: API 키 (충전 요금)", has_key,
+             "" if has_key else "— 설정 → Claude 연결에서 'Claude 구독'을 고르거나 API 키를 저장하세요")
     channel = config.get(conn, "live.channel")
     app = config.chat_app(conn, channel)
     if config.route(conn) == "sms" or app is None:
@@ -377,7 +382,7 @@ def cmd_stt_test(conn) -> int:
 
 
 def cmd_enrich(conn) -> int:
-    """관계도 실제 사건을 사연처럼 풀어 쓴다 (Claude API)."""
+    """관계도 실제 사건을 사연처럼 풀어 쓴다 (Claude — 설정한 방식: 구독 또는 API 키)."""
     from . import enrich
     from .answerer import make, ready
 

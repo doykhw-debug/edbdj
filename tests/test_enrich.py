@@ -89,6 +89,7 @@ def test_batches_of_eight(conn):
 def test_cli_without_api_key(conn, monkeypatch):
     moved(conn)
     monkeypatch.setattr(answerer, "get_api_key", lambda: None)
+    db.set_setting(conn, "quizbot.billing", "api")              # API 키 방식인데 키가 없음
     assert cli.cmd_enrich(conn) == 2
     status = enrich.load_status(conn)
     assert status["running"] is False and "API 키" in status["error"] and status["total"] == 5
@@ -123,6 +124,7 @@ def test_cli_runs_whole_path_with_claude_call(conn, monkeypatch):
     FakeAnthropic.requests = []
     monkeypatch.setattr(anthropic, "Anthropic", FakeAnthropic)
     monkeypatch.setattr(answerer, "get_api_key", lambda: "sk-test")
+    db.set_setting(conn, "quizbot.billing", "api")              # API 키 방식으로 고른 PC
     assert cli.cmd_enrich(conn) == 0
     req = FakeAnthropic.requests[0]
     assert req["model"] == "claude-sonnet-5-5" and req["fallbacks"] == "default"

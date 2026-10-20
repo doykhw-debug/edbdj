@@ -267,6 +267,7 @@ def test_api_billing_unchanged():
 def test_make_and_ready_follow_settings(conn, monkeypatch, tmp_path):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(answerer, "get_api_key", lambda: None)
+    db.set_setting(conn, "quizbot.billing", "api")
     assert answerer.billing(conn) == "api" and answerer.ready(conn)[0] is False
     db.set_setting(conn, "quizbot.billing", "subscription")
     ok, why = answerer.ready(conn)
@@ -280,7 +281,41 @@ def test_make_and_ready_follow_settings(conn, monkeypatch, tmp_path):
     a = answerer.make(conn)
     assert (a.billing, a.fallback, a.effort, a._client) == ("subscription", True, "low", None)
     db.set_setting(conn, "quizbot.billing", "weird")
-    assert answerer.billing(conn) == "api"
+    assert answerer.billing(conn) == "subscription"              # 모르는 값이면 PC 기본(구독)
+
+
+# ── PC 기본은 Claude 구독 (0.51) ─────────────────────────────────────
+def test_pc_default_is_subscription_server_default_is_api(conn, monkeypatch):
+    from radio_helper import server
+
+    assert config.get(conn, "quizbot.billing") == "" and answerer.billing(conn) == "subscription"
+    monkeypatch.setenv(server.SERVER_ENV, "1")
+    assert answerer.billing(conn) == "api"                       # 서버에는 보통 Claude Code 가 없어 API 키(.env)
+    monkeypatch.setenv(server.SERVER_ENV, "0")
+    assert answerer.make(conn).billing == "subscription" and answerer.make(conn)._client is None
+
+
+def test_old_api_default_moves_to_subscription_once_on_pc(conn):
+    db.set_setting(conn, "quizbot.billing", "api")              # 예전 설정 화면이 기본값 api 를 같이 저장했던 PC
+    assert config.migrate_billing(conn, server_mode=False)
+    assert answerer.billing(conn) == "subscription"
+    assert "Claude 구독" in conn.execute("SELECT message FROM events ORDER BY id DESC").fetchone()[0]
+    db.set_setting(conn, "quizbot.billing", "api")              # 그 뒤에 직접 API 키를 고르면 그대로
+    assert not config.migrate_billing(conn, server_mode=False) and answerer.billing(conn) == "api"
+
+
+def test_server_keeps_api_billing(conn):
+    db.set_setting(conn, "quizbot.billing", "api")
+    assert not config.migrate_billing(conn, server_mode=True) and config.get(conn, "quizbot.billing") == "api"
+
+
+def test_settings_page_shows_subscription_checked_by_default(client):
+    html = client.get("/quizbot").get_data(as_text=True)
+    first = html.index('name="billing" value="subscription"')
+    assert first < html.index('name="billing" value="api"')       # 구독이 먼저
+    assert 'value="subscription" checked' in html and "PC 기본" in html
+    home = client.get("/").get_data(as_text=True)
+    assert "Claude 구독 (Claude Code)" in home and "Claude API 키" not in home
 
 
 def test_schedules_and_boards_use_chosen_billing(conn, monkeypatch):

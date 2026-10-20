@@ -58,6 +58,7 @@ def create_app(data_dir: str | None = None) -> Flask:
     conn = db.connect()
     db.init_db(conn)
     qconfig.migrate_defaults(conn)
+    qconfig.migrate_billing(conn, server.is_server())
     conn.close()
 
     app.jinja_env.globals.update(
@@ -1157,8 +1158,8 @@ def create_app(data_dir: str | None = None) -> Flask:
                 ok, why = False, check.get("detail") or ""
             return {"name": "Claude 구독 (Claude Code)", "ok": ok, "url": url_for("quizbot") + "#claude",
                     "detail": why or check.get("detail") or "퀴즈·사연 분석에 필요 — 설정에서 '연결 확인'"}
-        return {"name": "Claude API 키", "ok": ok, "url": url_for("quizbot") + "#claude",
-                "detail": why or "퀴즈·사연 분석에 필요"}
+        return {"name": "Claude 연결: API 키 (충전 요금)", "ok": ok, "url": url_for("quizbot") + "#claude",
+                "detail": why or "퀴즈·사연 분석에 필요 — PC 에서는 'Claude 구독'을 권장"}
 
     def fresh_claude_check(c):
         """구독으로 골랐는데 마지막 확인이 '안 됨'이면 화면을 열 때 다시 확인한다 (로그인한 뒤 예전 결과가 남아 있지 않게)."""
@@ -1834,7 +1835,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         if app_ not in qconfig.CHAT_APPS:
             abort(404)
         keys = [k for k in qconfig.DEFAULTS if k.startswith(f"{app_}.") and not k.endswith(("_x", "_y"))] + \
-               [k for k in qconfig.DEFAULTS if k.startswith("quizbot.") and k != "quizbot.autostart"]
+               [k for k in qconfig.DEFAULTS if k.startswith("quizbot.")
+                and k not in ("quizbot.autostart", "quizbot.billing", "quizbot.billing_fallback")]   # Claude 연결은 설정 화면에서
         if request.method == "POST":
             for k in keys:
                 if k in request.form:

@@ -282,8 +282,9 @@ macOS·Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.tx
 - Claude와의 대화에서 특징과 경험을 정리한 **가져오기 파일(.json)**을 받아 *실제 경험 → 가져오기*로 한 번에 넣을 수 있습니다. 가져온 경험은 '실제로 있었던 일' 확인이 꺼진 채 들어가므로 읽고 체크해야 쓰입니다.
 
 ### 처음 설정 (첫 화면 '준비 상태'에 빠진 항목이 표시됨)
-1. **Claude 연결** — 설정 화면의 *Claude 연결*에서 둘 중 하나를 고릅니다 (아래 [Claude 구독으로 쓰기](#claude-구독으로-쓰기-045-설정--claude-연결)).
-   - **Claude 구독 (Claude Code 로그인)**: 충전 요금 없이 claude.ai 구독 사용량에서 나갑니다.
+1. **Claude 연결** — PC 는 **Claude 구독이 기본**입니다 (0.51, 아래 [Claude 구독으로 쓰기](#claude-구독으로-쓰기-045-설정--claude-연결)).
+   예전 기본값(API 키)이 저장돼 있던 PC 도 업데이트 후 한 번 구독으로 바뀝니다. API 키로 쓰려면 설정 → Claude 연결에서 고르세요.
+   - **Claude 구독 (Claude Code 로그인)** — 기본: 충전 요금 없이 claude.ai 구독 사용량에서 나갑니다.
    - **API 키 (충전 요금)**: [Claude Console](https://platform.claude.com/)에서 발급한 키를 저장합니다. 윈도우 자격 증명 관리자에만 저장되고 화면·기록·GitHub에는 남지 않습니다. (또는 환경 변수 `ANTHROPIC_API_KEY`)
 2. **환경 점검** — 녹음 장치·고릴라 창·구성 요소·Claude 연결(API 키 또는 구독 로그인)이 잡히는지 확인합니다.
 3. **고릴라·인식 설정** — 고릴라에서 듣는 채널의 공감로그 화면을 열어 두고 *① 입력칸 영역 지정* (화면이 어두워지면 '공감로그 글쓰기' 칸을 마우스로 끌어 네모) → *② 전송 버튼 영역 지정* → *③ 전송 테스트* (버튼 옆 **시험 글** 칸에 적은 글을 입력하고 **전송까지 실제로 누름**, 적은 글은 다음에도 남음).
@@ -411,7 +412,7 @@ macOS·Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.tx
    **claude.ai 계정(구독)** 으로 로그인 → 검은 창 닫기. **claude.ai 웹·Claude 데스크톱 앱에 로그인되어 있어도 Claude Code 는 따로
    한 번 로그인해야 합니다.** (Console 계정·API 키로 로그인하면 충전 요금에서 나갑니다. *연결 확인*이 알려 줍니다.)
    로그인한 뒤 설정 화면을 열면 저절로 다시 확인합니다.
-3. 설정 → Claude 연결 → **Claude 구독** 고르고 저장 → **연결 확인** (설치·로그인 방식만 확인, 모델은 부르지 않음)
+3. 설정 → Claude 연결 → **연결 확인** (PC 는 Claude 구독이 기본으로 골라져 있음. 설치·로그인 방식만 확인, 모델은 부르지 않음)
 
 - 사용량은 **claude.ai 채팅·Claude Code 와 함께 쓰는 5시간·주간 한도**에서 나갑니다. 한도에 걸리면 풀릴 때까지 분석을 못 하고
   (10분마다 다시 시도), *구독 한도에 걸리거나 로그인이 풀리면 API 키로 이어서*를 켜 두면 그동안만 API 키(충전 요금)로 대신합니다
@@ -421,7 +422,7 @@ macOS·Linux: `python3 -m venv .venv && .venv/bin/pip install -r requirements.tx
   실행합니다 (편성표 찾기만 웹 검색). 대화 기록은 남기지 않습니다.
 - Claude Code 를 한 번 거치므로 분석 1회가 몇 초 더 걸립니다.
 - Max 요금제는 매달 API 크레딧이 함께 나오므로(Console 에 연결된 조직), 그 크레딧으로 API 키 방식을 그대로 써도 됩니다.
-- 서버(`/opt/radio`)에서도 쓸 수 있습니다: 서버에 `ubuntu` 사용자로 Claude Code 를 설치하고(`curl -fsSL https://claude.ai/install.sh | bash`)
+- 서버 모드는 Claude Code 가 보통 없어서 기본이 API 키(`.env` 의 `ANTHROPIC_API_KEY`)입니다. 서버에서도 구독으로 쓸 수 있습니다: 서버에 `ubuntu` 사용자로 Claude Code 를 설치하고(`curl -fsSL https://claude.ai/install.sh | bash`)
   `claude` 로 한 번 로그인한 뒤 같은 설정을 고릅니다.
 
 ## 전 채널 편성표 · MBC·KBS 청취 (0.44, 메뉴 프로그램)

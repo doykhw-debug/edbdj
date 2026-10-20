@@ -263,6 +263,7 @@ def test_move_all_real_events_confirmed_and_enrich_starts(client, conn, monkeypa
     launched = []
     monkeypatch.setattr(app_module, "launch_quizbot", lambda args: launched.append(args) or "q.log")
     monkeypatch.setattr(answerer, "get_api_key", lambda: "sk-test")
+    db.set_setting(conn, "quizbot.billing", "api")              # API 키 방식으로 고른 PC
     token = csrf(client, "/people")
     assert "실제 사건 5건 → 경험으로 모두 옮기기" in client.get("/people").get_data(as_text=True)
     assert people.events_left(conn, person(conn, "와이프")["id"]) == 2

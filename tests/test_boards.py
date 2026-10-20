@@ -196,6 +196,7 @@ def test_no_api_key_or_stopped(conn, monkeypatch):
     from radio_helper.quizbot import answerer
 
     monkeypatch.setattr(answerer, "get_api_key", lambda: None)
+    db.set_setting(conn, "quizbot.billing", "api")              # API 키 방식인데 키가 없음
     assert "API 키" in boards.run(conn, cid, reader=page_reader(), poster=record_poster([]))
     db.set_setting(conn, "global_stop", "1")
     assert "일괄 중지" in boards.run(conn, cid, reader=page_reader(), poster=record_poster([]))
