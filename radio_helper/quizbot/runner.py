@@ -20,7 +20,7 @@ from difflib import SequenceMatcher
 from typing import Callable, Protocol
 
 from .. import db, evidence, quiz
-from . import config, live, silence, story
+from . import config, lanes, live, silence, story
 from . import sms as sms_mod
 from . import answerer as answerer_mod
 from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
@@ -158,9 +158,11 @@ def decide(conn: sqlite3.Connection, q: sqlite3.Row, schedule: sqlite3.Row | Non
             reasons.append("고릴라 응모 인정 여부 미확인")
     limit = config.get_int(conn, "quizbot.max_sends_per_hour")
     since = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-    sent = conn.execute("SELECT COUNT(*) FROM quizzes WHERE sent_at >= ?", (since,)).fetchone()[0]
+    # 채널마다 센다 (동시 청취로 여러 채널을 들어도 한 채널의 퀴즈가 다른 채널 상한을 쓰지 않게)
+    sent = conn.execute("SELECT COUNT(*) FROM quizzes WHERE sent_at >= ? AND channel IS ?",
+                        (since, q["channel"])).fetchone()[0]
     if sent >= limit:
-        reasons.append(f"최근 1시간 전송 {sent}건으로 상한({limit}) 도달")
+        reasons.append(f"최근 1시간 {q['channel'] or ''} 전송 {sent}건으로 상한({limit}) 도달".replace("  ", " "))
     return reasons
 
 
@@ -206,19 +208,28 @@ class Runner:
     analyses: int = 0
     story_analyses: int = 0
     gift_analyses: int = 0
+    lane: str = ""                 # 동시 청취의 보조 채널 칸 ("2"·"3"), 주 채널은 ""
+
+    def key(self, name: str) -> str:
+        """상태 설정 이름 (보조 채널은 따로: lane2.state …)."""
+        return lanes.key(self.lane, name)
 
     def state(self, text: str) -> None:
         if text != getattr(self, "_last_state", None):  # 실행 기록 파일에도 남긴다 (바뀔 때만)
             self._last_state = text
             self.deps.log(f"[{self.deps.now():%H:%M:%S}] {text}")
-        db.set_setting(self.conn, "quizbot.state", text)
-        db.set_setting(self.conn, "quizbot.heartbeat", self.deps.now().strftime("%Y-%m-%d %H:%M:%S"))
+        db.set_setting(self.conn, self.key("state"), text)
+        db.set_setting(self.conn, self.key("heartbeat"), self.deps.now().strftime("%Y-%m-%d %H:%M:%S"))
 
     def event(self, message: str) -> None:
+        if self.lane and getattr(self, "lane_channel", ""):
+            message = f"[{self.lane_channel}] {message}"   # 동시 청취: 어느 채널 일인지
         db.log(self.conn, "quizbot", message)
         self.deps.log(f"[{self.deps.now():%H:%M:%S}] {message}")
 
     def should_stop(self) -> bool:
+        if self.lane:   # 보조 채널: 청취를 멈췄거나 동시 청취를 끄거나 그 칸을 비우면 끝
+            return not lanes.should_run(self.conn, self.lane)
         return db.get_setting(self.conn, "quizbot.stop", "0") == "1"
 
     def schedules(self):
@@ -228,9 +239,9 @@ class Runner:
     def report_level(self, level: int) -> None:
         """녹음 중 약 1초마다 불린다. 소리 크기와 함께 '살아 있음' 신호도 갱신한다."""
         stamp = self.deps.now().strftime("%Y-%m-%d %H:%M:%S")
-        db.set_setting(self.conn, "quizbot.level", str(level))
-        db.set_setting(self.conn, "quizbot.level_at", stamp)
-        db.set_setting(self.conn, "quizbot.heartbeat", stamp)
+        db.set_setting(self.conn, self.key("level"), str(level))
+        db.set_setting(self.conn, self.key("level_at"), stamp)
+        db.set_setting(self.conn, self.key("heartbeat"), stamp)
 
     # ── 소리 끊김 감시 ───────────────────────────────────────────
     def on_second(self, level: int) -> None:
@@ -273,10 +284,10 @@ class Runner:
                 if live.stt_test_alive():
                     notes += " (받아쓰기 테스트가 함께 돌고 있었습니다.)"
                 self.event(silence.cut_message(since, quiet, self.silence.touches_before(since), notes))
-                db.set_setting(self.conn, "quizbot.silent_since", since.strftime("%Y-%m-%d %H:%M:%S"))
+                db.set_setting(self.conn, self.key("silent_since"), since.strftime("%Y-%m-%d %H:%M:%S"))
             else:
                 self.event(silence.back_message(quiet))
-                db.set_setting(self.conn, "quizbot.silent_since", "")
+                db.set_setting(self.conn, self.key("silent_since"), "")
         if self.silence.due_recheck(now):
             note = self.speaker_check(recorder)
             if note:
@@ -329,6 +340,26 @@ class Runner:
             "JOIN programs p ON p.id = s.program_id WHERE s.id = ?", (w.schedule_id,)).fetchone()
         db.log(self.conn, "quizbot", f"{schedule['program']} 예약 시작 ({w.start:%H:%M}~{w.end:%H:%M})")
         self._listen(lambda now: (schedule, w), lambda now: now < w.end)
+
+    def run_lane(self, idle_seconds: int = 5) -> None:
+        """동시 청취의 보조 채널: 그 칸의 채널을 그 칸의 녹음 장치로, 청취를 멈추거나 칸을 비울 때까지 듣는다."""
+        self.state("시작함")
+        while not self.should_stop():
+            lane = lanes.lane_of(self.conn, self.lane)
+            channel = self.lane_channel = lane["channel"]
+
+            def get_session(now, channel=channel):
+                day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                return live.session(self.conn, now, channel=channel), Window(None, day, day + timedelta(days=1))
+
+            db.log(self.conn, "quizbot", f"동시 청취 시작 — 보조 {self.lane} {channel} ({lane['device'] or '기본 스피커'})")
+            self._guarded(lambda: self._listen(
+                get_session, lambda now, channel=channel: (lanes.should_run(self.conn, self.lane) and
+                                                          lanes.lane_of(self.conn, self.lane)["channel"] == channel),
+                wait_for_gorilla=False))
+            if not self.should_stop():
+                self.deps.sleep(idle_seconds)
+        self.state("멈춤")
 
     def run_live(self) -> None:
         """'청취 시작': 예약과 상관없이 지금 듣는 채널을 '청취 중지'까지 듣는다."""
@@ -389,7 +420,7 @@ class Runner:
         self.shots: list[tuple[str, bytes]] = []   # 키워드가 들린 뒤 찍은 채팅창 사진 (녹취와 교차 분석)
         self._shot_error = False
         self.silence, self._silence_events = silence.SilenceWatch(), []
-        db.set_setting(self.conn, "quizbot.silent_since", "")
+        db.set_setting(self.conn, self.key("silent_since"), "")
         self.state("녹음 장치 여는 중")
         with self.deps.recorder_factory(chunk_seconds) as recorder:
             per_second = hasattr(recorder, "on_level")
@@ -480,12 +511,12 @@ class Runner:
                 self.dj_song(session, w, cap_key, program_since)
                 self.process_approved(session)
                 self.retry_held(session, gorilla_ok)
-        db.set_setting(self.conn, "quizbot.silent_since", "")
+        db.set_setting(self.conn, self.key("silent_since"), "")
         db.log(self.conn, "quizbot", f"{current or session['program']} 듣기 끝 · 분석 {min(self.analyses, max_analyses)}회")
 
     def record_chunk(self, now: datetime, level: int, took: float, text: str, first: bool = False) -> None:
         """화면의 '마지막 10초' 줄: 말소리가 없어도 녹음·받아쓰기가 돌고 있다는 것을 보여 준다."""
-        db.set_setting(self.conn, "quizbot.last_chunk", json.dumps(
+        db.set_setting(self.conn, self.key("last_chunk"), json.dumps(
             {"at": now.strftime("%H:%M:%S"), "level": level, "seconds": round(took, 1), "text": text[:120]},
             ensure_ascii=False))
         if first:
@@ -1155,11 +1186,13 @@ class Runner:
                                           config.get(self.conn, "sms.signature") != "0")
         # 보내기 전에 먼저 '결과 불명'으로 바꿔 두어, 도중에 멈춰도 다시 보내지 않게 한다.
         sent_text = ", send_text = ?" if table == "quizzes" else ""
-        self.conn.execute(
+        claimed = self.conn.execute(
             f"UPDATE {table} SET {status_col} = 'unknown', sent_at = ?, sent_via = ?, decision = ?{sent_text}, "
             f"updated_at = ? WHERE id = ? AND {status_col} = 'pending'",
             (db.now(), "sms" if route == "sms" else app, how, *((text,) if sent_text else ()), db.now(), item_id))
         self.conn.commit()
+        if claimed.rowcount == 0:
+            return None   # 다른 청취기(동시 청취)가 먼저 가져가 보내는 중 — 두 번 보내지 않는다
         if route != "sms":
             cfg = getattr(self.chat_sender(app), "cfg", None)
             how_clicked = "" if cfg is None else \
@@ -1254,7 +1287,7 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
     return tr
 
 
-def build_real_deps(conn: sqlite3.Connection) -> Deps:
+def build_real_deps(conn: sqlite3.Connection, device: str | None = None) -> Deps:
     """윈도우에서 실제로 쓰는 구성."""
     from ..app import launch_autofill
     from . import finder
@@ -1273,7 +1306,9 @@ def build_real_deps(conn: sqlite3.Connection) -> Deps:
 
     return Deps(
         notify=notify,
-        recorder_factory=lambda chunk: LoopbackRecorder(chunk),
+        # 녹음 장치: 보조 채널은 그 칸의 장치, 주 채널은 live.device (비우면 기본 스피커)
+        recorder_factory=lambda chunk: LoopbackRecorder(chunk, device=config.get(conn, "live.device")
+                                                        if device is None else device),
         transcriber_factory=lambda model, program: make_transcriber(conn, model, program),
         answerer=make_answerer(conn),
         sender=Gorilla(config.GorillaConfig.load(conn, "gorilla")),

@@ -20,6 +20,7 @@ from . import (__version__, boards, db, evidence, gates, generator, notices, qui
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
+from .quizbot import lanes
 from .quizbot import live
 from .quizbot import schedule as qschedule
 
@@ -38,6 +39,7 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
                 ("live.chat_consensus", "chat_consensus"))
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
+                     "listen_lanes", "listen_lanes_test", "stt_gpu_recheck",
                      "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
@@ -329,6 +331,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         vm["log_tail"] = runner_log_tail(g.conn) if vm["status"] in ("stalled", "launching") else ""
         vm["sms_today"] = sms_today(g.conn)
         vm["repair_text"] = repair.message(repair.status(g.conn))
+        vm["multi"] = lanes.enabled(g.conn)
+        vm["lanes"] = lanes.status(g.conn) if vm["multi"] else []
         return vm
 
     @app.get("/")
@@ -344,9 +348,61 @@ def create_app(data_dir: str | None = None) -> Flask:
             ask = {"last": qconfig.get(c, "live.channel"), "groups": [
                 {"app": a, "label": (f"{qconfig.CHAT_APPS[a]['station']} {qconfig.app_label(a)}" if a else "문자로만 보내는 채널"),
                  "channels": groups[a]} for a in [*qconfig.CHAT_APPS, ""] if a in groups]}
+        from .quizbot import gpu
+
+        extra = lanes.extras(c)
+        multi = {"on": lanes.enabled(c), "device": qconfig.get(c, "live.device"),
+                 "lanes": [next((x for x in extra if x["lane"] == n), {"lane": n, "channel": "", "device": ""})
+                           for n in lanes.EXTRA_LANES],
+                 "devices": lanes.devices(), "test": lanes.saved_test(c), "gpu": gpu.saved_check(c),
+                 "problems": lanes.problems(c, lanes.all_lanes(c)) if lanes.enabled(c) else []}
         return render_template(
-            "home.html", vm=home_vm(), setup=setup_items(), channels=channels, ask=ask,
+            "home.html", vm=home_vm(), setup=setup_items(), channels=channels, ask=ask, multi=multi,
             route=qconfig.route(c), options={name: live.flag(c, key) for key, name in LIVE_OPTIONS})
+
+    @app.post("/listen/lanes")
+    def listen_lanes():
+        """동시 청취 설정: 켜기·주 채널 녹음 장치·보조 채널(채널·장치) 두 칸."""
+        c = g.conn
+        names = channel_list()
+        extra = []
+        for n in lanes.EXTRA_LANES:
+            channel = form(f"lane{n}_channel")
+            if channel and channel not in names:
+                abort(400)
+            extra.append({"channel": channel, "device": form(f"lane{n}_device")})
+        db.set_setting(c, "live.device", form("device"))
+        db.set_setting(c, "live.lanes", json.dumps(extra, ensure_ascii=False))
+        wanted = bool(request.form.get("multi"))
+        trial = [{"lane": "", "channel": qconfig.get(c, "live.channel"), "device": form("device")}] + \
+            [{"lane": n, **x} for n, x in zip(lanes.EXTRA_LANES, extra) if x["channel"]]
+        problems = lanes.problems(c, trial) if wanted else []
+        if problems:
+            db.set_setting(c, "live.multi", "0")
+            flash("동시 청취를 켜지 않았습니다: " + " / ".join(problems), "error")
+        else:
+            db.set_setting(c, "live.multi", "1" if wanted else "0")
+            db.log(c, "quizbot", "동시 청취 " + ("켬: " + ", ".join(f"{x['channel']}({x['device'] or '기본 스피커'})"
+                                                               for x in trial) if wanted else "끔"))
+            if wanted and live.is_active(c):
+                started = lanes.ensure(c, launch_quizbot)
+                flash("동시 청취 설정을 저장했습니다." + (f" 보조 청취기 {len(started)}개를 띄웠습니다." if started else ""))
+            else:
+                flash("동시 청취 설정을 저장했습니다." + (" 청취를 시작하면 함께 듣습니다." if wanted else ""))
+        return redirect(url_for("home") + "#multi")
+
+    @app.post("/listen/lanes/test")
+    def listen_lanes_test():
+        log_name = launch_quizbot(["device-test"])
+        flash(f"채널마다 그 장치를 10초 함께 녹음해 소리·받아쓴 말을 확인합니다. 30초쯤 뒤 결과가 아래에 나옵니다 (기록: {log_name})")
+        return redirect(url_for("home", wait=30) + "#multi")
+
+    @app.post("/stt/gpu-recheck")
+    def stt_gpu_recheck():
+        log_name = launch_quizbot(["gpu-recheck"])
+        flash(f"그래픽카드 받아쓰기를 다시 점검합니다 (처음이면 작은 모델을 내려받아 1~3분). 결과는 아래에 나옵니다 (기록: {log_name}). "
+              "통과하면 청취를 다시 시작할 때부터 그래픽카드로 받아씁니다.")
+        return redirect(url_for("home", wait=60) + "#multi")
 
     @app.get("/live.json")
     def live_json():
@@ -405,6 +461,13 @@ def create_app(data_dir: str | None = None) -> Flask:
         if not qconfig.runner_alive(c) and not _fresh(db.get_setting(c, "quizbot.launched_at"),
                                                       live.LAUNCH_GRACE_SECONDS):
             start_runner(c)  # 실행기는 하나만 뜬다 (두 번째는 잠금을 못 얻고 바로 끝남)
+        if lanes.enabled(c):
+            problems = lanes.problems(c, lanes.all_lanes(c))
+            if problems:   # 주 채널을 바꾸어 보조 채널과 같은 앱이 됨 등
+                db.set_setting(c, "live.multi", "0")
+                flash("동시 청취를 껐습니다: " + " / ".join(problems), "warn")
+            else:
+                lanes.ensure(c, launch_quizbot)
         if live.flag(c, "live.captions") and not _fresh(db.get_setting(c, "captions.heartbeat"), 15):
             launch_quizbot(["captions"])
         if was_active:

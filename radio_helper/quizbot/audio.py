@@ -62,11 +62,22 @@ def level_of(pcm16: bytes) -> int:
     return level_percent(rms(samples))
 
 
-class LoopbackRecorder:
-    """기본 출력 장치의 루프백 녹음 (PyAudioWPatch, 윈도우 전용)."""
+def pick_loopback(devices: list[dict], wanted: str) -> dict | None:
+    """루프백 장치 목록에서 이름이 맞는 것 (같은 이름 먼저, 없으면 이름이 들어 있는 것)."""
+    want = wanted.replace(" [Loopback]", "").strip().lower()
+    if not want:
+        return None
+    names = [(d, d["name"].replace(" [Loopback]", "").strip().lower()) for d in devices]
+    return next((d for d, n in names if n == want), None) or next((d for d, n in names if want in n), None)
 
-    def __init__(self, chunk_seconds: int = 15):
+
+class LoopbackRecorder:
+    """출력 장치의 루프백 녹음 (PyAudioWPatch, 윈도우 전용). device 를 주면 그 이름의 장치
+    (동시 청취: 앱마다 출력 장치를 나눴을 때), 비우면 기본 스피커."""
+
+    def __init__(self, chunk_seconds: int = 15, device: str = ""):
         self.chunk_seconds = chunk_seconds
+        self.device = (device or "").strip()
         self._q: queue.Queue[bytes] = queue.Queue()
         self._pa = None
         self._stream = None
@@ -79,8 +90,16 @@ class LoopbackRecorder:
         import pyaudiowpatch as pyaudio
 
         self._pa = pyaudio.PyAudio()
-        wasapi = self._pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-        speakers = self._pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
+        if self.device:
+            speakers = pick_loopback(list(self._pa.get_loopback_device_info_generator()), self.device)
+            if speakers is None:
+                self._pa.terminate()
+                self._pa = None
+                raise RuntimeError(f"녹음 장치 '{self.device}'를 찾지 못했습니다 — 가상 오디오 장치가 설치돼 있는지, "
+                                   "청취 화면의 동시 청취에서 장치를 다시 고르세요.")
+        else:
+            wasapi = self._pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+            speakers = self._pa.get_device_info_by_index(wasapi["defaultOutputDevice"])
         if not speakers.get("isLoopbackDevice"):
             for lb in self._pa.get_loopback_device_info_generator():
                 if speakers["name"] in lb["name"]:

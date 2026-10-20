@@ -45,6 +45,9 @@ DEFAULTS = {
     "live.witty": "1",                    # 퀴즈에 기발한 오답 섞기
     "live.sms_fallback": "0",             # 진행자가 앱이 아닌 문자로만 받는 퀴즈는 문자로 자동 전송 (건당 약 50원, 켜야 함)
     "live.song_free": "1",                # 신청곡: 경험에 적힌 곡이 없거나 안 맞으면 상황에 맞는 곡을 알아서 고름
+    "live.multi": "0",                    # 동시 청취: 보조 채널(live.lanes)도 함께 듣기 (lanes.py)
+    "live.device": "",                    # 주 채널 녹음 장치 (비우면 기본 스피커)
+    "live.lanes": "[]",                   # 보조 채널 [{"channel": "KBS 쿨FM", "device": "CABLE Input (VB-Audio Virtual Cable)"}, …]
     "live.dj_song": "1",                  # 프로그램마다 DJ 한마디를 읽고, 신청곡을 청하면 날씨·이슈에 맞는 곡을 한 번 이상 신청
     "live.chat_consensus": "1",           # 채팅에서 같은 답이 3개 이상이면 그 답(+어울리는 이유)으로 보냄
     "live.story_approved": "1",           # 승인한(확인·고친) 사연은 다시 확인받지 않음: AI 글에 경고가 나면 승인한 글 그대로 보냄

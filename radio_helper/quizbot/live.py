@@ -81,9 +81,9 @@ def is_active(conn: sqlite3.Connection) -> bool:
     return config.get(conn, "live.active") == "1"
 
 
-def session(conn: sqlite3.Connection, now: datetime) -> dict:
-    """예약 행과 같은 모양의 '지금 듣기' 설정. 고릴라 응모는 열어 둔 것으로 본다."""
-    channel = config.get(conn, "live.channel")
+def session(conn: sqlite3.Connection, now: datetime, channel: str | None = None) -> dict:
+    """예약 행과 같은 모양의 '지금 듣기' 설정. 고릴라 응모는 열어 둔 것으로 본다. channel: 동시 청취의 보조 채널."""
+    channel = channel or config.get(conn, "live.channel")
     try:
         min_conf = float(config.get(conn, "live.min_confidence"))
     except ValueError:
@@ -195,6 +195,7 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
     events = conn.execute("SELECT at, message FROM events WHERE kind IN ('quizbot', 'gorilla') "
                           "ORDER BY id DESC LIMIT 8").fetchall()
     channel = config.get(conn, "live.channel")
+    multi = config.get(conn, "live.multi") == "1"
     if not active:
         status = "off"
     elif collecting:
@@ -217,7 +218,9 @@ def view_model(conn: sqlite3.Connection, now: datetime | None = None, lines: int
         "program": program_label(conn, channel, now),
         "state": db.get_setting(conn, "quizbot.state"),
         "level": int(db.get_setting(conn, "quizbot.level") or 0) if collecting else 0,
-        "lines": [{"at": r["at"][11:19], "text": r["text"], "keywords": keywords(r["text"]),
+        # 동시 청취면 줄마다 채널을 붙인다 (여러 채널 자막이 한 곳에 섞여 보이므로)
+        "lines": [{"at": r["at"][11:19], "keywords": keywords(r["text"]),
+                   "text": f"[{r['channel']}] {r['text']}" if multi and r["channel"] else r["text"],
                    "kinds": [KEYWORD_KIND[k] for k in keywords(r["text"])]} for r in reversed(rows)],
         "events": [{"at": e["at"][11:16], "message": e["message"]} for e in events],
         "pending": notices.pending_counts(conn),

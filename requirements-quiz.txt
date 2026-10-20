@@ -1,6 +1,7 @@
 # 고릴라 퀴즈 자동 참여용 (start_windows.bat 이 함께 설치)
 anthropic>=1.11
 faster-whisper>=1.2
+ctranslate2>=4.6.3        # 받아쓰기 엔진: 4.6.3 부터 RTX 50 시리즈(Blackwell) 그래픽카드 지원 (CUDA 12.8)
 numpy>=1.26
 keyring>=25
 PyAudioWPatch>=0.2.12; sys_platform == "win32"

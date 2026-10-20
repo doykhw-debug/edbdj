@@ -83,6 +83,66 @@ def cmd_run(conn) -> int:
     return 0
 
 
+def cmd_lane(conn, lane: str) -> int:
+    """동시 청취의 보조 채널 청취기 (관리 화면이 청취 중에 띄움)."""
+    from . import lanes
+    from .runner import Runner, build_real_deps
+
+    lock = config.instance_lock(f"quizbot_lane{lane}")
+    if lock is None:
+        say(f"[중단] 보조 {lane} 청취기가 이미 실행 중입니다.")
+        return 2
+    target = lanes.lane_of(conn, lane)
+    if target is None or not lanes.should_run(conn, lane):
+        say(f"보조 {lane}: 동시 청취가 꺼져 있거나 채널이 없어 끝냅니다.")
+        return 0
+    try:
+        deps = build_real_deps(conn, device=target["device"])
+    except ImportError as e:
+        say(f"[중단] 필요한 구성 요소가 설치되지 않았습니다: {e.name}. start_windows.bat 을 다시 실행하세요.")
+        return 1
+    say(f"보조 {lane}: {target['channel']} 을(를) '{target['device'] or '기본 스피커'}' 장치로 듣습니다.")
+    Runner(conn, deps, lane=lane).run_lane()
+    return 0
+
+
+def cmd_device_test(conn) -> int:
+    """동시 청취 장치 점검: 채널마다 그 장치를 동시에 10초 녹음 → 소리 크기·받아쓴 말·겹침."""
+    from . import gpu, lanes
+    from .stt import WhisperTranscriber
+
+    db.set_setting(conn, lanes.TEST_KEY, json.dumps({"at": db.now(), "running": True}, ensure_ascii=False))
+    say("채널마다 10초씩 함께 녹음합니다…")
+    device, note = gpu.choose_device(conn, config.get(conn, "quizbot.whisper_device"))
+    holder = {}
+
+    def transcribe(samples):
+        if "tr" not in holder:
+            holder["tr"] = WhisperTranscriber(config.get(conn, "quizbot.whisper_model"), "", device,
+                                              beam_size=config.whisper_beam(conn, device))
+        return holder["tr"].transcribe(samples)
+
+    result = lanes.device_test(conn, transcriber=transcribe, gpu_ok=device == "cuda")
+    for it in result["items"]:
+        say(f"{it['label']} {it['channel']} [{it.get('device_name') or it['device'] or '기본 스피커'}] 소리 {it['level']}"
+            f" → '{it.get('text') or it.get('error') or ''}'")
+    for w in result["warnings"]:
+        say(f"[확인] {w}")
+    say(f"받아쓰기 장치: {'그래픽카드' if device == 'cuda' else 'CPU'} ({note})")
+    return 0 if not result["warnings"] else 1
+
+
+def cmd_gpu_recheck(conn) -> int:
+    """그래픽카드 받아쓰기를 지금 다시 점검한다 (저장해 둔 결과를 지우고)."""
+    from . import gpu
+
+    db.set_setting(conn, gpu.CHECK_KEY, "")
+    say(f"라이브러리: {gpu.libs_signature()}")
+    device, note = gpu.choose_device(conn, "auto")
+    say(f"결과: {'그래픽카드' if device == 'cuda' else 'CPU'} — {note}")
+    return 0 if device == "cuda" else 1
+
+
 def cmd_check(conn) -> int:
     results = []
 
@@ -424,17 +484,19 @@ def cmd_gpu_check() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
-    ap.add_argument("command", choices=["run", "captions", "check", "stt-test", "auto-setup", "find", "inspect-gorilla",
+    ap.add_argument("command", choices=["run", "lane", "device-test", "gpu-recheck", "captions", "check", "stt-test",
+                                        "auto-setup", "find", "inspect-gorilla",
                                         "select", "calibrate", "send-test", "chat-test", "sms-check", "sms-test",
                                         "gpu-check", "enrich"])
     ap.add_argument("target", nargs="?", choices=["window", "input", "send", "chat"])
     ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
     ap.add_argument("--all", action="store_true", help="find: 세 앱(고릴라·콩·mini) 모두")
+    ap.add_argument("--lane", choices=["2", "3"], help="lane: 동시 청취의 보조 채널 칸")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
     ignore_ctrl_c()
-    if args.command in ("run", "stt-test", "gpu-check"):
+    if args.command in ("run", "lane", "stt-test", "gpu-check", "device-test"):
         lower_priority()
     if args.command == "gpu-check":
         return cmd_gpu_check()
@@ -443,6 +505,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "run":
             return cmd_run(conn)
+        if args.command == "lane":
+            if not args.lane:
+                ap.error("lane 에는 --lane 2 또는 3 이 필요합니다.")
+            return cmd_lane(conn, args.lane)
+        if args.command == "device-test":
+            return cmd_device_test(conn)
+        if args.command == "gpu-recheck":
+            return cmd_gpu_recheck(conn)
         if args.command == "captions":
             from .captions import run_window
 

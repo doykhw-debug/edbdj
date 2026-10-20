@@ -105,6 +105,69 @@
   {% endif %}
 </div>
 
+<div class="panel" id="multi">
+  <h2>동시 청취 <span class="muted">여러 채널을 한 PC 에서 함께 — 방송국마다 하나 (SBS 고릴라 · KBS 콩 · MBC mini)</span>
+    {% if multi.on %}<span class="badge ok">켜짐</span>{% else %}<span class="badge">꺼짐</span>{% endif %}</h2>
+  {% for p in multi.problems %}<div class="flash error">{{ p }}</div>{% endfor %}
+  {% if vm.lanes %}
+  <div class="table-wrap"><table>
+    <tr><th>칸</th><th>채널</th><th>앱</th><th>녹음 장치</th><th>상태</th></tr>
+    {% for l in vm.lanes %}
+    <tr><td>{{ l.label }}</td><td>{{ l.channel }}</td><td>{{ l.app }}</td><td class="muted">{{ l.device or '기본 스피커' }}</td>
+      <td>{% if l.alive %}<span class="badge ok">듣는 중</span> 소리 {{ l.level }}{% elif vm.active %}<span class="badge warn">신호 없음</span>{% else %}<span class="badge">멈춤</span>{% endif %}
+        <span class="muted">{{ l.state }}</span></td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+  <details {{ 'open' if not multi.on }}><summary class="muted">처음 준비 (한 번) — 앱마다 소리를 다른 장치로 나누기</summary>
+    <ol class="muted">
+      <li>가상 오디오 장치를 설치합니다: <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">VB-Audio Virtual Cable</a>
+        (무료, 장치 1개). 채널 3개를 들으려면 하나 더 필요합니다 (VB-CABLE A+B 등). 설치 뒤 PC 를 다시 켭니다.</li>
+      <li>윈도우 <b>설정 → 시스템 → 소리 → 볼륨 믹서</b>에서 앱마다 <b>출력 장치</b>를 고릅니다.
+        예: 고릴라 → 스피커(직접 들음), 콩 → CABLE Input, mini → CABLE-A Input. 앱이 재생 중이어야 목록에 보입니다.</li>
+      <li>아래에서 채널마다 같은 장치를 고르고 저장 → <b>장치 점검 (10초)</b>로 장치마다 그 채널 소리가 들어오는지 확인합니다.</li>
+      <li>각 앱(고릴라·콩·mini)은 '앱 채팅·인식 설정 → 세 앱 모두 찾기'로 채팅 자리를 맞춰 둡니다.</li>
+    </ol>
+  </details>
+  <form method="post" action="{{ url_for('listen_lanes') }}" style="margin-top:8px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="inline"><input type="checkbox" name="multi" value="1" {{ 'checked' if multi.on }}> 동시 청취 켜기</label>
+    <datalist id="audio-devices">{% for d in multi.devices %}<option value="{{ d }}">{% endfor %}</datalist>
+    <div class="row3" style="margin-top:8px">
+      <div><label>주 채널 <span class="hint">청취 시작에서 고른 채널 ({{ vm.channel }})</span></label>
+        <input type="text" name="device" value="{{ multi.device }}" list="audio-devices" placeholder="기본 스피커 (비우면)"></div>
+      {% for l in multi.lanes %}
+      <div><label>보조 {{ l.lane }} 채널 · 녹음 장치</label>
+        <select name="lane{{ l.lane }}_channel"><option value="">(사용 안 함)</option>
+          {% for ch in channels %}<option value="{{ ch.name }}" {{ 'selected' if ch.name == l.channel }}>{{ ch.name }}{{ ' · ' ~ ch.app_label if ch.app_label }}</option>{% endfor %}</select>
+        <input type="text" name="lane{{ l.lane }}_device" value="{{ l.device }}" list="audio-devices" placeholder="예: CABLE Input (VB-Audio Virtual Cable)" style="margin-top:6px"></div>
+      {% endfor %}
+    </div>
+    <p class="hint">녹음 장치 칸을 누르면 이 PC 의 출력 장치 목록이 나옵니다{{ ' (' ~ multi.devices|length ~ '개)' if multi.devices else '' }}. 한 장치에 한 앱 소리만 들어가야 합니다.</p>
+    <div class="actions">
+      <button>저장</button>
+      <button class="secondary" formaction="{{ url_for('listen_lanes_test') }}">장치 점검 (10초)</button>
+      <button class="secondary" formaction="{{ url_for('stt_gpu_recheck') }}">그래픽카드 다시 점검</button>
+    </div>
+  </form>
+  {% if multi.test %}
+    {% if multi.test.running %}<p class="muted">장치 점검 중… ({{ multi.test.at }})</p>{% else %}
+    <p style="margin-top:10px"><b>장치 점검</b> <span class="muted">{{ multi.test.at }}</span></p>
+    <ul class="list">{% for it in multi.test['items'] %}
+      <li>{% if it.error or it.level < 8 %}<span class="badge bad">확인 필요</span>{% else %}<span class="badge ok">소리 {{ it.level }}</span>{% endif %}
+        {{ it.label }} {{ it.channel }} <span class="muted">[{{ it.device_name or it.device or '기본 스피커' }}]</span>
+        {% if it.text %} → '{{ it.text }}'{% endif %}{% if it.error %} <span class="muted">{{ it.error }}</span>{% endif %}</li>
+    {% endfor %}</ul>
+    {% for w in multi.test.warnings %}<div class="flash warn">{{ w }}</div>{% endfor %}
+    {% if not multi.test.warnings %}<div class="flash">장치마다 소리가 따로 들어옵니다. 받아쓴 말이 그 채널 방송인지 확인하세요.</div>{% endif %}
+    {% endif %}
+  {% endif %}
+  <p class="muted" style="margin-top:8px">받아쓰기 장치:
+    {% if multi.gpu and multi.gpu.ok %}<span class="badge ok">그래픽카드</span> {{ multi.gpu.at }}
+    {% elif multi.gpu %}<span class="badge warn">CPU</span> 그래픽카드 점검 실패 — {{ multi.gpu.detail }} <span class="hint">({{ multi.gpu.at }})</span>
+    {% else %}아직 점검 안 함 (청취를 시작하면 점검){% endif %}</p>
+</div>
+
 <div class="panel" id="stt">
   <h2>받아쓰기 테스트 <span class="muted">PC 소리 10초를 녹음해 글자로 바꿔 봅니다 · 진행자가 말할 때 누르세요</span></h2>
   <form method="post" action="{{ url_for('stt_test') }}" class="actions" style="margin-top:0">

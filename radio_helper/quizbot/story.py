@@ -208,7 +208,9 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
         if not auto_ok:
             reasons.append("사연은 확인 후 전송 (화면에서 '이 글로 보내기')")
     since = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-    sent = conn.execute("SELECT COUNT(*) FROM story_posts WHERE sent_at >= ?", (since,)).fetchone()[0]
+    channel = post["channel"] if "channel" in post.keys() else None   # 채널마다 센다 (동시 청취)
+    sent = conn.execute("SELECT COUNT(*) FROM story_posts WHERE sent_at >= ? AND channel IS ?",
+                        (since, channel)).fetchone()[0]
     if sent >= limit_per_hour:
         reasons.append(f"최근 1시간 사연 전송 {sent}건으로 상한({limit_per_hour}) 도달")
     return reasons
