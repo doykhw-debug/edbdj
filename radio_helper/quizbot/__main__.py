@@ -97,11 +97,11 @@ def cmd_lane(conn, lane: str) -> int:
         say(f"보조 {lane}: 동시 청취가 꺼져 있거나 채널이 없어 끝냅니다.")
         return 0
     try:
-        deps = build_real_deps(conn, device=target["device"])
+        deps = build_real_deps(conn, lane=lane)
     except ImportError as e:
         say(f"[중단] 필요한 구성 요소가 설치되지 않았습니다: {e.name}. start_windows.bat 을 다시 실행하세요.")
         return 1
-    say(f"보조 {lane}: {target['channel']} 을(를) '{target['device'] or '기본 스피커'}' 장치로 듣습니다.")
+    say(f"보조 {lane}: {target['channel']} 을(를) '{lanes.source_label(conn, target)}'(으)로 듣습니다.")
     Runner(conn, deps, lane=lane).run_lane()
     return 0
 
@@ -124,7 +124,7 @@ def cmd_device_test(conn) -> int:
 
     result = lanes.device_test(conn, transcriber=transcribe, gpu_ok=device == "cuda")
     for it in result["items"]:
-        say(f"{it['label']} {it['channel']} [{it.get('device_name') or it['device'] or '기본 스피커'}] 소리 {it['level']}"
+        say(f"{it['label']} {it['channel']} [{it.get('device_name') or lanes.source_label(conn, it)}] 소리 {it['level']}"
             f" → '{it.get('text') or it.get('error') or ''}'")
     for w in result["warnings"]:
         say(f"[확인] {w}")
@@ -141,6 +141,17 @@ def cmd_gpu_recheck(conn) -> int:
     device, note = gpu.choose_device(conn, "auto")
     say(f"결과: {'그래픽카드' if device == 'cuda' else 'CPU'} — {note}")
     return 0 if device == "cuda" else 1
+
+
+def cmd_vbcable_install(conn) -> int:
+    """무료 가상 오디오 장치(VB-CABLE)를 공식 사이트에서 받아 서명 확인 후 설치 창을 연다 (확인 창은 사용자가 누름)."""
+    import platform
+
+    from . import vbcable
+
+    state = vbcable.install(conn, x64=platform.machine().endswith("64"), say=say)
+    say(("[완료] " if state["ok"] else "[안 됨] ") + state["note"])
+    return 0 if state["ok"] else 1
 
 
 def cmd_check(conn) -> int:
@@ -484,7 +495,7 @@ def cmd_gpu_check() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
-    ap.add_argument("command", choices=["run", "lane", "device-test", "gpu-recheck", "captions", "check", "stt-test",
+    ap.add_argument("command", choices=["run", "lane", "device-test", "gpu-recheck", "vbcable-install", "captions", "check", "stt-test",
                                         "auto-setup", "find", "inspect-gorilla",
                                         "select", "calibrate", "send-test", "chat-test", "sms-check", "sms-test",
                                         "gpu-check", "enrich"])
@@ -513,6 +524,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_device_test(conn)
         if args.command == "gpu-recheck":
             return cmd_gpu_recheck(conn)
+        if args.command == "vbcable-install":
+            return cmd_vbcable_install(conn)
         if args.command == "captions":
             from .captions import run_window
 

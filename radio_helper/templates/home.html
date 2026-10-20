@@ -113,21 +113,31 @@
   <div class="table-wrap"><table>
     <tr><th>칸</th><th>채널</th><th>앱</th><th>녹음 장치</th><th>상태</th></tr>
     {% for l in vm.lanes %}
-    <tr><td>{{ l.label }}</td><td>{{ l.channel }}</td><td>{{ l.app }}</td><td class="muted">{{ l.device or '기본 스피커' }}</td>
+    <tr><td>{{ l.label }}</td><td>{{ l.channel }}</td><td>{{ l.app }}</td><td class="muted">{{ l.source_label }}</td>
       <td>{% if l.alive %}<span class="badge ok">듣는 중</span> 소리 {{ l.level }}{% elif vm.active %}<span class="badge warn">신호 없음</span>{% else %}<span class="badge">멈춤</span>{% endif %}
         <span class="muted">{{ l.state }}</span></td></tr>
     {% endfor %}
   </table></div>
   {% endif %}
-  <details {{ 'open' if not multi.on }}><summary class="muted">처음 준비 (한 번) — 앱마다 소리를 다른 장치로 나누기</summary>
+  <details {{ 'open' if not multi.on }}><summary class="muted">처음 준비 (한 번)</summary>
+    {% if multi.app_audio %}
+    <p class="muted"><span class="badge ok">설치 필요 없음</span> 이 PC 는 <b>앱마다 소리를 직접</b> 받을 수 있습니다 —
+      가상 장치 설치·볼륨 믹서 설정 없이 녹음 장치 칸을 <b>비워 두면</b> 됩니다. 세 앱이 같은 스피커로 나와도 섞이지 않습니다.</p>
     <ol class="muted">
-      <li>가상 오디오 장치를 설치합니다: <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">VB-Audio Virtual Cable</a>
-        (무료, 장치 1개). 채널 3개를 들으려면 하나 더 필요합니다 (VB-CABLE A+B 등). 설치 뒤 PC 를 다시 켭니다.</li>
-      <li>윈도우 <b>설정 → 시스템 → 소리 → 볼륨 믹서</b>에서 앱마다 <b>출력 장치</b>를 고릅니다.
-        예: 고릴라 → 스피커(직접 들음), 콩 → CABLE Input, mini → CABLE-A Input. 앱이 재생 중이어야 목록에 보입니다.</li>
-      <li>아래에서 채널마다 같은 장치를 고르고 저장 → <b>장치 점검 (10초)</b>로 장치마다 그 채널 소리가 들어오는지 확인합니다.</li>
-      <li>각 앱(고릴라·콩·mini)은 '앱 채팅·인식 설정 → 세 앱 모두 찾기'로 채팅 자리를 맞춰 둡니다.</li>
+      <li>고릴라·콩·mini 를 켜고 각각 들을 채널을 재생합니다 (세 소리가 스피커에서 함께 들립니다).</li>
+      <li>아래에서 보조 채널을 고르고(녹음 장치 칸은 비움) 저장 → <b>장치 점검 (10초)</b>로 채널마다 그 방송이 받아써지는지 확인합니다.</li>
+      <li>각 앱은 '앱 채팅·인식 설정 → 세 앱 모두 찾기'로 채팅 자리를 맞춰 둡니다.</li>
     </ol>
+    {% else %}
+    <p class="muted"><span class="badge warn">가상 장치 필요</span> 이 PC 의 윈도우 판은 앱 소리를 직접 받지 못해, 앱마다 소리를 다른 출력 장치로 나눠야 합니다.</p>
+    <ol class="muted">
+      <li>아래 <b>가상 장치 자동 설치</b>를 누릅니다 (무료 VB-CABLE, 장치 1개 — 채널 2개까지). 세 번째 채널은 모니터(HDMI) 소리처럼
+        이미 있는 다른 출력 장치가 있으면 씁니다.</li>
+      <li>윈도우 <b>설정 → 시스템 → 소리 → 볼륨 믹서</b>에서 앱마다 <b>출력 장치</b>를 고릅니다. 예: 고릴라 → 스피커, 콩 → CABLE Input.</li>
+      <li>아래 녹음 장치 칸에 같은 장치를 적고 저장 → <b>장치 점검 (10초)</b>.</li>
+      <li>각 앱은 '앱 채팅·인식 설정 → 세 앱 모두 찾기'로 채팅 자리를 맞춰 둡니다.</li>
+    </ol>
+    {% endif %}
   </details>
   <form method="post" action="{{ url_for('listen_lanes') }}" style="margin-top:8px">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -135,31 +145,37 @@
     <datalist id="audio-devices">{% for d in multi.devices %}<option value="{{ d }}">{% endfor %}</datalist>
     <div class="row3" style="margin-top:8px">
       <div><label>주 채널 <span class="hint">청취 시작에서 고른 채널 ({{ vm.channel }})</span></label>
-        <input type="text" name="device" value="{{ multi.device }}" list="audio-devices" placeholder="기본 스피커 (비우면)"></div>
+        <input type="text" name="device" value="{{ multi.device }}" list="audio-devices" placeholder="{{ '비우면 앱 소리 (설치 없음)' if multi.app_audio else '기본 스피커 (비우면)' }}"></div>
       {% for l in multi.lanes %}
       <div><label>보조 {{ l.lane }} 채널 · 녹음 장치</label>
         <select name="lane{{ l.lane }}_channel"><option value="">(사용 안 함)</option>
           {% for ch in channels %}<option value="{{ ch.name }}" {{ 'selected' if ch.name == l.channel }}>{{ ch.name }}{{ ' · ' ~ ch.app_label if ch.app_label }}</option>{% endfor %}</select>
-        <input type="text" name="lane{{ l.lane }}_device" value="{{ l.device }}" list="audio-devices" placeholder="예: CABLE Input (VB-Audio Virtual Cable)" style="margin-top:6px"></div>
+        <input type="text" name="lane{{ l.lane }}_device" value="{{ l.device }}" list="audio-devices" placeholder="{{ '비우면 앱 소리 (설치 없음)' if multi.app_audio else '예: CABLE Input (VB-Audio Virtual Cable)' }}" style="margin-top:6px"></div>
       {% endfor %}
     </div>
-    <p class="hint">녹음 장치 칸을 누르면 이 PC 의 출력 장치 목록이 나옵니다{{ ' (' ~ multi.devices|length ~ '개)' if multi.devices else '' }}. 한 장치에 한 앱 소리만 들어가야 합니다.</p>
+    <p class="hint">{% if multi.app_audio %}녹음 장치 칸은 비워 두세요 (그 채널 앱 소리만 받음). 장치 이름을 적으면 그 출력 장치를 녹음합니다{% else %}녹음 장치 칸을 누르면 이 PC 의 출력 장치 목록이 나옵니다{% endif %}{{ ' (' ~ multi.devices|length ~ '개)' if multi.devices else '' }}. 한 장치에 한 앱 소리만 들어가야 합니다.</p>
     <div class="actions">
       <button>저장</button>
       <button class="secondary" formaction="{{ url_for('listen_lanes_test') }}">장치 점검 (10초)</button>
       <button class="secondary" formaction="{{ url_for('stt_gpu_recheck') }}">그래픽카드 다시 점검</button>
+      {% if not multi.cable %}<button class="secondary" formaction="{{ url_for('listen_vbcable') }}">가상 장치 자동 설치 (무료 VB-CABLE)</button>{% endif %}
     </div>
+    <p class="hint">가상 장치 자동 설치는 앱 소리 직접 받기가 안 될 때만 필요합니다 — 공식 사이트에서 무료 VB-CABLE(장치 1개)을 받아 서명을 확인하고
+      설치 창을 엽니다. 윈도우가 묻는 '예'·'설치'는 직접 누르고, 끝나면 PC 를 다시 켜세요.
+      {% if multi.cable %}<span class="badge ok">CABLE Input 있음</span>{% endif %}
+      {% if multi.vbcable %}<br>최근 설치: {% if multi.vbcable.running %}<span class="badge warn">진행 중</span>{% elif multi.vbcable.ok %}<span class="badge ok">완료</span>{% else %}<span class="badge bad">안 됨</span>{% endif %}
+        {{ multi.vbcable.note }} <span class="muted">({{ multi.vbcable.at }})</span>{% endif %}</p>
   </form>
   {% if multi.test %}
     {% if multi.test.running %}<p class="muted">장치 점검 중… ({{ multi.test.at }})</p>{% else %}
     <p style="margin-top:10px"><b>장치 점검</b> <span class="muted">{{ multi.test.at }}</span></p>
     <ul class="list">{% for it in multi.test['items'] %}
       <li>{% if it.error or it.level < 8 %}<span class="badge bad">확인 필요</span>{% else %}<span class="badge ok">소리 {{ it.level }}</span>{% endif %}
-        {{ it.label }} {{ it.channel }} <span class="muted">[{{ it.device_name or it.device or '기본 스피커' }}]</span>
+        {{ it.label }} {{ it.channel }} <span class="muted">[{{ it.device_name or it.device or ('앱 소리' if it.source == 'app' else '기본 스피커') }}]</span>
         {% if it.text %} → '{{ it.text }}'{% endif %}{% if it.error %} <span class="muted">{{ it.error }}</span>{% endif %}</li>
     {% endfor %}</ul>
     {% for w in multi.test.warnings %}<div class="flash warn">{{ w }}</div>{% endfor %}
-    {% if not multi.test.warnings %}<div class="flash">장치마다 소리가 따로 들어옵니다. 받아쓴 말이 그 채널 방송인지 확인하세요.</div>{% endif %}
+    {% if not multi.test.warnings %}<div class="flash">채널마다 소리가 따로 들어옵니다. 받아쓴 말이 그 채널 방송인지 확인하세요.</div>{% endif %}
     {% endif %}
   {% endif %}
   <p class="muted" style="margin-top:8px">받아쓰기 장치:

@@ -89,7 +89,8 @@ def test_weekly_tick(conn):
     assert schedules.tick(conn, now + timedelta(hours=1), launch=launched.append, launch_sbs=lambda: sbs.append(1)) == []
     for ch in schedules.channels_to_fetch(conn):
         db.set_setting(conn, f"schedules.checked.{ch}", (now + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S"))
-    db.log(conn, "programs", "공식 페이지 새로고침: 테스트")
+    conn.execute("INSERT INTO events (at, kind, message) VALUES (?, 'programs', '공식 페이지 새로고침: 테스트')",
+                 ((now + timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S"),))   # 실제 시각이 아니라 시험 시각 기준
     assert schedules.tick(conn, now + timedelta(hours=8), launch=launched.append, launch_sbs=lambda: sbs.append(1)) == []
     assert schedules.tick(conn, now + timedelta(days=8), launch=launched.append, launch_sbs=lambda: sbs.append(1)) == \
         ["mbc_kbs", "sbs"]

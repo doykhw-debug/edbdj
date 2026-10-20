@@ -1,7 +1,7 @@
 """동시 청취 (0.53): 한 PC 에서 방송국마다 한 채널씩 함께 듣고 받아쓰고 보낸다.
 
 윈도우 볼륨 믹서에서 앱마다 출력 장치를 나누고(고릴라 → 스피커, 콩 → 가상 장치 A, mini → 가상 장치 B),
-채널마다 그 장치를 따로 녹음한다. 보조 채널은 보조 청취기(별도 프로세스)가 듣고, 보내기는 공용 잠금으로 차례로.
+채널마다 그 장치를 따로 녹음한다 (앱 소리 직접 받기는 test_app_audio). 보조 채널은 보조 청취기(별도 프로세스)가 듣고, 보내기는 공용 잠금으로 차례로.
 """
 
 import json
@@ -134,7 +134,7 @@ def test_device_test_finds_silent_and_shared_devices(conn):
     t = np.arange(16_000 * 10) / 16_000
     voice = (0.3 * np.sin(2 * np.pi * 220 * t) * (np.sin(2 * np.pi * 0.7 * t) > 0)).astype(np.float32)
     sounds = {"": voice, "CABLE Input": voice.copy(), "CABLE-A": np.zeros(16_000 * 10, dtype=np.float32)}
-    result = lanes.device_test(conn, recorder_factory=lambda d: ToneRecorder(sounds[d], d or "스피커"),
+    result = lanes.device_test(conn, recorder_factory=lambda x: ToneRecorder(sounds[x["device"]], x["device"] or "스피커"),
                                transcriber=lambda s: "안녕하세요 파워FM", gpu_ok=False)
     items = {it["channel"]: it for it in result["items"]}
     assert items["파워FM"]["level"] > 8 and items["파워FM"]["text"] == "안녕하세요 파워FM"
@@ -157,7 +157,7 @@ def test_device_test_ok_when_separate(conn):
         return (0.3 * rng.standard_normal(16_000 * 10) * env).astype(np.float32)
 
     sounds = {"": speech(2), "CABLE Input": speech(3)}
-    result = lanes.device_test(conn, recorder_factory=lambda d: ToneRecorder(sounds[d], d), transcriber=lambda s: "말",
+    result = lanes.device_test(conn, recorder_factory=lambda x: ToneRecorder(sounds[x["device"]], x["device"]), transcriber=lambda s: "말",
                                gpu_ok=True)
     assert result["warnings"] == []
 
@@ -166,8 +166,8 @@ def test_device_open_error_is_reported(conn):
     db.set_setting(conn, "live.channel", "파워FM")
     set_lanes(conn, extra=[{"channel": "KBS 쿨FM", "device": "없는 장치"}])
 
-    def factory(d):
-        if d == "없는 장치":
+    def factory(x):
+        if x["device"] == "없는 장치":
             raise RuntimeError("녹음 장치 '없는 장치'를 찾지 못했습니다")
         return ToneRecorder(np.full(160_000, 0.2, dtype=np.float32), "스피커")
 

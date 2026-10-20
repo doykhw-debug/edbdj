@@ -23,6 +23,7 @@ from .quizbot import config as qconfig
 from .quizbot import lanes
 from .quizbot import live
 from .quizbot import schedule as qschedule
+from .quizbot import vbcable
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 YES_NO = {"unknown": "미확인", "yes": "예", "no": "아니오"}
@@ -39,7 +40,7 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
                 ("live.chat_consensus", "chat_consensus"))
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
-                     "listen_lanes", "listen_lanes_test", "stt_gpu_recheck",
+                     "listen_lanes", "listen_lanes_test", "stt_gpu_recheck", "listen_vbcable",
                      "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
@@ -351,10 +352,13 @@ def create_app(data_dir: str | None = None) -> Flask:
         from .quizbot import gpu
 
         extra = lanes.extras(c)
+        devices = lanes.devices()
         multi = {"on": lanes.enabled(c), "device": qconfig.get(c, "live.device"),
                  "lanes": [next((x for x in extra if x["lane"] == n), {"lane": n, "channel": "", "device": ""})
                            for n in lanes.EXTRA_LANES],
-                 "devices": lanes.devices(), "test": lanes.saved_test(c), "gpu": gpu.saved_check(c),
+                 "app_audio": lanes.app_audio_supported(), "cable": vbcable.installed(devices),
+                 "vbcable": vbcable.saved(c),
+                 "devices": devices, "test": lanes.saved_test(c), "gpu": gpu.saved_check(c),
                  "problems": lanes.problems(c, lanes.all_lanes(c)) if lanes.enabled(c) else []}
         return render_template(
             "home.html", vm=home_vm(), setup=setup_items(), channels=channels, ask=ask, multi=multi,
@@ -382,7 +386,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             flash("동시 청취를 켜지 않았습니다: " + " / ".join(problems), "error")
         else:
             db.set_setting(c, "live.multi", "1" if wanted else "0")
-            db.log(c, "quizbot", "동시 청취 " + ("켬: " + ", ".join(f"{x['channel']}({x['device'] or '기본 스피커'})"
+            db.log(c, "quizbot", "동시 청취 " + ("켬: " + ", ".join(f"{x['channel']}({lanes.source_label(c, x)})"
                                                                for x in trial) if wanted else "끔"))
             if wanted and live.is_active(c):
                 started = lanes.ensure(c, launch_quizbot)
@@ -396,6 +400,14 @@ def create_app(data_dir: str | None = None) -> Flask:
         log_name = launch_quizbot(["device-test"])
         flash(f"채널마다 그 장치를 10초 함께 녹음해 소리·받아쓴 말을 확인합니다. 30초쯤 뒤 결과가 아래에 나옵니다 (기록: {log_name})")
         return redirect(url_for("home", wait=30) + "#multi")
+
+    @app.post("/listen/vbcable")
+    def listen_vbcable():
+        log_name = launch_quizbot(["vbcable-install"])
+        flash("무료 가상 오디오 장치(VB-CABLE)를 공식 사이트에서 내려받아 설치 창을 엽니다. 윈도우가 '이 앱이 디바이스를 "
+              f"변경하도록 허용할까요?'와 '장치 소프트웨어 설치'를 물으면 '예'·'설치'를 누르세요 (기록: {log_name}). "
+              "끝나면 PC 를 다시 켜는 것이 좋습니다.")
+        return redirect(url_for("home", wait=60) + "#multi")
 
     @app.post("/stt/gpu-recheck")
     def stt_gpu_recheck():

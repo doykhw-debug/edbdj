@@ -1,0 +1,417 @@
+"""앱 소리 직접 받기 (0.54): 가상 장치 없이 앱(프로세스 묶음)마다 소리를 따로 녹음 + 무료 VB-CABLE 자동 설치.
+
+윈도우 COM(ActivateAudioInterfaceAsync · IAudioClient · IAudioCaptureClient)은 ctypes 로 만든 가짜 COM 객체로 대신해
+호출 순서·인자·메모리 다루기를 그대로 시험한다 (실제 윈도우 동작은 PC 의 장치 점검으로 확인).
+"""
+
+import ctypes
+import io
+import threading
+import time
+import zipfile
+from ctypes import POINTER, byref, c_int, c_int64, c_long, c_uint32, c_void_p
+
+import numpy as np
+import pytest
+from conftest import csrf
+
+from radio_helper import db
+from radio_helper.quizbot import appaudio, config, lanes, vbcable
+from radio_helper.quizbot.appaudio import GUID, WAVEFORMATEX
+
+P = appaudio.FUNCTYPE
+UNSUPPORTED = 0x88890008 - (1 << 32)
+NOT_IMPL = 0x80004001 - (1 << 32)
+
+
+def tone_packet(frames=4410, freq=440.0, amp=0.4, rate=44_100):
+    t = np.arange(frames) / rate
+    mono = (amp * 32767 * np.sin(2 * np.pi * freq * t)).astype(np.int16)
+    return np.repeat(mono, 2).tobytes()        # 스테레오 16비트
+
+
+class FakeCapture:
+    """IAudioCaptureClient: packets 의 각 항목은 PCM 바이트 또는 ('silent', 프레임 수)."""
+
+    def __init__(self, packets):
+        self.packets, self.buf, self.released = list(packets), None, []
+        self.com = appaudio.ComObject([appaudio.IID_IAUDIOCAPTURECLIENT], [
+            (P(c_long, c_void_p, POINTER(c_void_p), POINTER(c_uint32), POINTER(c_uint32), c_void_p, c_void_p),
+             self.get_buffer),
+            (P(c_long, c_void_p, c_uint32), self.release_buffer),
+            (P(c_long, c_void_p, POINTER(c_uint32)), self.next_size)])
+
+    @staticmethod
+    def frames(pkt):
+        return pkt[1] if isinstance(pkt, tuple) else len(pkt) // 4
+
+    def next_size(self, _this, size):
+        size[0] = self.frames(self.packets[0]) if self.packets else 0
+        return 0
+
+    def get_buffer(self, _this, data, frames, flags, _dev, _qpc):
+        pkt = self.packets[0]
+        frames[0] = self.frames(pkt)
+        if isinstance(pkt, tuple):
+            data[0], flags[0] = None, appaudio.BUFFERFLAGS_SILENT
+        else:
+            self.buf = ctypes.create_string_buffer(pkt, len(pkt))
+            data[0], flags[0] = ctypes.addressof(self.buf), 0
+        return 0
+
+    def release_buffer(self, _this, n):
+        self.released.append(n)
+        self.packets.pop(0)
+        return 0
+
+
+class FakeClient:
+    """IAudioClient: Initialize 인자를 적어 두고, fail 에 있는 버퍼 길이는 거절한다."""
+
+    def __init__(self, capture, fail=()):
+        self.capture, self.fail, self.calls = capture, set(fail), []
+        nop = P(c_long, c_void_p)
+        self.com = appaudio.ComObject([appaudio.IID_IAUDIOCLIENT], [
+            (P(c_long, c_void_p, c_int, c_uint32, c_int64, c_int64, POINTER(WAVEFORMATEX), c_void_p), self.initialize),
+            *[(nop, self.nop)] * 6,
+            (nop, lambda _t: self.calls.append(("start",)) or 0),
+            (nop, lambda _t: self.calls.append(("stop",)) or 0),
+            (nop, self.nop),
+            (P(c_long, c_void_p, c_void_p), lambda _t, ev: self.calls.append(("event", ev)) or 0),
+            (P(c_long, c_void_p, POINTER(GUID), POINTER(c_void_p)), self.get_service)])
+
+    def nop(self, _this):
+        return 0
+
+    def initialize(self, _this, mode, flags, duration, period, fmt, session):
+        f = fmt.contents
+        self.calls.append(("init", mode, flags, duration, period, f.nChannels, f.nSamplesPerSec, f.wBitsPerSample,
+                           f.nBlockAlign, session))
+        return UNSUPPORTED if duration in self.fail else 0
+
+    def get_service(self, _this, riid, ppv):
+        assert bytes(riid.contents) == bytes(appaudio.IID_IAUDIOCAPTURECLIENT)
+        ppv[0] = self.capture.com.ptr
+        return 0
+
+
+class FakeOp:
+    """IActivateAudioInterfaceAsyncOperation."""
+
+    def __init__(self, unknown, hr=0):
+        self.unknown, self.hr = unknown, hr
+        self.com = appaudio.ComObject([], [(P(c_long, c_void_p, POINTER(c_long), POINTER(c_void_p)), self.result)])
+
+    def result(self, _this, hr, iface):
+        hr[0] = self.hr
+        iface[0] = self.unknown if self.hr >= 0 else None
+        return 0
+
+
+class FakeActivate:
+    """ActivateAudioInterfaceAsync: 넘어온 값을 읽어 두고, 다른 스레드에서 완료 알림을 부른다 (실제처럼 비동기)."""
+
+    def __init__(self, client, hr=0):
+        self.client, self.hr, self.seen, self.ops, self.agile = client, hr, [], [], []
+
+    def __call__(self, path, iid, prop, handler, op_out):
+        p = prop._obj
+        params = appaudio.ACTIVATION_PARAMS.from_address(p.blob.pBlobData)
+        self.seen.append((path, p.vt, p.blob.cbSize, params.ActivationType, params.ProcessLoopbackParams.TargetProcessId,
+                          params.ProcessLoopbackParams.ProcessLoopbackMode, bytes(iid._obj) == bytes(appaudio.IID_IAUDIOCLIENT)))
+        agile = c_void_p()
+        self.agile.append(appaudio.com_call(handler, 0, [POINTER(GUID), POINTER(c_void_p)],
+                                            byref(appaudio.IID_IAGILEOBJECT), byref(agile)) == 0 and agile.value == handler)
+        op = FakeOp(self.client.com.ptr, self.hr)
+        self.ops.append(op)
+        op_out._obj.value = op.com.ptr
+        threading.Thread(target=lambda: appaudio.com_call(handler, 3, [c_void_p], op.com.ptr)).start()
+        return 0
+
+
+class FakeKernel:
+    def __init__(self):
+        self.closed = []
+
+    def CreateEventW(self, *a):
+        return 1234
+
+    def WaitForSingleObject(self, h, ms):
+        time.sleep(0.005)
+        return 0
+
+    def CloseHandle(self, h):
+        self.closed.append(h)
+
+
+class FakeOle:
+    def CoInitializeEx(self, *a):
+        return 0
+
+    def CoUninitialize(self):
+        pass
+
+
+def fake_api(client):
+    return appaudio.Wasapi(activate=FakeActivate(client), kernel32=FakeKernel(), ole32=FakeOle())
+
+
+# ── COM 순서·인자 ──────────────────────────────────────────────────
+def test_open_follows_microsoft_sample_and_drains_packets():
+    tone = tone_packet(441)
+    cap = FakeCapture([tone, ("silent", 100)])
+    client = FakeClient(cap, fail={2_000_000})            # 200ms 버퍼를 거절하면 20ms 로 다시
+    kernel = FakeKernel()
+    act = FakeActivate(client)
+    api = appaudio.Wasapi(activate=act, kernel32=kernel, ole32=FakeOle())
+    c, capture, event = api.open(4321)
+    assert act.seen[0] == ("VAD\\Process_Loopback", 65, 12, 1, 4321, 0, True)   # VT_BLOB · 프로세스 루프백 · 하위 포함
+    assert all(act.agile)                                                          # 완료 알림 객체는 IAgileObject
+    inits = [x for x in client.calls if x[0] == "init"]
+    assert [x[3] for x in inits] == [2_000_000, 200_000] and len(act.seen) == 2
+    assert inits[-1][1:3] == (0, 0x00020000 | 0x00040000 | 0x80000000)          # 공유 · LOOPBACK|EVENTCALLBACK|AUTOCONVERTPCM
+    assert inits[-1][4:9] == (0, 2, 44_100, 16, 4) and inits[-1][9] is None
+    assert ("event", 1234) in client.calls and ("start",) in client.calls
+    data = api.drain(capture)
+    assert data == [tone, bytes(400)] and cap.released == [441, 100]
+    assert api.drain(capture) == []
+    api.close(c, capture, event)
+    assert ("stop",) in client.calls and kernel.closed == [1234]
+
+
+def test_activation_failure_is_explained():
+    api = appaudio.Wasapi(activate=FakeActivate(FakeClient(FakeCapture([])), hr=NOT_IMPL), kernel32=FakeKernel(),
+                          ole32=FakeOle())
+    with pytest.raises(appaudio.ComError) as e:
+        api.open(1)
+    assert "0x80004001" in str(e.value) and "윈도우 판" in str(e.value)
+
+
+def test_recorder_reads_app_sound_as_16k_mono():
+    cap = FakeCapture([tone_packet() for _ in range(12)])
+    client = FakeClient(cap)
+    rec = appaudio.AppLoopbackRecorder(1, locate=lambda: (4321, "gorealra.exe"), api_factory=lambda: fake_api(client))
+    with rec:
+        samples = rec.read_chunk()
+    assert rec.device_name == "gorealra.exe 앱 소리"
+    assert abs(len(samples) - 16_000) < 50 and float(np.sqrt(np.mean(samples ** 2))) > 0.2
+    assert ("stop",) in client.calls                                               # 닫으면 멈춤
+
+
+def test_recorder_open_error_points_to_installer():
+    rec = appaudio.AppLoopbackRecorder(1, locate=lambda: (7, "kong.exe"), api_factory=lambda: appaudio.Wasapi(
+        activate=FakeActivate(FakeClient(FakeCapture([])), hr=NOT_IMPL), kernel32=FakeKernel(), ole32=FakeOle()))
+    with pytest.raises(RuntimeError) as e:
+        rec.__enter__()
+    assert "kong.exe 앱 소리를 받지 못했습니다" in str(e.value) and "가상 장치 자동 설치" in str(e.value)
+
+
+def test_reopen_finds_the_app_again():
+    seen = []
+
+    def locate():
+        seen.append(1)
+        return 100 + len(seen), "mini.exe"
+
+    client = FakeClient(FakeCapture([]))
+    rec = appaudio.AppLoopbackRecorder(1, locate=locate, api_factory=lambda: fake_api(client))
+    with rec:
+        assert rec.reopen() == "mini.exe 앱 소리"
+    assert len(seen) == 2                                                          # 앱을 껐다 켜면 번호가 바뀌므로 다시 찾음
+
+
+# ── 앱 프로세스 찾기 ───────────────────────────────────────────────
+PROCS = {1: (0, "explorer.exe"), 10: (1, "gorealra.exe"), 11: (10, "gorealra.exe"), 12: (10, "gorealra.exe"),
+         13: (12, "gorealra.exe"), 20: (1, "kongpc.exe"), 21: (20, "msedgewebview2.exe"), 30: (999, "gorealra.exe")}
+
+
+def test_roots_pick_top_process_with_most_children():
+    assert appaudio.roots(PROCS, "GoRealra.exe") == [10, 30]                      # 하위 프로세스(재생 담당)까지 함께
+    assert appaudio.tree_size(PROCS, 20) == 2
+    assert appaudio.tree_size({5: (6, "a.exe"), 6: (5, "b.exe")}, 5) == 2         # 번호 재사용으로 고리가 생겨도 멈춤
+
+
+def test_app_process_by_saved_name_or_window(conn):
+    db.set_setting(conn, "gorilla.process_name", "GoRealra.exe")
+    assert appaudio.app_process(conn, "gorilla", PROCS) == (10, "gorealra.exe")
+    assert appaudio.app_process(conn, "kong", PROCS, window_pid=lambda c, a: 20) == (20, "kongpc.exe")
+    db.set_setting(conn, "mini.process_name", "mini.exe")
+    with pytest.raises(RuntimeError, match="켜져 있지 않습니다"):
+        appaudio.app_process(conn, "mini", PROCS)
+    with pytest.raises(RuntimeError, match="세 앱 모두 찾기"):
+        appaudio.app_process(conn, "kong", PROCS, window_pid=lambda c, a: None)
+    with pytest.raises(RuntimeError, match="앱"):
+        appaudio.app_process(conn, None, PROCS)
+
+
+def test_not_supported_off_windows():
+    assert appaudio.supported() is False
+
+
+# ── 동시 청취에서 고르기 ───────────────────────────────────────────
+def test_lane_source_app_when_device_blank(conn, monkeypatch):
+    monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)
+    db.set_setting(conn, "live.channel", "파워FM")
+    db.set_setting(conn, "live.multi", "1")
+    db.set_setting(conn, "live.lanes", '[{"channel": "KBS 쿨FM", "device": ""}, {"channel": "MBC FM4U", "device": "CABLE Input"}]')
+    main, kong, mini = lanes.all_lanes(conn)
+    assert [lanes.source(conn, x) for x in (main, kong, mini)] == ["app", "app", "device"]
+    assert lanes.source_label(conn, kong) == "앱 소리 (설치 없음)" and lanes.source_label(conn, mini) == "CABLE Input"
+    assert lanes.problems(conn, [main, kong, mini]) == []                         # 비워 둔 칸 둘이어도 앱이 다르면 괜찮음
+    assert [x["source"] for x in lanes.status(conn)] == ["app", "app", "device"]
+    rec = lanes.recorder(conn, kong, 10)
+    assert isinstance(rec, appaudio.AppLoopbackRecorder)
+    db.set_setting(conn, "kong.process_name", "kongpc.exe")
+    monkeypatch.setattr(appaudio, "processes", lambda: PROCS)
+    assert rec.locate() == (20, "kongpc.exe")                                    # 그 채널의 앱(KBS → 콩)
+    db.set_setting(conn, "live.multi", "0")
+    assert lanes.source(conn, main) == "speaker"                                 # 한 채널만 들을 때는 예전처럼 스피커
+    monkeypatch.setattr(lanes, "app_audio_supported", lambda: False)
+    blank = [main, {**kong, "device": ""}]
+    assert "가상 장치 자동 설치" in lanes.problems(conn, blank)[0]                # 지원 안 되면 같은 스피커 → 안내
+
+
+def test_device_test_advice_for_app_source(conn, monkeypatch):
+    monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)
+    db.set_setting(conn, "live.channel", "파워FM")
+    db.set_setting(conn, "live.multi", "1")
+    db.set_setting(conn, "live.lanes", '[{"channel": "KBS 쿨FM", "device": ""}]')
+
+    class Rec:
+        def __init__(self, samples, name):
+            self.samples, self.device_name = samples, name
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read_chunk(self):
+            return self.samples
+
+    loud = (0.3 * np.sin(np.arange(160_000) / 5)).astype(np.float32)
+    result = lanes.device_test(conn, recorder_factory=lambda x: Rec(loud if not x["lane"] else np.zeros(160_000, np.float32),
+                                                                    "앱"), transcriber=None, gpu_ok=True)
+    assert [it["source"] for it in result["items"]] == ["app", "app"]
+    assert "켜져 있고 채널을 재생 중인지" in " ".join(result["warnings"])
+
+
+# ── VB-CABLE 자동 설치 ─────────────────────────────────────────────
+PAGE = ('<a href="https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip">old</a>'
+        '<a href="https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip">Download</a>'
+        '<a href="https://shop.vb-audio.com/x/VBCABLE_A_B_Driver_Pack43.zip">A+B</a>')
+
+
+def pack_zip(names=("VBCABLE_Setup_x64.exe", "VBCABLE_Setup.exe", "readme.txt")):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n in names:
+            z.writestr(n, b"MZ fake")
+    return buf.getvalue()
+
+
+def test_pack_url_picks_free_cable_latest():
+    assert vbcable.pack_url(PAGE) == "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"
+    assert vbcable.pack_url("") == vbcable.DOWNLOAD_BASE + vbcable.KNOWN_PACK
+    assert vbcable.pack_url("get VBCABLE_Driver_Pack46.zip here") == vbcable.DOWNLOAD_BASE + "VBCABLE_Driver_Pack46.zip"
+    assert vbcable.installed(["스피커 (Realtek)", "CABLE Input (VB-Audio Virtual Cable)"])
+    assert not vbcable.installed(["스피커 (Realtek)", "CABLE-A Input (VB-Audio Cable A)"])
+
+
+def test_safe_extract_stays_inside(tmp_path):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("../evil.exe", b"x")
+        z.writestr("ok/VBCABLE_Setup_x64.exe", b"MZ")
+    (tmp_path / "p.zip").write_bytes(buf.getvalue())
+    files = vbcable.safe_extract(tmp_path / "p.zip", tmp_path / "out")
+    assert [f.name for f in files] == ["VBCABLE_Setup_x64.exe"] and not (tmp_path / "evil.exe").exists()
+    assert vbcable.setup_exe(files).name == "VBCABLE_Setup_x64.exe" and vbcable.setup_exe(files, x64=False) is None
+
+
+class FakeRun:
+    def __init__(self, signature="Valid\nCN=Vincent Burel, O=Vincent Burel, C=FR", setup_code=0, after=None):
+        self.calls, self.signature, self.setup_code, self.after = [], signature, setup_code, after
+
+    def __call__(self, args, **kw):
+        cmd = args[-1]
+        self.calls.append(cmd)
+
+        class Done:
+            pass
+
+        d = Done()
+        if "Get-AuthenticodeSignature" in cmd:
+            d.stdout, d.stderr, d.returncode = self.signature, "", 0
+        else:
+            d.stdout, d.stderr, d.returncode = "", "", self.setup_code
+            if self.after is not None:
+                self.after.append("CABLE Input (VB-Audio Virtual Cable)")
+        return d
+
+
+def test_install_downloads_checks_signature_and_runs_setup(conn, tmp_path):
+    devices = ["스피커 (Realtek)"]
+    run = FakeRun(after=devices)
+    got = []
+
+    def get(url):
+        got.append(url)
+        return PAGE.encode() if url == vbcable.PAGE_URL else pack_zip()
+
+    state = vbcable.install(conn, list_devices=lambda: list(devices), get=get, run=run, workdir=tmp_path, say=lambda m: None)
+    assert state["ok"] and "CABLE Input" in state["note"]
+    assert got == [vbcable.PAGE_URL, "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"]
+    assert "Get-AuthenticodeSignature" in run.calls[0] and "-Verb RunAs" in run.calls[1] and "'-i','-h'" in run.calls[1]
+    assert "-ErrorAction Stop" in run.calls[1] and "exit 1223" in run.calls[1]
+    assert "VBCABLE_Setup_x64.exe" in run.calls[1]
+    assert vbcable.saved(conn)["ok"]
+    again = vbcable.install(conn, list_devices=lambda: list(devices), get=get, run=run, workdir=tmp_path, say=lambda m: None)
+    assert again["ok"] and "이미 설치" in again["note"] and len(run.calls) == 2
+
+
+def test_install_refuses_unsigned_or_other_signer(conn, tmp_path):
+    for sig in ("NotSigned\n", "Valid\nCN=Someone Else"):
+        run = FakeRun(signature=sig)
+        state = vbcable.install(conn, list_devices=lambda: [], get=lambda u: pack_zip(), run=run, workdir=tmp_path,
+                                say=lambda m: None)
+        assert not state["ok"] and "서명" in state["note"] and len(run.calls) == 1   # 설치 프로그램은 실행하지 않음
+
+
+def test_install_reports_cancel_and_download_error(conn, tmp_path):
+    class Cancel(FakeRun):
+        def __call__(self, args, **kw):
+            d = super().__call__(args, **kw)
+            if "RunAs" in args[-1]:
+                d.returncode, d.stdout = vbcable.CANCELLED, "사용자가 작업을 취소했습니다."
+            return d
+
+    state = vbcable.install(conn, list_devices=lambda: [], get=lambda u: pack_zip(), run=Cancel(), workdir=tmp_path,
+                            say=lambda m: None)
+    assert not state["ok"] and "관리자 권한 허용" in state["note"]
+
+    def offline(url):
+        raise OSError("no network")
+
+    state = vbcable.install(conn, list_devices=lambda: [], get=offline, run=FakeRun(), workdir=tmp_path / "b",
+                            say=lambda m: None)
+    assert not state["ok"] and "내려받지 못했습니다" in state["note"]
+
+
+# ── 화면 ──────────────────────────────────────────────────────────
+def test_home_shows_install_button_and_launches(client, conn, monkeypatch):
+    from radio_helper import app as app_module
+
+    launched = []
+    monkeypatch.setattr(app_module, "launch_quizbot", lambda args: launched.append(args) or "quizbot_x.log")
+    html = client.get("/").get_data(as_text=True)
+    assert "가상 장치 자동 설치 (무료 VB-CABLE)" in html and "가상 장치 필요" in html and "A+B" not in html
+    r = client.post("/listen/vbcable", data={"csrf_token": csrf(client)}, follow_redirects=True)
+    assert launched == [["vbcable-install"]] and "VB-CABLE" in r.get_data(as_text=True)
+    monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)
+    html = client.get("/").get_data(as_text=True)
+    assert "설치 필요 없음" in html and "비우면 앱 소리 (설치 없음)" in html
+    monkeypatch.setattr(lanes, "devices", lambda: ["CABLE Input (VB-Audio Virtual Cable)"])
+    assert "CABLE Input 있음" in client.get("/").get_data(as_text=True)
+    assert config.get(conn, "live.multi") == "0"

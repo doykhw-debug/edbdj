@@ -352,7 +352,7 @@ class Runner:
                 day = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 return live.session(self.conn, now, channel=channel), Window(None, day, day + timedelta(days=1))
 
-            db.log(self.conn, "quizbot", f"동시 청취 시작 — 보조 {self.lane} {channel} ({lane['device'] or '기본 스피커'})")
+            db.log(self.conn, "quizbot", f"동시 청취 시작 — 보조 {self.lane} {channel} ({lanes.source_label(self.conn, lane)})")
             self._guarded(lambda: self._listen(
                 get_session, lambda now, channel=channel: (lanes.should_run(self.conn, self.lane) and
                                                           lanes.lane_of(self.conn, self.lane)["channel"] == channel),
@@ -1287,12 +1287,18 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
     return tr
 
 
-def build_real_deps(conn: sqlite3.Connection, device: str | None = None) -> Deps:
-    """윈도우에서 실제로 쓰는 구성."""
+def lane_item(conn: sqlite3.Connection, lane: str) -> dict:
+    item = lanes.lane_of(conn, lane)
+    if item is None:
+        raise RuntimeError(f"보조 {lane} 칸이 비어 있습니다 (동시 청취 설정)")
+    return item
+
+
+def build_real_deps(conn: sqlite3.Connection, lane: str = "") -> Deps:
+    """윈도우에서 실제로 쓰는 구성. lane: 동시 청취의 칸 (주 채널은 "")."""
     from ..app import launch_autofill
     from . import finder
     from .answerer import make as make_answerer
-    from .audio import LoopbackRecorder
     from .gorilla import Gorilla
     from .sms import AdbSms
 
@@ -1306,9 +1312,8 @@ def build_real_deps(conn: sqlite3.Connection, device: str | None = None) -> Deps
 
     return Deps(
         notify=notify,
-        # 녹음 장치: 보조 채널은 그 칸의 장치, 주 채널은 live.device (비우면 기본 스피커)
-        recorder_factory=lambda chunk: LoopbackRecorder(chunk, device=config.get(conn, "live.device")
-                                                        if device is None else device),
+        # 녹음: 칸에 적은 출력 장치, 동시 청취에서 비우면 그 채널 앱 소리만, 한 채널만 들을 때는 기본 스피커
+        recorder_factory=lambda chunk: lanes.recorder(conn, lane_item(conn, lane), chunk),
         transcriber_factory=lambda model, program: make_transcriber(conn, model, program),
         answerer=make_answerer(conn),
         sender=Gorilla(config.GorillaConfig.load(conn, "gorilla")),

@@ -1,8 +1,9 @@
 """동시 청취 — 한 PC 에서 여러 채널(방송국마다 하나: SBS 고릴라 · KBS 콩 · MBC mini)을 함께 듣고 받아쓰고 보낸다.
 
-소리 나누기: 윈도우 설정 → 시스템 → 소리 → 볼륨 믹서에서 앱마다 출력 장치를 따로 고른다
-(예: 고릴라 → 스피커, 콩 → 가상 장치 A, mini → 가상 장치 B). 가상 장치는 VB-Audio Virtual Cable 등을 설치하면 생긴다.
-이 프로그램은 장치마다 따로 루프백 녹음한다. 한 장치에 두 앱 소리가 섞이면 받아쓰기가 망가진다.
+소리 나누기 (0.54): 녹음 장치 칸을 비워 두면 '앱 소리'를 직접 받는다 (appaudio — 윈도우 프로세스 루프백,
+설치·볼륨 믹서 설정 필요 없음, 세 앱이 같은 스피커로 나와도 섞이지 않음). 그게 안 되는 PC 는 앱마다 출력 장치를
+나누고(볼륨 믹서: 고릴라 → 스피커, 콩 → CABLE Input …) 그 장치 이름을 칸에 적는다. 가상 장치는 무료 VB-CABLE
+(vbcable 이 자동 설치)로 하나 생긴다. 한 장치에 두 앱 소리가 섞이면 받아쓰기가 망가진다.
 
 - 주 채널(1번): 지금까지처럼 '청취 시작'의 채널, 녹음 장치는 live.device (비우면 기본 스피커).
 - 보조 채널(2·3번): live.lanes 에 {channel, device}. 청취 중이고 '동시 청취'가 켜져 있으면 채널마다
@@ -57,6 +58,45 @@ def lane_of(conn: sqlite3.Connection, lane: str) -> dict | None:
     return next((x for x in all_lanes(conn) if x["lane"] == lane), None)
 
 
+# ── 녹음 방식 ────────────────────────────────────────────────────────
+SOURCES = {"app": "앱 소리 (설치 없음)", "device": "출력 장치", "speaker": "기본 스피커"}
+
+
+def app_audio_supported() -> bool:
+    try:
+        from . import appaudio
+    except ImportError:          # 음성 인식 부품(numpy 등)이 아직 없음
+        return False
+    return appaudio.supported()
+
+
+def source(conn: sqlite3.Connection, item: dict, multi: bool | None = None) -> str:
+    """녹음 방식: device(칸에 적은 출력 장치) · app(그 채널 앱 소리만 — 동시 청취에서 칸을 비우면) · speaker(기본 스피커).
+    한 채널만 들을 때는 예전처럼 기본 스피커를 녹음한다."""
+    if (item.get("device") or "").strip():
+        return "device"
+    multi = enabled(conn) if multi is None else multi
+    return "app" if multi and app_audio_supported() else "speaker"
+
+
+def source_label(conn: sqlite3.Connection, item: dict) -> str:
+    kind = source(conn, item)
+    return item["device"].strip() if kind == "device" else SOURCES[kind]
+
+
+def recorder(conn: sqlite3.Connection, item: dict, chunk_seconds: int):
+    """그 칸의 녹음기 (with 로 열고 read_chunk)."""
+    from .audio import LoopbackRecorder
+
+    kind = source(conn, item)
+    if kind == "app":
+        from . import appaudio
+
+        app = config.chat_app(conn, item["channel"])
+        return appaudio.AppLoopbackRecorder(chunk_seconds, lambda: appaudio.app_process(conn, app))
+    return LoopbackRecorder(chunk_seconds, device=item["device"] if kind == "device" else "")
+
+
 def problems(conn: sqlite3.Connection, lanes: list[dict]) -> list[str]:
     """같이 들을 수 없는 조합 (순수 계산에 가까움): 같은 채널·같은 앱·같은 녹음 장치."""
     out, apps, devices, channels = [], {}, {}, set()
@@ -72,10 +112,12 @@ def problems(conn: sqlite3.Connection, lanes: list[dict]) -> list[str]:
                        "(한 앱은 한 번에 한 채널만 재생·채팅)")
         elif app:
             apps[app] = name
-        device = (x.get("device") or "").strip().lower() or "(기본 스피커)"
+        kind = source(conn, x, multi=True)
+        device = f"app:{app or name}" if kind == "app" else ((x.get("device") or "").strip().lower() or "(기본 스피커)")
         if device in devices:
             out.append(f"'{devices[device]}'와(과) '{name}'이(가) 같은 녹음 장치를 씁니다 — 소리가 섞입니다. "
-                       "앱마다 출력 장치를 따로 지정하고 여기서도 다른 장치를 고르세요")
+                       "이 PC 는 앱 소리 직접 받기가 안 되니, '가상 장치 자동 설치'로 장치를 만들고 볼륨 믹서에서 "
+                       "앱마다 출력 장치를 나눈 뒤 여기서도 다른 장치를 적으세요")
         else:
             devices[device] = name
     return out
@@ -103,6 +145,7 @@ def status(conn: sqlite3.Connection, now: datetime | None = None) -> list[dict]:
         except ValueError:
             age = None
         out.append({**x, "label": "주 채널" if not x["lane"] else f"보조 {x['lane']}",
+                    "source": source(conn, x), "source_label": source_label(conn, x),
                     "app": config.app_label(config.chat_app(conn, x["channel"])),
                     "state": db.get_setting(conn, key(x["lane"], "state")) or "",
                     "alive": age is not None and age < config.HEARTBEAT_FRESH_SECONDS,
@@ -176,11 +219,14 @@ def similarity(a: list[float], b: list[float]) -> float:
 
 
 def judge(items: list[dict], gpu_ok: bool) -> list[str]:
-    """장치 점검 결과 → 안내 (순수 계산). items: [{label, channel, device, level, envelope}]"""
+    """장치 점검 결과 → 안내 (순수 계산). items: [{label, channel, device, source, level, envelope}]"""
     out = []
     for it in items:
         if it.get("error"):
             out.append(f"{it['label']} '{it['channel']}': 녹음 장치를 열지 못함 — {it['error']}")
+        elif it["level"] < QUIET and it.get("source") == "app":
+            out.append(f"{it['label']} '{it['channel']}': 소리가 없습니다 — 그 앱이 켜져 있고 채널을 재생 중인지 확인하세요 "
+                       "(앱 안의 볼륨·음소거도)")
         elif it["level"] < QUIET:
             out.append(f"{it['label']} '{it['channel']}': 소리가 없습니다 — 그 앱이 재생 중인지, 윈도우 볼륨 믹서에서 그 앱의 "
                        f"출력 장치를 '{it['device'] or '기본 스피커'}'(으)로 지정했는지 확인하세요")
@@ -188,8 +234,12 @@ def judge(items: list[dict], gpu_ok: bool) -> list[str]:
     for i, a in enumerate(loud):
         for b in loud[i + 1:]:
             if similarity(a.get("envelope") or [], b.get("envelope") or []) >= SAME_SOUND:
-                out.append(f"'{a['channel']}'와(과) '{b['channel']}' 장치에 같은 소리가 들어옵니다 — 앱별 출력 장치가 "
-                           "제대로 나뉘지 않았습니다 (볼륨 믹서에서 앱마다 다른 장치)")
+                if a.get("source") == "app" and b.get("source") == "app":
+                    out.append(f"'{a['channel']}'와(과) '{b['channel']}'에 같은 소리가 들어옵니다 — 두 앱이 같은 방송을 "
+                               "틀고 있는지 확인하세요")
+                else:
+                    out.append(f"'{a['channel']}'와(과) '{b['channel']}' 장치에 같은 소리가 들어옵니다 — 앱별 출력 장치가 "
+                               "제대로 나뉘지 않았습니다 (볼륨 믹서에서 앱마다 다른 장치)")
     if len(items) > 1 and not gpu_ok:
         out.append("그래픽카드 받아쓰기가 꺼져 있어(CPU) 여러 채널을 함께 받아쓰면 녹음보다 느릴 수 있습니다 — "
                    "'그래픽카드 다시 점검'을 해 보고, 그래도 CPU면 모델을 small 로 낮추세요")
@@ -198,28 +248,27 @@ def judge(items: list[dict], gpu_ok: bool) -> list[str]:
 
 def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=None, transcriber=None,
                 gpu_ok: bool | None = None) -> dict:
-    """채널마다 그 장치를 동시에 seconds 초 녹음 → 소리 크기 · 받아쓴 말 · 같은 소리 겹침 · 그래픽카드 안내."""
+    """채널마다 그 녹음(앱 소리 또는 장치)을 동시에 seconds 초 → 소리 크기 · 받아쓴 말 · 같은 소리 겹침 · 그래픽카드 안내.
+    recorder_factory(칸) → 녹음기 (기본: recorder)."""
     from . import live
 
     lanes = all_lanes(conn)
     if recorder_factory is None:
-        from .audio import LoopbackRecorder
-
-        def recorder_factory(device):
-            return LoopbackRecorder(seconds, device=device)
-    items = [{"label": "주 채널" if not x["lane"] else f"보조 {x['lane']}", **x, "level": 0, "text": "", "error": ""}
-             for x in lanes]
+        def recorder_factory(item):
+            return recorder(conn, item, seconds)
+    items = [{"label": "주 채널" if not x["lane"] else f"보조 {x['lane']}", **x, "source": source(conn, x),
+              "level": 0, "text": "", "error": ""} for x in lanes]
     audio: dict[int, object] = {}
 
-    def record(i, device):
+    def record(i, item):
         try:
-            with recorder_factory(device) as rec:
-                items[i]["device_name"] = getattr(rec, "device_name", device)
+            with recorder_factory(item) as rec:
+                items[i]["device_name"] = getattr(rec, "device_name", item["device"])
                 audio[i] = rec.read_chunk()
         except Exception as e:
-            items[i]["error"] = f"{type(e).__name__}: {str(e)[:120]}"
+            items[i]["error"] = f"{type(e).__name__}: {str(e)[:200]}"
 
-    threads = [threading.Thread(target=record, args=(i, x["device"]), daemon=True) for i, x in enumerate(lanes)]
+    threads = [threading.Thread(target=record, args=(i, x), daemon=True) for i, x in enumerate(lanes)]
     for t in threads:
         t.start()
     for t in threads:
