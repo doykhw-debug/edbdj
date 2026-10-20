@@ -30,11 +30,12 @@ AI_POLICY = {"unknown": "미확인", "allowed": "제한 없음 확인", "restric
 DRAFT_STATUS = {"draft": "작성 중", "approved": "승인됨", "archived": "보관"}
 SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "manual": "직접 작성"}
 STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀",
-                "approved": "승인한 내 사연 그대로"}
+                "approved": "승인한 내 사연 그대로", "song": "신청곡 (DJ 한마디)"}
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
                 ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"),
                 ("live.board_auto", "board_auto"), ("live.story_approved", "story_approved"),
-                ("live.song_free", "song_free"), ("live.sms_fallback", "sms_fallback"))
+                ("live.song_free", "song_free"), ("live.sms_fallback", "sms_fallback"), ("live.dj_song", "dj_song"),
+                ("live.chat_consensus", "chat_consensus"))
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
                      "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움

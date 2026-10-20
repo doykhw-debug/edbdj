@@ -58,6 +58,12 @@ SMS_HOLD = "대기: 휴대폰(USB)이 연결되지 않음 — 연결되면 보�
 HELD_RETRY_MINUTES = 20  # 이보다 오래된 보류 글은 늦었으므로 자동으로 보내지 않는다
 RETRY_PREFIX = "대기: 전송 못 함 — 1분마다 다시 시도"   # 채팅 앱 전송이 누르기 전에 막힘 (보내지 않았으므로 다시 보내도 안전)
 RETRY_SECONDS = 60
+CONSENSUS_MIN = 3         # 채팅에서 같은 답이 이만큼 겹치면 그 답을 정답으로 채택
+DJ_WAIT_SECONDS = 120     # 프로그램이 바뀐 뒤 DJ 한마디가 새로 바뀔 때까지 기다리는 시간
+DJ_RETRY_MINUTES = 10     # DJ 한마디를 못 읽었으면 이 간격으로 다시
+SONG_RETRY_MINUTES = 30   # 신청곡을 못 보냈으면 이 간격으로 다시 (보낼 때까지)
+SONG_SENT = ("entered", "posted", "unknown")
+SONG_PICK_TRIES = 3       # 실제로 있는 곡인지 확인되지 않으면 다시 고르는 횟수
 
 
 class Recorder(Protocol):
@@ -99,6 +105,22 @@ class Deps:
 
 
 # ── 판단 ────────────────────────────────────────────────────────────
+def adopt_consensus(res: QuizAnalysis, agreed: dict) -> QuizAnalysis:
+    """채팅에서 같은 답이 3개 이상 겹치면 그 답을 정답으로 채택하고, 보낼 글은 '답 — 어울리는 이유'로 (기발한 오답은 쓰지 않음)."""
+    keyword, count = agreed["keyword"], agreed["count"]
+    heard = res.answer
+    reason = (res.consensus_reason or "").strip()
+    base = res.formatted_message.replace(heard, keyword) if res.formatted_message and heard and heard in res.formatted_message \
+        else keyword
+    res.answer = keyword
+    res.confidence = max(res.confidence, 0.85)
+    res.witty_answer, res.witty_point, res.wit_score = "", "", 0.0
+    res.formatted_message = (f"{base} — {reason}" if reason else base)[:150]
+    res.from_chat = (f"채팅 공통 답 '{keyword}' {count}개 → 정답으로 채택"
+                     + (f" (녹취로는 '{heard}')" if heard and heard != keyword else ""))
+    return res
+
+
 def always_send(conn: sqlite3.Connection, answer: str | None) -> bool:
     """'퀴즈는 무조건 보내기'(기본 켜짐)이고 정답 후보가 있으면 True. 객관식·주관식 모두,
     틀려도 손해가 없으니 확신도가 기준보다 낮아도 가장 그럴듯한 답을 보낸다."""
@@ -363,6 +385,7 @@ class Runner:
         max_story = config.get_int(self.conn, "quizbot.max_story_analyses_per_window")
         max_gift = config.get_int(self.conn, "quizbot.max_gift_analyses_per_window")
         current, cap_key, silent, chunks, slow = None, None, 0, 0, 0
+        program_since = self.deps.now()
         self.shots: list[tuple[str, bytes]] = []   # 키워드가 들린 뒤 찍은 채팅창 사진 (녹취와 교차 분석)
         self._shot_error = False
         self.silence, self._silence_events = silence.SilenceWatch(), []
@@ -385,7 +408,7 @@ class Runner:
                     cap_key, self.analyses, self.story_analyses, self.gift_analyses = now_key, 0, 0, 0
                 if program != current:
                     # 프로그램이 바뀌면 음성 인식 힌트(진행자·코너)를 바꾼다
-                    current = program
+                    current, program_since = program, self.deps.now()
                     if hasattr(transcriber, "set_context"):
                         transcriber.set_context(program, stt_hints(self.conn, program))
                 if not wait_for_gorilla and (self.deps.now() - gorilla_checked).total_seconds() >= 60:
@@ -454,6 +477,7 @@ class Runner:
                         self.analyses += 1
                 if not (detector.armed or story_detector.armed):
                     self.shots = []   # 다음 키워드가 들리면 새로 모은다
+                self.dj_song(session, w, cap_key, program_since)
                 self.process_approved(session)
                 self.retry_held(session, gorilla_ok)
         db.set_setting(self.conn, "quizbot.silent_since", "")
@@ -554,6 +578,10 @@ class Runner:
             return None
         if res.kind == "not_quiz":
             return None
+        if res.kind in ("new_question", "reannouncement") and config.get(self.conn, "live.chat_consensus") == "1":
+            agreed = res.consensus(CONSENSUS_MIN) if hasattr(res, "consensus") else None
+            if agreed:
+                adopt_consensus(res, agreed)
         dup = find_duplicate(known, res) if res.kind in ("reannouncement", "new_question", "answer_reveal") else None
         if res.kind == "answer_reveal":
             if dup:
@@ -566,7 +594,15 @@ class Runner:
             self.conn.execute("UPDATE quizzes SET repeat_count = repeat_count + 1, updated_at = ? WHERE id = ?",
                               (db.now(), dup))
             row = self.conn.execute("SELECT * FROM quizzes WHERE id = ?", (dup,)).fetchone()
-            if row["entry_status"] == "pending" and not row["approved"] and res.answer and \
+            if getattr(res, "from_chat", None) and row["entry_status"] == "pending" and not row["approved"] and \
+                    row["answer"] != res.answer:
+                # 다시 안내할 때 채팅에서 같은 답이 3개 이상 겹침 → 그 답(+이유)으로 바꿔 보낸다
+                self.conn.execute(
+                    "UPDATE quizzes SET answer = ?, confidence = ?, answer_kind = 'correct', send_text = ?, "
+                    "note = COALESCE(note || ' / ', '') || ? WHERE id = ?",
+                    (res.answer, res.confidence, res.formatted_message[:150], res.from_chat, dup))
+                db.log(self.conn, "quizbot", f"{program} 퀴즈 #{dup}: {res.from_chat}")
+            elif row["entry_status"] == "pending" and not row["approved"] and res.answer and \
                     (not (row["answer"] or "") or res.confidence > (row["confidence"] or 0)):
                 # 재안내·힌트로 답이 더 확실해졌으면 새 답으로 다시 판단한다
                 kind = self.pick_kind(schedule, res)
@@ -605,7 +641,8 @@ class Runner:
                VALUES (?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, '고릴라', ?, ?, 0, 'auto', ?, ?, ?, ?, ?, ?)""",
             (key, account, schedule["channel"] or "파워FM", schedule["program"], w.broadcast_date, qkey, res.question, " / ".join(res.options),
              res.deadline_hint or None, res.gorilla_accepted, res.answer or None, schedule["id"], res.confidence,
-             transcript[-2000:], (res.formatted_message and f"전송 형식: {res.formatted_message}") or res.reasoning_note,
+             transcript[-2000:], getattr(res, "from_chat", None)
+             or (res.formatted_message and f"전송 형식: {res.formatted_message}") or res.reasoning_note,
              db.now(), db.now()))
         self.conn.commit()
         qid = cur.lastrowid
@@ -618,9 +655,11 @@ class Runner:
         if res.formatted_message and res.answer and res.answer in res.formatted_message:
             # 진행자가 정한 형식 (기발한 오답을 보낼 때도 같은 형식으로)
             text = res.formatted_message.replace(res.answer, res.witty_answer) if kind == "witty" else res.formatted_message
-            self.conn.execute("UPDATE quizzes SET send_text = ? WHERE id = ?", (text[:100], qid))
+            self.conn.execute("UPDATE quizzes SET send_text = ? WHERE id = ?", (text[:150], qid))
         self.conn.commit()
         chosen = f" · 기발한 오답 '{res.witty_answer}'으로 보냄 ({res.witty_point[:40]})" if kind == "witty" else ""
+        if getattr(res, "from_chat", None):
+            chosen = f" · {res.from_chat}"
         shots = f" · 채팅창 {self._images_used}장 함께 분석" if getattr(self, "_images_used", 0) else ""
         db.log(self.conn, "quizbot", f"{schedule['program']} 퀴즈 감지 #{qid}: {res.question[:40]} → {res.answer or '?'} "
                                      f"(확신도 {res.confidence:.2f}){chosen}{shots}")
@@ -787,6 +826,147 @@ class Runner:
             self.deps.notify(f"사연 주제 '{res.topic[:30]}' — 확인 대기")
         return pid
 
+    # ── DJ 한마디 → 신청곡 ───────────────────────────────────────
+    def dj_song(self, session, w: Window, slot: str | None, since: datetime) -> None:
+        """프로그램마다 하루 한 번 채팅 창의 DJ 한마디를 읽고, 신청곡을 청하면 날씨·이슈에 맞는 곡을 한 번 이상 보낸다.
+        DJ 한마디가 프로그램에 맞게 바뀔 시간을 두고(2분), 못 읽거나 못 보냈으면 나중에 다시."""
+        if config.get(self.conn, "live.dj_song") != "1" or not slot or db.is_stopped(self.conn):
+            return
+        now = self.deps.now()
+        if (now - since).total_seconds() < DJ_WAIT_SECONDS:
+            return
+        channel = session["channel"]
+        app = config.chat_app(self.conn, channel)
+        sender = self.chat_sender(app) if app else None
+        if sender is None or not hasattr(sender, "notice_image"):
+            return
+        tried = self.__dict__.setdefault("_dj_tried", {})
+        notice = self.conn.execute("SELECT * FROM dj_notices WHERE channel IS ? AND slot = ? AND broadcast_date = ?",
+                                   (channel, slot, w.broadcast_date)).fetchone()
+        if notice is None:
+            last = tried.get(("notice", slot))
+            if last and (now - last).total_seconds() < DJ_RETRY_MINUTES * 60:
+                return
+            tried[("notice", slot)] = now
+            notice = self.read_notice(session, w, slot, sender)
+            if notice is None:
+                return
+        if not notice["wants_song"]:
+            return
+        program = session["program"]
+        rows = self.conn.execute("SELECT status, created_at FROM story_posts WHERE source = 'song' AND program = ? "
+                                 "AND broadcast_date = ? ORDER BY id DESC", (program, w.broadcast_date)).fetchall()
+        if any(r["status"] in SONG_SENT for r in rows):
+            return   # 이 프로그램에 오늘 신청곡을 이미 보냄
+        if any(r["status"] == "pending" for r in rows):
+            return   # 보내는 중 (전송 못 하면 1분마다 다시 시도)
+        last = tried.get(("song", slot))
+        if last and (now - last).total_seconds() < SONG_RETRY_MINUTES * 60:
+            return
+        tried[("song", slot)] = now
+        self.request_song(session, w, notice)
+
+    def read_notice(self, session, w: Window, slot: str, sender):
+        """채팅 창 사진 → DJ 한마디 기록. 못 찍거나 못 읽으면 None (나중에 다시)."""
+        if self.claude_paused():
+            return None
+        app = config.chat_app(self.conn, session["channel"])
+        try:
+            image = sender.notice_image(save_as=f"{app}_notice")
+        except Exception as e:
+            db.log(self.conn, "quizbot", f"{session['program']} DJ 한마디: 채팅 창을 찍지 못함 ({type(e).__name__}: {str(e)[:80]})")
+            return None
+        if not image:
+            return None
+        try:
+            data = self.deps.answerer.read_dj_notice(session["program"], image)
+        except Exception as e:
+            db.log(self.conn, "quizbot", f"{session['program']} DJ 한마디를 읽지 못함: {str(e)[:120]}")
+            return None
+        text = " ".join(str(data.get("text") or "").split())[:300]
+        wants_song = bool(data.get("wants_song")) or bool(re.search(r"신청곡|듣고\s*싶은\s*(노래|곡)|노래\s*신청", text))
+        cur = self.conn.execute(
+            "INSERT INTO dj_notices (channel, program, slot, broadcast_date, found, text, wants_song, wants_story, topic, "
+            "checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (session["channel"], session["program"], slot, w.broadcast_date, 1 if data.get("found") else 0, text,
+             1 if wants_song else 0, 1 if data.get("wants_story") else 0, (data.get("topic") or "")[:80] or None,
+             db.now()))
+        self.conn.commit()
+        db.log(self.conn, "quizbot", f"{session['program']} DJ 한마디: " + (f"'{text[:60]}'" if text else "보이지 않음")
+                                     + (" → 신청곡을 청함, 신청곡을 보냅니다" if wants_song else ""))
+        return self.conn.execute("SELECT * FROM dj_notices WHERE id = ?", (cur.lastrowid,)).fetchone()
+
+    def today_context(self) -> str:
+        """오늘 날씨·가벼운 이슈 (하루 한 번 웹에서 확인해 둠). 못 찾으면 빈 글."""
+        today = self.deps.now().strftime("%Y-%m-%d")
+        saved = db.get_setting(self.conn, "song.today") or ""
+        if saved.startswith(today + "\n"):
+            return saved[len(today) + 1:]
+        try:
+            text = self.deps.answerer.research_today(today)
+        except Exception as e:
+            db.log(self.conn, "quizbot", f"신청곡: 오늘 날씨·이슈를 찾지 못해 프로그램 분위기로만 고릅니다 ({str(e)[:80]})")
+            text = ""
+        db.set_setting(self.conn, "song.today", f"{today}\n{text[:2500]}")
+        return text[:2500]
+
+    def request_song(self, session, w: Window, notice) -> int | None:
+        """신청곡 하나를 골라 보낸다 (최근에 보낸 곡은 빼고). 보낼 글 번호 또는 None."""
+        if self.claude_paused():
+            return None
+        program, channel = session["program"], session["channel"]
+        recent = [r["song"] for r in self.conn.execute(
+            "SELECT song FROM story_posts WHERE source = 'song' AND song IS NOT NULL ORDER BY id DESC LIMIT 30")]
+        avoid, pick, song, title = list(recent), None, "", ""
+        for _ in range(SONG_PICK_TRIES):
+            try:
+                pick = self.deps.answerer.pick_song(program, channel, self.deps.now().strftime("%Y-%m-%d %H:%M"),
+                                                    notice["text"], self.today_context(), avoid)
+                artist = " ".join(str(pick.get("artist") or "").split())[:40]
+                title = " ".join(str(pick.get("title") or "").split())[:60]
+                if not artist or not title:
+                    raise AnswererError("가수·제목이 비어 있음")
+                checked = self.deps.answerer.verify_song(artist, title) if hasattr(self.deps.answerer, "verify_song") \
+                    else {"exists": True}
+            except Exception as e:
+                db.log(self.conn, "quizbot", f"{program} 신청곡을 고르지 못함: {str(e)[:120]}")
+                return None
+            if not checked.get("exists"):
+                real = " ".join(str(checked.get("artist") or "").split())[:40]
+                db.log(self.conn, "quizbot", f"{program} 신청곡 '{artist} - {title}'은(는) 확인되지 않아 다시 고릅니다"
+                                             + (f" (실제 가수: {real})" if real and real != artist else ""))
+                avoid.append(f"{artist} - {title}")
+                continue
+            real = " ".join(str(checked.get("artist") or "").split())[:40] or artist
+            real_title = " ".join(str(checked.get("title") or "").split())[:60] or title
+            song = f"{real} - {real_title}"
+            if song in recent[:10]:
+                avoid.append(song)
+                continue
+            if (real, real_title) != (artist, title):   # 확인한 가수·제목으로 바로잡는다
+                pick["message"] = str(pick.get("message") or "").replace(f"{artist} - {title}", song)
+            title = real_title
+            break
+        else:
+            db.log(self.conn, "quizbot", f"{program} 확인된 신청곡을 고르지 못해 {SONG_RETRY_MINUTES}분 뒤 다시 고릅니다")
+            return None
+        message = " ".join(str(pick.get("message") or "").split())
+        if song not in message or len(message) > answerer_mod.STORY_LIMIT or re.search(r"\d{2,4}-\d{3,4}-\d{4}|@", message):
+            message = f"{song} 신청합니다"
+        reason = " ".join(str(pick.get("reason") or "").split())[:120]
+        cur = self.conn.execute(
+            """INSERT INTO story_posts (schedule_id, channel, program, broadcast_date, topic, experience_id, message, source,
+                   approved, gorilla_accepted, warnings, excerpt, note, target, song, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, NULL, ?, 'song', 1, 'yes', '[]', ?, ?, 'chat', ?, ?, ?)""",
+            (session["id"] if "id" in session.keys() else None, channel, program, w.broadcast_date,
+             f"신청곡 — {song}", message, f"DJ 한마디: {notice['text'][:200]}",
+             f"DJ 한마디에 신청곡 요청 → 자동 신청 · {reason}", song, db.now(), db.now()))
+        self.conn.commit()
+        pid = cur.lastrowid
+        db.log(self.conn, "quizbot", f"{program} 신청곡 #{pid}: {song} — {reason[:60]}")
+        self.try_send_story(pid, session)
+        return pid
+
     def auto_board(self, pid: int, draft_id: int) -> bool:
         """방송에서 게시판에 남겨 달라고 한 사연: 검사 경고가 없으면 원고를 자동 승인하고 등록 도구를 띄운다.
         로그인·CAPTCHA 는 도구가 창을 띄워 사용자에게 맡긴다 (우회하지 않음). 띄웠으면 True."""
@@ -858,7 +1038,7 @@ class Runner:
         if reasons:
             self._hold("story_posts", pid, "보류: " + " / ".join(reasons))
             return None
-        how = "사용자 승인 후 전송" if post["approved"] else (
+        how = "DJ 한마디 신청곡 자동 전송" if post["source"] == "song" else "사용자 승인 후 전송" if post["approved"] else (
             "직접 쓴 한 줄 자동 전송" if post["source"] == "user_line" else "검사 통과 자동 전송")
         channel = post["channel"] or self._channel_of(schedule) or config.get(self.conn, "live.channel")
         return self.deliver("story_posts", "status", pid, route, channel, post["message"].strip(), how,

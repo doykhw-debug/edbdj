@@ -84,10 +84,39 @@ def test_no_gorilla_window_at_marked_spot(desk, screen, monkeypatch):
         g._window()
 
 
-def test_moved_chat_window_is_not_clicked(desk, screen):
-    g = chat_gorilla(point_window="300,88,671,643")           # 지정할 때는 채팅 창이 다른 자리에 있었음
+def test_moved_chat_window_is_followed_not_moved_back(desk, screen, monkeypatch):
+    """0.52: 사용자가 채팅 창을 옮겼으면 지정할 때 자리로 되돌리지 않고(강제 롤백 없음), 창을 따라가 누른다."""
+    moved = dict(CHAT, rect=(683, 188, 1054, 743))                # 오른쪽으로 200, 아래로 100 옮김
+    screen.windows[2002] = moved
+
+    def at(x, y):
+        for info in (moved, PLAYER):
+            l, t, r, b = info["rect"]
+            if l <= x < r and t <= y < b:
+                return dict(info, point=(x, y))
+        return {"hwnd": 9, "title": "바탕 화면", "process": "explorer.exe", "rect": (0, 0, 1, 1), "point": (x, y)}
+
+    moves = []
+    monkeypatch.setattr(gorilla, "window_at_point", at)
+    monkeypatch.setattr(gorilla, "app_window_at", lambda x, y, proc: at(x, y)["hwnd"] if at(x, y)["hwnd"] in (1001, 2002) else None)
+    monkeypatch.setattr(gorilla, "app_windows", lambda proc: [
+        {"hwnd": 1001, "title": "고릴라", "visible": True, "iconic": False, "normal": PLAYER["rect"]},
+        {"hwnd": 2002, "title": "", "visible": True, "iconic": False, "normal": moved["rect"]}])
+    monkeypatch.setattr(gorilla, "restore_window", lambda *a: moves.append(a))
+    g = chat_gorilla()
+    assert g.is_running()
     w = g._window()
-    with pytest.raises(gorilla.GorillaError, match="다른 자리"):
+    assert w.handle == 2002                                       # 그 자리를 덮은 플레이어 창이 아니라 옮긴 채팅 창
+    g._put_text(w, "봉숭아학당")
+    g._press_send(w)
+    assert desk.clicks == [(850, 717), (1019, 717)] and moves == []   # 따라가 누르고, 창은 건드리지 않음
+
+
+def test_resized_chat_window_is_not_clicked(desk, screen):
+    screen.windows[2002] = dict(CHAT, rect=(483, 88, 1054, 843))  # 크기가 많이 달라짐 (다른 화면일 수 있음)
+    g = chat_gorilla()
+    w = g._window()
+    with pytest.raises(gorilla.GorillaError, match="크기"):
         g._put_text(w, "봉숭아학당")
     assert desk.clicks == []
 

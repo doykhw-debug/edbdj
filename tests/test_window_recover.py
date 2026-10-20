@@ -1,5 +1,6 @@
 """보낼 때 채팅 창이 그 자리에 없으면 (최소화·옮겨짐·꺼짐) 되살려서 보낸다 — '무조건 보내기'.
-실제 사례: 입력칸 자리(모니터 1384, 785)에 'Program Manager'(바탕화면)만 있어 1분마다 다시 시도만 하다 못 보냄."""
+실제 사례: 입력칸 자리(모니터 1384, 785)에 'Program Manager'(바탕화면)만 있어 1분마다 다시 시도만 하다 못 보냄.
+0.52: 채팅 창을 지정할 때 자리로 옮기지 않는다 ('채팅창이 특정 위치로 강제 롤백'). 창은 그대로 두고 따라가 누른다."""
 
 import os
 from types import SimpleNamespace
@@ -18,37 +19,42 @@ DESKTOP = {"hwnd": 65552, "title": "Program Manager", "process": "explorer.exe",
 
 @pytest.fixture
 def gone(desk, screen, monkeypatch):
-    """채팅 창이 그 자리에 없는 모니터: restore/launch 가 일어나면 원래 자리(CHAT)에 창이 생긴다."""
-    st = SimpleNamespace(back=False, restored=[], launched=[], wins=[])
+    """채팅 창이 그 자리에 없는 모니터: restore 가 일어나면 그 창이 '있던 자리'(normal)에 다시 보인다 (옮기지 않음).
+    앱을 다시 켜면(back) 원래 자리(CHAT)에 뜬다."""
+    st = SimpleNamespace(back=False, rect=None, restored=[], launched=[], wins=[])
+
+    def shown():
+        return st.rect or (CHAT["rect"] if st.back else None)
 
     def at(x, y):
-        left, top, right, bottom = CHAT["rect"]
-        if st.back and left <= x < right and top <= y < bottom:
-            return dict(CHAT, point=(x, y))
+        rect = shown()
+        if rect and rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
+            return dict(CHAT, rect=rect, point=(x, y))
         return dict(DESKTOP, point=(x, y))
 
     def restore(hwnd, rect, iconic, visible):
         st.restored.append((hwnd, rect, iconic, visible))
-        st.back = True
+        st.rect = next(w["normal"] for w in st.wins if w["hwnd"] == hwnd)
+        screen.windows[hwnd] = dict(CHAT, hwnd=hwnd, rect=st.rect)
 
     monkeypatch.setattr(gorilla, "window_at_point", at)
-    monkeypatch.setattr(gorilla, "app_window_at", lambda x, y, proc: 2002 if st.back and at(x, y)["hwnd"] == 2002 else None)
+    monkeypatch.setattr(gorilla, "app_window_at", lambda x, y, proc: 2002 if at(x, y)["hwnd"] == 2002 else None)
     monkeypatch.setattr(gorilla, "app_windows", lambda proc: st.wins)
     monkeypatch.setattr(gorilla, "restore_window", restore)
     monkeypatch.setattr(gorilla.os, "startfile", lambda path: st.launched.append(path), raising=False)
     return st
 
 
-def test_minimized_and_moved_chat_window_is_restored_then_sent(desk, gone):
+def test_minimized_and_moved_chat_window_is_restored_in_place_then_sent(desk, gone):
     gone.wins = [{"hwnd": 2002, "title": "", "visible": True, "iconic": True, "normal": (100, 100, 471, 655)}]
     g = chat_gorilla()
     w = g._window()
     assert w.handle == 2002
-    assert gone.restored == [(2002, (483.0, 88.0, 854.0, 643.0), True, True)]       # 지정 때 자리·크기로 되돌림
-    assert g.fixes == ["고릴라 채팅 창이 그 자리에 없어 최소화돼 있어 되살림 · 위치 지정 때 자리로 옮김"]
+    assert gone.restored == [(2002, None, True, True)]                    # 최소화만 풀고 자리·크기는 그대로 (롤백 안 함)
+    assert g.fixes == ["고릴라 채팅 창이 그 자리에 없어 최소화돼 있어 되살림 (창 자리는 그대로)"]
     g._put_text(w, "봉숭아학당")
     g._press_send(w)
-    assert desk.clicks == [(650, 617), (819, 617)]                                    # 되살린 채팅 창을 눌러 보냄
+    assert desk.clicks == [(267, 629), (436, 629)]                        # 옮긴 창을 따라 입력칸·전송 버튼을 누름
 
 
 def test_hidden_to_tray_window_is_shown_in_place(desk, gone):
@@ -57,7 +63,7 @@ def test_hidden_to_tray_window_is_shown_in_place(desk, gone):
     g = chat_gorilla()
     assert g._window().handle == 2002
     assert gone.restored == [(2002, None, False, False)]                              # 크기가 맞는 채팅 창, 자리는 그대로
-    assert g.fixes == ["고릴라 채팅 창이 그 자리에 없어 숨어 있어 다시 띄움"]
+    assert g.fixes == ["고릴라 채팅 창이 그 자리에 없어 숨어 있어 다시 띄움 (창 자리는 그대로)"]
 
 
 def test_closed_app_is_relaunched_from_saved_exe(desk, gone, tmp_path, monkeypatch):
@@ -108,7 +114,8 @@ def test_send_detail_mentions_what_was_fixed(desk, gone, monkeypatch):
     monkeypatch.setattr(g, "_with_focus", lambda fn: fn(g._window()))
     monkeypatch.setattr(g, "evidence_image", lambda w: None)
     result = g.send("봉숭아학당")
-    assert result.status != "failed" and result.detail.startswith("고릴라 채팅 창이 그 자리에 없어 최소화돼 있어 되살림 → ")
+    assert result.status != "failed" and \
+        result.detail.startswith("고릴라 채팅 창이 그 자리에 없어 최소화돼 있어 되살림 (창 자리는 그대로) → ")
     assert isinstance(g._window(), AppWin)
 
 

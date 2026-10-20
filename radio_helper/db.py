@@ -181,6 +181,21 @@ CREATE TABLE IF NOT EXISTS story_posts (
     updated_at       TEXT NOT NULL
 );
 
+-- 채팅 창의 DJ 한마디·제작진 공지 (프로그램마다 하루 한 번 읽음). 신청곡을 청하면 신청곡을 보낸다.
+CREATE TABLE IF NOT EXISTS dj_notices (
+    id             INTEGER PRIMARY KEY,
+    channel        TEXT,
+    program        TEXT NOT NULL,
+    slot           TEXT NOT NULL,                     -- 프로그램 (편성표에 없는 시간은 '채널 방송|날짜|2시간 구간')
+    broadcast_date TEXT NOT NULL,
+    found          INTEGER NOT NULL DEFAULT 0,
+    text           TEXT NOT NULL DEFAULT '',
+    wants_song     INTEGER NOT NULL DEFAULT 0,
+    wants_story    INTEGER NOT NULL DEFAULT 0,
+    topic          TEXT,
+    checked_at     TEXT NOT NULL
+);
+
 -- 방송에서 들은 선물(경품) 정보와 받는 조건. 채널·프로그램별로 모아 본다.
 CREATE TABLE IF NOT EXISTS gift_events (
     id             INTEGER PRIMARY KEY,

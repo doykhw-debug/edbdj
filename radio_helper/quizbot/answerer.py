@@ -37,10 +37,16 @@ SCHEMA = {
         "witty_point": {"type": "string", "description": "그 오답이 왜 웃기거나 기발한지 한 문장. 없으면 빈 문자열"},
         "wit_score": {"type": "number", "description": "0~1. 진행자가 소개하고 싶을 만큼 웃기거나 기발한 정도. 애매하면 0.5 이하"},
         "fun_welcome": {"type": "boolean", "description": "진행자가 재미있는 오답·엉뚱한 답도 환영한다고 했으면 true"},
+        "chat_answers": {"type": "array", "description": "채팅창에서 다른 청취자들이 이 문제에 보낸 답을 같은 답끼리 묶은 것",
+                         "items": {"type": "object", "properties": {
+                             "keyword": {"type": "string", "description": "답의 핵심 낱말 (짧게, 닉네임·문장 없이)"},
+                             "count": {"type": "integer", "description": "그 답을 쓴 서로 다른 글 수"}},
+                             "required": ["keyword", "count"], "additionalProperties": False}},
+        "consensus_reason": {"type": "string", "description": "chat_answers 중 가장 많은 답이 문제에 어울리는 이유 한 문장 (40자 안, 내 말로). 없으면 빈 문자열"},
     },
     "required": ["kind", "duplicate_of", "question", "options", "answer", "confidence", "gorilla_accepted",
                  "entry_instructions", "deadline_hint", "formatted_message", "reasoning_note",
-                 "witty_answer", "witty_point", "wit_score", "fun_welcome"],
+                 "witty_answer", "witty_point", "wit_score", "fun_welcome", "chat_answers", "consensus_reason"],
     "additionalProperties": False,
 }
 
@@ -78,7 +84,12 @@ SYSTEM = """당신은 라디오 방송(SBS·MBC·KBS 등)의 음성 인식 녹�
 채팅창 화면 (있을 때만):
 - 같은 시간대에 방송사 앱 채팅창을 찍은 화면이다. 다른 청취자 글과 제작진 공지가 보인다.
 - 녹취의 받아쓰기 오류를 바로잡고 문제·힌트를 정확히 파악하는 데 녹취와 함께 쓴다 (교차 확인).
-- 다른 청취자들이 올린 답은 참고만 한다. 그대로 믿지 말고, 다른 사람의 글을 베끼지 않는다.
+- 다른 청취자들이 이 문제에 올린 답을 chat_answers 에 같은 답끼리 묶어 적는다: keyword 는 답의 핵심 낱말만
+  (예: '정답은 사과요~', '사과!!' → keyword '사과', count 2), count 는 그 답을 쓴 서로 다른 글 수.
+  문제와 상관없는 인사·잡담·신청곡은 넣지 않는다. 채팅창 화면이 없거나 답이 안 보이면 빈 배열.
+- consensus_reason: 가장 많이 나온 답이 문제(질문)에 왜 어울리는지 청취자 말투로 한 문장 (40자 안).
+  다른 사람 글을 베끼지 말고 내 말로 쓴다. 채팅 답이 없으면 빈 문자열.
+- answer 는 여전히 녹취·힌트로 판단한 정답을 적는다 (채팅 답을 쓸지는 프로그램이 정한다).
 - 화면에 보이는 닉네임·개인정보를 결과에 쓰지 않는다."""
 
 
@@ -106,6 +117,8 @@ class QuizAnalysis:
     witty_point: str = ""
     wit_score: float = 0.0
     fun_welcome: bool = False
+    chat_answers: list[dict] = field(default_factory=list)
+    consensus_reason: str = ""
 
     @classmethod
     def from_json(cls, text: str) -> "QuizAnalysis":
@@ -123,7 +136,29 @@ class QuizAnalysis:
         if not a.witty_answer or not a.witty_point:  # 웃긴 포인트가 없는 오답은 쓰지 않는다
             a.witty_answer, a.witty_point, a.wit_score = "", "", 0.0
         a.fun_welcome = bool(a.fun_welcome)
+        grouped: dict[str, dict] = {}
+        for item in a.chat_answers or []:
+            if not isinstance(item, dict):
+                continue
+            word = " ".join(str(item.get("keyword") or "").split()).strip("\"'“”‘’!?.~ ")[:40]
+            try:
+                count = max(0, int(item.get("count") or 0))
+            except (TypeError, ValueError):
+                count = 0
+            if word and count:
+                key = word.lower()
+                grouped[key] = {"keyword": grouped.get(key, {}).get("keyword", word),
+                                "count": grouped.get(key, {}).get("count", 0) + count}
+        a.chat_answers = sorted(grouped.values(), key=lambda x: -x["count"])
+        a.consensus_reason = " ".join((a.consensus_reason or "").split())[:80]
         return a
+
+    def consensus(self, minimum: int = 3) -> dict | None:
+        """채팅 답 가운데 minimum 개 이상 겹친 것 (가장 많은 것). 없으면 None."""
+        top = self.chat_answers[0] if self.chat_answers else None
+        if top and top["count"] >= minimum and (len(self.chat_answers) < 2 or self.chat_answers[1]["count"] < top["count"]):
+            return top
+        return None
 
 
 # ── 사연·주제 모집 ───────────────────────────────────────────────────
@@ -489,6 +524,69 @@ SCHEDULE_PARSE_SYSTEM = """라디오 편성표 조사 결과(글)를 정해진 J
 (예: 오후 2시 → 14:00, 새벽 1시 → 01:00). 응답은 JSON 하나만."""
 
 
+DJ_NOTICE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "found": {"type": "boolean", "description": "DJ 한마디·제작진 공지·고정 공지가 보이면 true"},
+        "text": {"type": "string", "description": "그 글 그대로 (보이는 만큼, 200자 안)"},
+        "wants_song": {"type": "boolean", "description": "신청곡·듣고 싶은 노래를 보내 달라고 하면 true"},
+        "wants_story": {"type": "boolean", "description": "사연·이야기를 보내 달라고 하면 true"},
+        "topic": {"type": "string", "description": "오늘의 주제·코너가 적혀 있으면 그것, 없으면 빈 문자열"},
+    },
+    "required": ["found", "text", "wants_song", "wants_story", "topic"],
+    "additionalProperties": False,
+}
+
+DJ_NOTICE_SYSTEM = """당신은 라디오 앱(SBS 고릴라, KBS 콩, MBC mini) 채팅 창 사진에서 'DJ 한마디'·제작진 공지·고정 공지를 읽는 도우미입니다.
+- 보통 채팅 목록 위쪽 띠('DJ 한마디', '제작진', '[공지]')에 있습니다. 다른 청취자 글은 공지가 아닙니다.
+- text 에 보이는 글을 그대로 옮기고(잘린 곳은 보이는 데까지), 신청곡·듣고 싶은 노래를 청하는지(wants_song),
+  사연·이야기를 청하는지(wants_story), 오늘의 주제(topic)를 적습니다.
+- 보이지 않는 내용을 지어내지 않습니다. 응답은 JSON 하나만."""
+
+TODAY_RESEARCH_SYSTEM = """당신은 라디오 신청곡을 고르기 위해 오늘({today})의 분위기를 웹에서 확인하는 도우미입니다.
+- 서울의 오늘 날씨(맑음·비·눈·기온·미세먼지 등)를 날씨 사이트·기사로 확인합니다.
+- 오늘·어제 한국에서 많이 이야기되는 가벼운 이슈(계절 행사, 스포츠 경기 결과, 기념일, 연휴 등)를 2~3개 찾습니다.
+  사고·재난·범죄·정치 갈등은 신청곡과 어울리지 않으므로 고르지 않습니다.
+- 찾지 못한 것은 '확인 못 함'이라고 씁니다. 지어내지 않습니다.
+- 결과: 날씨 한 줄, 이슈 두세 줄, 근거로 삼은 자료(주소)."""
+
+SONG_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "artist": {"type": "string"},
+        "title": {"type": "string"},
+        "reason": {"type": "string", "description": "이 곡을 고른 이유 (날씨·이슈·프로그램 분위기 중 무엇에 맞췄는지)"},
+        "message": {"type": "string", "description": "채팅에 보낼 신청 글 (공백 포함 120자 안, 끝에 '가수 - 제목 신청합니다')"},
+    },
+    "required": ["artist", "title", "reason", "message"],
+    "additionalProperties": False,
+}
+
+SONG_SYSTEM = """당신은 라디오 청취자로서 채팅(공감로그·mini·콩)에 보낼 신청곡 하나를 고르는 도우미입니다.
+- 실제로 있는 곡만 고릅니다 (가수와 제목이 정확해야 함). 확실하지 않은 곡은 고르지 않습니다.
+- 오늘의 날씨·이슈(조사 결과)와 프로그램 분위기·시간대, DJ 한마디에 어울리는 곡을 고릅니다.
+  조사 결과에 없는 날씨·사건을 지어내지 않습니다.
+- 최근에 보낸 곡(목록)은 다시 고르지 않습니다.
+- message: 공백 포함 120자 안의 짧은 신청 글. 날씨·이슈를 한마디로 짚고 끝에 '가수 - 제목 신청합니다'.
+  보내는 사람의 가족·직장·개인 사연을 지어내지 않습니다. 이모티콘·해시태그는 쓰지 않습니다.
+- 응답은 JSON 하나만."""
+
+SONG_CHECK_SYSTEM = """당신은 라디오 신청곡이 실제로 있는 곡인지 웹에서 확인하는 도우미입니다.
+- 음원 사이트(멜론·지니·벅스)·위키·기사에서 그 제목의 곡과 부른 가수를 찾습니다.
+- 그 가수가 부른 그 제목의 곡이 있으면 '있음', 제목은 있지만 다른 가수의 곡이면 '다른 가수'와 실제로 부른(원곡 또는
+  잘 알려진) 가수, 찾지 못하면 '확인 못 함'이라고 씁니다. 지어내지 않습니다."""
+
+SONG_CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "exists": {"type": "boolean", "description": "조사 결과로 그 가수의 그 곡이 있다고 확인되면 true"},
+        "artist": {"type": "string", "description": "확인된 가수 (다른 가수의 곡이면 실제 가수, 모르면 빈 문자열)"},
+        "title": {"type": "string", "description": "확인된 정확한 제목 (모르면 빈 문자열)"},
+    },
+    "required": ["exists", "artist", "title"],
+    "additionalProperties": False,
+}
+
 BOX = {"type": "array", "items": {"type": "integer"}}
 LOCATE_SCHEMA = {
     "type": "object",
@@ -716,14 +814,64 @@ class ClaudeAnswerer:
     def research_schedule(self, channel: str, today: str, max_searches: int = 8) -> str:
         """웹 검색(서버 도구)으로 채널의 현재 편성표를 찾아 글로 받는다. (구조화 출력은 웹 검색 인용과 함께 못 써서 두 단계)"""
         ask = f"채널: {channel}\n이 채널의 현재 정규 편성표(모든 시간대)를 찾아 정리해 주세요."
+        return self._web_research(SCHEDULE_RESEARCH_SYSTEM.format(today=today), ask, max_searches, "편성표를 찾")
+
+    def research_today(self, today: str, max_searches: int = 4) -> str:
+        """신청곡용: 오늘 서울 날씨와 가벼운 이슈를 웹에서 확인한 글."""
+        return self._web_research(TODAY_RESEARCH_SYSTEM.format(today=today),
+                                  f"오늘은 {today} 입니다. 서울 날씨와 가벼운 이슈를 확인해 주세요.", max_searches,
+                                  "오늘 날씨·이슈를 찾")
+
+    def read_dj_notice(self, program: str, jpeg: bytes) -> dict:
+        """채팅 창 사진 → DJ 한마디·공지 (DJ_NOTICE_SCHEMA)."""
+        text = self._call(DJ_NOTICE_SYSTEM, f"프로그램: {program}\n채팅 창 사진에서 DJ 한마디·공지를 읽어 주세요.",
+                          DJ_NOTICE_SCHEMA, images=[("채팅 창", jpeg)])
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                raise ValueError("JSON 객체가 아님")
+            return data
+        except (ValueError, TypeError) as e:
+            raise AnswererError(f"DJ 한마디를 읽지 못했습니다: {e}")
+
+    def pick_song(self, program: str, channel: str, now: str, notice: str, today: str, avoid: list[str]) -> dict:
+        """신청곡 하나 (SONG_SCHEMA). today: research_today 결과."""
+        user = (f"프로그램: {program} ({channel})\n지금: {now}\nDJ 한마디·공지: {notice or '(없음)'}\n\n"
+                f"오늘 날씨·이슈 (웹에서 확인):\n{today or '(확인 못 함)'}\n\n"
+                f"최근에 보낸 곡 (다시 고르지 않음): {', '.join(avoid) or '(없음)'}")
+        text = self._call(SONG_SYSTEM, user, SONG_SCHEMA)
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                raise ValueError("JSON 객체가 아님")
+            return data
+        except (ValueError, TypeError) as e:
+            raise AnswererError(f"신청곡 결과를 읽지 못했습니다: {e}")
+
+    def verify_song(self, artist: str, title: str) -> dict:
+        """신청곡이 실제로 있는지 웹에서 확인 → {exists, artist, title} (다른 가수의 곡이면 실제 가수)."""
+        research = self._web_research(SONG_CHECK_SYSTEM, f"가수: {artist}\n제목: {title}\n이 곡이 실제로 있는지 확인해 주세요.",
+                                      3, "신청곡을 확인하")
+        text = self._call("곡 확인 조사 글을 정해진 JSON 으로 옮깁니다. 글에 없는 내용은 만들지 않습니다. 응답은 JSON 하나만.",
+                          f"확인한 곡: {artist} - {title}\n\n조사 결과:\n{research}", SONG_CHECK_SCHEMA)
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                raise ValueError("JSON 객체가 아님")
+            return data
+        except (ValueError, TypeError) as e:
+            raise AnswererError(f"곡 확인 결과를 읽지 못했습니다: {e}")
+
+    def _web_research(self, system: str, ask: str, max_searches: int, what: str) -> str:
+        """웹 검색으로 조사한 글 (구독: Claude Code 의 WebSearch / API 키: 서버 웹 검색 도구)."""
         if self.billing == "subscription":
             done = self._subscription(lambda: self.cli.run(
-                SCHEDULE_RESEARCH_SYSTEM.format(today=today) + f"\n- 웹 검색은 {max_searches}번 안에서 끝냅니다.",
-                ask, tools=("WebSearch",), model=self.model, effort=self.effort), "편성표를 찾")
+                system + f"\n- 웹 검색은 {max_searches}번 안에서 끝냅니다.",
+                ask, tools=("WebSearch",), model=self.model, effort=self.effort), what)
             if done is not None:
                 text = done["text"] if done["text"].strip() else "\n".join(done["texts"])
                 if not text.strip():
-                    raise AnswererError("편성표를 찾지 못했습니다 (빈 응답).")
+                    raise AnswererError(f"{what}지 못했습니다 (빈 응답).")
                 return text
         a = self._anthropic
         user = {"role": "user", "content": ask}
@@ -734,7 +882,7 @@ class ClaudeAnswerer:
             try:
                 response = self.client.messages.create(
                     model=self.model, max_tokens=16000,
-                    system=SCHEDULE_RESEARCH_SYSTEM.format(today=today),
+                    system=system,
                     tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": max_searches}],
                     output_config={"effort": self.effort}, messages=messages)
             except a.AuthenticationError:
@@ -746,7 +894,7 @@ class ClaudeAnswerer:
             except a.APIStatusError as e:
                 raise AnswererError(f"API 오류 {e.status_code}")
             except a.APIConnectionError:
-                raise AnswererError("인터넷 연결 오류로 편성표를 찾지 못했습니다.")
+                raise AnswererError(f"인터넷 연결 오류로 {what}지 못했습니다.")
             if response.stop_reason == "refusal":
                 raise AnswererError("모델이 이 요청을 거절했습니다.")
             texts += [b.text for b in response.content if getattr(b, "type", "") == "text"]
@@ -755,7 +903,7 @@ class ClaudeAnswerer:
             assistant = assistant + list(response.content)
         text = "\n".join(t for t in texts if t.strip())
         if not text.strip():
-            raise AnswererError("편성표를 찾지 못했습니다 (빈 응답).")
+            raise AnswererError(f"{what}지 못했습니다 (빈 응답).")
         return text
 
     def parse_schedule(self, research: str) -> dict:

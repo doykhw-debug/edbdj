@@ -14,7 +14,9 @@ SBS 고릴라(공감로그)·MBC mini·KBS 콩 모두 같은 방식이다. 설�
 전송 중에는 고릴라 창이 잠깐 맨 앞으로 나온다. 끝나면 원래 쓰던 창과 클립보드를 되돌린다.
 
 보낼 때 채팅 창이 그 자리에 없으면 (모니터 기준 위치 방식)
-  - 최소화·트레이로 숨은 창은 되살리고, 옮겨지거나 크기가 바뀐 창은 위치를 지정할 때 자리·크기로 되돌린다.
+  - 채팅 창은 옮기거나 크기를 바꾸지 않는다 (예전에는 지정할 때 자리로 되돌려 '강제로 롤백'되는 것처럼 보였음).
+    사용자가 옮긴 창은 그 자리 그대로 두고, 누를 자리를 창을 따라 옮겨 누른다 (지정할 때와 크기가 거의 같은 창만).
+  - 최소화·트레이로 숨은 창은 그 자리에 다시 띄우기만 한다.
   - 앱이 아예 꺼져 있으면 실행 파일(위치 지정 때 저장) 또는 시작 메뉴 바로 가기로 다시 켜고 창이 뜨기를 기다린다.
   - 그래도 그 자리에 앱 창이 없을 때만 보내지 않는다 (바탕화면 등 엉뚱한 곳에 Enter 를 누르지 않게).
 
@@ -52,6 +54,8 @@ EDGE_ZONE = 0.25         # 창 가장자리에서 이 비율 안쪽에 지정한
 FRONT_WAIT_SECONDS = 1.0  # 클릭한 창이 맨 앞으로 올 때까지 기다리는 시간
 LAUNCH_WAIT_SECONDS = 40  # 꺼진 채팅 앱을 다시 켠 뒤 창이 뜨기를 기다리는 시간
 MIN_APP_WINDOW = 150      # 이보다 작은 창(알림·숨은 도우미 창)은 채팅 창으로 보지 않는다
+SAME_WINDOW_PX = 40       # 지정할 때 그 채팅 창과 '같은 창'으로 보는 크기 차이 (이 픽셀 또는 10% 안)
+SAME_WINDOW_RATIO = 0.10  # (고릴라 플레이어 창은 채팅 창과 크기가 달라 헷갈리지 않는다)
 
 
 @dataclass
@@ -134,6 +138,29 @@ def window_moved(saved: str | None, rect: tuple[int, int, int, int]) -> str | No
     if any(abs(a - b) > LAYOUT_MIN_PX for a, b in zip(before, rect)):
         return "창이 영역을 지정할 때와 다른 자리·크기에 있습니다"
     return None
+
+
+def same_size(saved, rect) -> bool:
+    """지정할 때의 채팅 창과 크기가 거의 같은지 (같은 앱의 플레이어·광고 창과 헷갈리지 않게). 모르면 True."""
+    if not saved:
+        return True
+    sw, sh = saved[2] - saved[0], saved[3] - saved[1]
+    w, h = rect[2] - rect[0], rect[3] - rect[1]
+    return abs(w - sw) <= max(SAME_WINDOW_PX, sw * SAME_WINDOW_RATIO) and \
+        abs(h - sh) <= max(SAME_WINDOW_PX, sh * SAME_WINDOW_RATIO)
+
+
+def follow_point(point: tuple[int, int], saved, frame) -> tuple[int, int]:
+    """지정한 모니터 위치를 지금 창 자리에 맞춘다 (창은 건드리지 않음): 옮겼으면 같이 옮기고,
+    크기가 조금 달라졌으면 가장자리에 붙은 입력칸·전송 버튼은 그 가장자리를 따라간다 (순수 계산)."""
+    if not saved:
+        return point
+    sl, st, sr, sb = (int(v) for v in saved)
+    fl, ft, fr, fb = (int(v) for v in frame)
+    if (fr - fl, fb - ft) == (sr - sl, sb - st):   # 크기는 같고 자리만 옮김 → 옮긴 만큼 그대로
+        return int(point[0]) + fl - sl, int(point[1]) + ft - st
+    fx, fy = point_to_fraction((sl, st, sr, sb), *point)
+    return anchored_point(tuple(int(v) for v in frame), fx, fy, f"{sr - sl},{sb - st}")
 
 
 def covered_by(info: dict, handle: int | None) -> str | None:
@@ -753,10 +780,18 @@ class Gorilla:
             if self._screen_mode():
                 # 모니터 기준이면 보낼 때와 똑같이 그 자리의 창으로 본다 (창 목록 검색은 채팅이 따로 뜨는 앱을 못 찾을 수 있음)
                 point = self._screen_point("input") or self._screen_point("send")
-                if self._is_app(window_at_point(*point)):
+                saved = self._saved_window()
+                info = window_at_point(*point)
+                if self._is_app(info) and same_size(saved, info["rect"]):
                     return True
                 proc = (self.cfg.process_name or "").lower()
-                return bool(proc and app_window_at(*point, proc))
+                if not proc:
+                    return False
+                hwnd = app_window_at(*point, proc)
+                if hwnd and (not saved or self._same_window(hwnd)):
+                    return True
+                # 사용자가 채팅 창을 옮겼어도(최소화 포함) 같은 크기의 그 앱 창이 있으면 켜져 있는 것 (따라가 누름)
+                return any(same_size(saved, w["normal"]) for w in app_windows(proc))
             if self._region() is not None:
                 return self._region_window_info() is not None
             return bool(self._candidates())
@@ -789,6 +824,26 @@ class Gorilla:
             return None
         return x, y
 
+    def _saved_window(self) -> tuple[int, ...] | None:
+        r = parse_rect(self.cfg.point_window)
+        return tuple(int(v) for v in r) if r else None
+
+    def _same_window(self, hwnd: int) -> bool:
+        try:
+            return same_size(self._saved_window(), window_info(hwnd)["rect"])
+        except Exception:
+            return True
+
+    def _moved_window(self, proc: str) -> int | None:
+        """옮겨진 채팅 창: 그 앱의 보이는 창 중 지정할 때와 크기가 같은 것 (자리가 가장 가까운 것). 창은 건드리지 않는다."""
+        saved = self._saved_window()
+        same = [w for w in app_windows(proc) if w["visible"] and not w["iconic"] and same_size(saved, w["normal"])]
+        if not same:
+            return None
+        if saved:
+            same.sort(key=lambda w: abs(w["normal"][0] - saved[0]) + abs(w["normal"][1] - saved[1]))
+        return same[0]["hwnd"]
+
     def _is_app(self, info: dict) -> bool:
         proc = (self.cfg.process_name or "").lower()
         return not is_excluded(info["title"], info["process"]) and (not proc or not info["process"]
@@ -799,14 +854,21 @@ class Gorilla:
         from pywinauto import Desktop
 
         info = window_at_point(*point)
-        if self._is_app(info):
+        if self._is_app(info) and same_size(self._saved_window(), info["rect"]):
             hwnd = info["hwnd"]
         else:
             proc = (self.cfg.process_name or "").lower()
             hwnd = app_window_at(*point, proc) if proc else None
+            if hwnd and self._saved_window() and not self._same_window(hwnd):
+                hwnd = None   # 그 자리를 덮은 것이 같은 앱의 다른 창(플레이어 등)이면 누르지 않는다
             if not hwnd and proc:
                 try:
-                    hwnd = self._recover(point, proc)   # 최소화·옮겨짐·꺼짐 → 되살려 그 자리에 둔다
+                    hwnd = self._moved_window(proc)      # 사용자가 옮긴 채팅 창 — 그 자리 그대로 두고 따라가 누름
+                except Exception:
+                    hwnd = None
+            if not hwnd and proc:
+                try:
+                    hwnd = self._recover(point, proc)   # 최소화·숨김 → 그 자리에 다시 띄움, 꺼짐 → 다시 켬 (옮기지 않음)
                 except Exception as e:
                     self.fixes.append(f"창 되살리기 실패: {type(e).__name__}")
                     hwnd = None
@@ -819,9 +881,9 @@ class Gorilla:
         return Desktop(backend="uia").window(handle=hwnd).wrapper_object()
 
     def _recover(self, point: tuple[int, int], proc: str) -> int | None:
-        """그 자리에 채팅 창이 없을 때: 최소화·숨김을 풀고 위치 지정 때 자리로 되돌린다. 앱이 꺼져 있으면 다시 켠다.
-        되살린 뒤 그 자리를 덮는 앱 창 번호 (없으면 None). 한 일은 self.fixes 에 남긴다 (전송 기록에 붙음)."""
-        saved = parse_rect(self.cfg.point_window)
+        """그 자리에 채팅 창이 없을 때: 최소화·숨김만 풀어 그 자리에 다시 띄운다 (자리·크기는 바꾸지 않음).
+        앱이 꺼져 있으면 다시 켠다. 되살린 채팅 창 번호 (없으면 None). 한 일은 self.fixes 에 남긴다 (전송 기록에 붙음)."""
+        saved = self._saved_window()
         wins = app_windows(proc)
         if not wins:
             if not self._launch(proc):
@@ -835,17 +897,19 @@ class Gorilla:
                 return None
             time.sleep(3)   # 채팅 창이 펼쳐질 시간
             hwnd = app_window_at(*point, proc)
-            if hwnd:
+            if hwnd and (not saved or self._same_window(hwnd)):
                 return hwnd   # 다시 켜자 원래 자리에 뜸
             wins = app_windows(proc)
-        target = pick_app_window(wins, saved)
-        moved = bool(saved) and tuple(int(v) for v in target["normal"]) != tuple(int(v) for v in saved)
-        restore_window(target["hwnd"], saved if moved else None, target["iconic"], target["visible"])
+        same = [w for w in wins if same_size(saved, w["normal"])]
+        if not same:
+            self.fixes.append(f"{self.cfg.label} 채팅 창이 열려 있지 않음 (지정할 때 크기의 창이 없음 — 채팅을 닫았으면 열어 두세요)")
+            return None
+        target = pick_app_window(same, saved)
+        restore_window(target["hwnd"], None, target["iconic"], target["visible"])   # 자리·크기는 그대로
         time.sleep(0.8)
-        what = ("최소화돼 있어 되살림" if target["iconic"] else "숨어 있어 다시 띄움" if not target["visible"] else "")
-        what = " · ".join(x for x in (what, "위치 지정 때 자리로 옮김" if moved else "") if x)
-        self.fixes.append(f"{self.cfg.label} 채팅 창이 그 자리에 없어 {what or '앞으로 가져옴'}")
-        return app_window_at(*point, proc)
+        what = "최소화돼 있어 되살림" if target["iconic"] else "숨어 있어 다시 띄움" if not target["visible"] else "앞으로 가져옴"
+        self.fixes.append(f"{self.cfg.label} 채팅 창이 그 자리에 없어 {what} (창 자리는 그대로)")
+        return target["hwnd"]
 
     def _launch(self, proc: str) -> bool:
         """꺼진 채팅 앱을 다시 켠다: 저장한 실행 파일 → 시작 메뉴 바로 가기. 켰으면 True."""
@@ -912,7 +976,7 @@ class Gorilla:
         """입력칸(input)·전송 버튼(send)을 누를 화면 좌표: 모니터 기준이면 저장한 자리 그대로, 아니면 창 안 비율."""
         point = self._screen_point(target)
         if point is not None:
-            return point
+            return follow_point(point, self._saved_window(), self._frame(w))   # 사용자가 옮긴 창을 따라감
         if target == "input":
             return self._point(w, self.cfg.input_x, self.cfg.input_y)
         return self._point(w, self.cfg.send_x, self.cfg.send_y)
@@ -1078,7 +1142,10 @@ class Gorilla:
         """위치 클릭 전에: 창 크기·자리가 위치를 지정할 때와 같은지. 많이 다르면 저장한 비율 위치가
         재생·채널 버튼 같은 다른 곳을 가리킬 수 있으므로 누르지 않는다."""
         if self._screen_mode():
-            problem = window_moved(self.cfg.point_window, self._frame(w))
+            # 자리는 따라가 누르므로 상관없고, 크기가 많이 달라졌을 때만 막는다 (다른 화면일 수 있음)
+            saved = self._saved_window()
+            problem = None if same_size(saved, self._frame(w)) else \
+                f"창 크기가 위치를 지정할 때({saved[2] - saved[0]}×{saved[3] - saved[1]})와 많이 다릅니다"
         elif self._region() is not None:
             problem = window_moved(self.cfg.region_window, self._frame(w))
         else:
@@ -1235,7 +1302,12 @@ class Gorilla:
         screen = parse_rect(self.cfg.chat_screen)
         if screen:   # 모니터 기준으로 지정한 채팅 목록 (채팅이 플레이어 옆에 따로 뜨는 앱)
             area = tuple(int(v) for v in screen)
-            w = self._window_at_point(((area[0] + area[2]) // 2, (area[1] + area[3]) // 2), "채팅 목록")
+            anchor = self._screen_point("input") or ((area[0] + area[2]) // 2, (area[1] + area[3]) // 2)
+            w = self._window_at_point(anchor, "채팅 목록")
+            saved, frame = self._saved_window(), self._frame(w)
+            if saved and tuple(frame) != tuple(saved):   # 사용자가 옮긴 창: 채팅 목록 자리도 같이 옮겨 찍는다
+                (l, t), (r, b) = follow_point(area[:2], saved, frame), follow_point(area[2:], saved, frame)
+                area = (l, t, r, b)
             by_window = True
         else:
             frac = parse_rect(self.cfg.chat_rect)
@@ -1259,6 +1331,30 @@ class Gorilla:
             from PIL import ImageGrab
 
             img = ImageGrab.grab(bbox=area, all_screens=True)
+        if save_as:
+            from .. import db
+
+            out_dir = db.data_dir() / "inspect"
+            out_dir.mkdir(exist_ok=True)
+            img.convert("RGB").save(out_dir / f"{save_as}.png")
+        return to_jpeg(img, max_side)
+
+    def notice_image(self, max_side: int = 1100, save_as: str | None = None) -> bytes | None:
+        """채팅 창 전체(위쪽 DJ 한마디·공지 포함)를 찍어 JPEG 로 (읽기만, 창을 옮기거나 앞으로 가져오지 않음).
+        입력칸 자리를 모르거나 창을 못 찾으면 None."""
+        point = self._screen_point("input") or self._screen_point("send")
+        if point is None:
+            return None
+        w = self._window_at_point(point, "입력칸")
+        img = None
+        try:
+            img = window_image(w.handle)   # 다른 창에 가려져 있어도 그 창만 찍힘
+        except Exception:
+            img = None
+        if img is None:
+            from PIL import ImageGrab
+
+            img = ImageGrab.grab(bbox=tuple(self._frame(w)), all_screens=True)
         if save_as:
             from .. import db
 
