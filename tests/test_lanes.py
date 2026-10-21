@@ -228,3 +228,87 @@ def test_item_taken_by_another_listener_is_not_sent_twice(conn):
     conn.commit()
     assert r.deliver("quizzes", "entry_status", cur.lastrowid, "app", "파워FM", "사과", "자동 전송", "퀴즈") is None
     assert sender.sent == []
+
+
+# ── 0.58: 동시 청취에서 보내기 차례 ──────────────────────────────────
+def test_stale_lock_from_closed_program_is_cleared(data_dir):
+    from radio_helper import autofill
+
+    path = db.data_dir() / "input.lock"
+    path.write_text("999999999", encoding="ascii")          # 보내는 도중 꺼진 프로그램이 남긴 잠금
+    with autofill.input_lock():                              # 80분을 기다리지 않고 바로 잡음
+        assert path.read_text(encoding="ascii") == str(__import__("os").getpid())
+    path.write_text(str(__import__("os").getpid()), encoding="ascii")   # 살아 있는 프로그램의 잠금은 그대로
+    import pytest
+
+    with pytest.raises(autofill.AutofillError):
+        with autofill.input_lock():
+            pass
+    path.unlink()
+
+
+def test_busy_turn_is_retried_not_marked_unknown(conn):
+    """다른 칸이 보내는 중이라 차례를 못 잡으면 아무것도 누르지 않은 것 → '결과 불명'이 아니라 다시 시도."""
+    from contextlib import contextmanager
+
+    from radio_helper import autofill
+    from test_quizbot import ScriptAnswerer
+
+    @contextmanager
+    def busy(wait_seconds=0):
+        raise autofill.AutofillError("다른 입력 작업이 진행 중입니다.")
+        yield
+
+    start_live(conn)
+    sender = FakeGorilla()
+    r, _ = live_runner(conn, {3: "자 오늘의 퀴즈 나갑니다 철수가 좋아하는 과일은 정답은 고릴라로 보내주세요"},
+                       ScriptAnswerer([analysis()]), sender, n=12)
+    r.deps.lock = busy
+    r.run_live()
+    row = conn.execute("SELECT entry_status, decision FROM quizzes WHERE source = 'auto'").fetchone()
+    assert row["entry_status"] == "pending" and row["decision"].startswith(runner.RETRY_PREFIX)
+    assert "다른 입력 작업이 끝나지 않아" in row["decision"] and sender.tried == []
+
+    @contextmanager
+    def free(wait_seconds=0):
+        yield
+
+    r.deps.lock = free                                     # 차례가 비면 1분 뒤 다시 시도해서 보냄
+    r.deps.sleep(61)
+    r.retry_held(live.session(conn, r.deps.now()))
+    assert sender.sent == ["사과"]
+
+
+def test_refind_waits_its_turn(conn):
+    from contextlib import contextmanager
+
+    from radio_helper import autofill
+    from test_quizbot import ScriptAnswerer
+
+    calls = []
+
+    @contextmanager
+    def busy(wait_seconds=0):
+        calls.append(wait_seconds)
+        raise autofill.AutofillError("busy")
+        yield
+
+    start_live(conn)
+    r, _ = live_runner(conn, {}, ScriptAnswerer([]), FakeGorilla(), n=1)
+    found = []
+    r.deps.refind = lambda c, app: found.append(app) or {"settings": {"x": "1"}}
+    r.deps.lock = busy
+    assert r.refind_chat("파워FM") is False and found == [] and calls == [runner.REFIND_LOCK_WAIT]
+
+
+def test_home_lists_recent_unsent_with_reason(client, conn):
+    now = db.now()
+    conn.execute("""INSERT INTO quizzes (dedupe_key, account, channel, program, broadcast_date, question_key, question, answer,
+                    source, kind, entry_status, decision, created_at, updated_at)
+                    VALUES ('k1', 'a', 'KBS 쿨FM', 'p', '2026-10-21', 'q', '문제', '사과', 'auto', 'new', 'pending',
+                            '대기: 전송 못 함 — 1분마다 다시 시도 (다른 입력 작업이 끝나지 않아 아직 못 보냄)', ?, ?)""", (now, now))
+    conn.commit()
+    rows = live.recent_unsent(conn)
+    assert rows[0]["kind"] == "퀴즈" and rows[0]["text"] == "사과" and "다른 입력 작업" in rows[0]["decision"]
+    html = client.get("/").get_data(as_text=True)
+    assert "최근 못 보낸 퀴즈·사연" in html and "KBS 쿨FM" in html and "다른 입력 작업이 끝나지 않아" in html

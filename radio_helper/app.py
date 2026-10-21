@@ -335,6 +335,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         vm["repair_text"] = repair.message(repair.status(g.conn))
         vm["multi"] = lanes.enabled(g.conn)
         vm["lanes"] = lanes.status(g.conn) if vm["multi"] else []
+        vm["unsent"] = live.recent_unsent(g.conn)
         return vm
 
     @app.get("/")

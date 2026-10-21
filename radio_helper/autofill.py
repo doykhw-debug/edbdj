@@ -55,6 +55,41 @@ def say(msg: str) -> None:
 
 
 # ── 입력 작업 직렬화 ────────────────────────────────────────────────
+def pid_alive(pid: int) -> bool:
+    """그 프로세스가 아직 살아 있는지 (모르면 살아 있다고 본다)."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        h = k.OpenProcess(0x1000, False, pid)            # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() == 5          # 접근 거부 = 살아 있음, 그 밖(없는 번호) = 꺼짐
+        try:
+            code = ctypes.c_ulong()
+            return not k.GetExitCodeProcess(h, ctypes.byref(code)) or code.value == 259   # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def lock_owner_gone(path) -> bool:
+    """잠금 파일을 만든 프로세스가 이미 꺼졌는지 (0.58 — 보내는 도중 프로그램을 끄거나 다시 켜면 잠금 파일이 남아
+    80분 동안 모든 전송이 '다른 입력 작업이 진행 중'으로 막혔음)."""
+    try:
+        pid = int((path.read_text(encoding="ascii", errors="ignore") or "0").strip() or 0)
+    except (OSError, ValueError):
+        return False
+    return pid > 0 and pid != os.getpid() and not pid_alive(pid)
+
+
 @contextmanager
 def input_lock(name: str = "input.lock", wait_s: float = 0):
     """한 PC에서 웹 게시 입력과 다른 화면 조작이 겹치지 않도록 한 번에 하나만 실행한다.
@@ -62,7 +97,7 @@ def input_lock(name: str = "input.lock", wait_s: float = 0):
     path = db.data_dir() / name
     deadline = time.time() + wait_s
     while True:
-        if path.exists() and time.time() - path.stat().st_mtime > LOCK_STALE_SECONDS:
+        if path.exists() and (time.time() - path.stat().st_mtime > LOCK_STALE_SECONDS or lock_owner_gone(path)):
             path.unlink(missing_ok=True)
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)

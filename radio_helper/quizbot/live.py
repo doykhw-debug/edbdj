@@ -96,6 +96,25 @@ def session(conn: sqlite3.Connection, now: datetime, channel: str | None = None)
     }
 
 
+UNSENT_HOURS = 6
+
+
+def recent_unsent(conn: sqlite3.Connection, now: datetime | None = None, limit: int = 8) -> list[dict]:
+    """최근 6시간 퀴즈·사연 중 아직 못 보냈거나 결과를 모르는 것과 그 이유 (첫 화면 '최근 못 보낸 글')."""
+    since = ((now or datetime.now()) - timedelta(hours=UNSENT_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+    rows = conn.execute(
+        """SELECT 'quiz' AS kind, id, channel, COALESCE(NULLIF(send_text, ''), witty_answer, answer, '') AS text,
+                  entry_status AS status, decision, updated_at FROM quizzes
+           WHERE created_at >= ? AND kind = 'new' AND entry_status IN ('pending', 'unknown', 'failed')
+           UNION ALL
+           SELECT 'story', id, channel, message, status, decision, updated_at FROM story_posts
+           WHERE created_at >= ? AND status IN ('pending', 'unknown', 'failed')
+           ORDER BY updated_at DESC LIMIT ?""", (since, since, limit)).fetchall()
+    return [{"kind": "퀴즈" if r["kind"] == "quiz" else "사연", "id": r["id"], "channel": r["channel"] or "",
+             "text": (r["text"] or "")[:40], "status": r["status"], "decision": r["decision"] or "",
+             "at": (r["updated_at"] or "")[11:16]} for r in rows]
+
+
 def level_percent(rms: float) -> int:
     """소리 크기(RMS) → 0~100. -60dB 이하는 0."""
     if rms <= 0:

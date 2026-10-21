@@ -56,6 +56,14 @@ GORILLA_HOLD = app_hold("gorilla")
 APP_HOLDS = [app_hold(a) for a in config.CHAT_APPS]
 SMS_HOLD = "대기: 휴대폰(USB)이 연결되지 않음 — 연결되면 보냄"
 HELD_RETRY_MINUTES = 20  # 이보다 오래된 보류 글은 늦었으므로 자동으로 보내지 않는다
+SEND_LOCK_WAIT = 60       # 보내기 전 화면·마우스 차례를 기다리는 시간 (동시 청취: 다른 칸이 보내는 중일 수 있음)
+REFIND_LOCK_WAIT = 3      # 창 다시 찾기는 차례가 비어 있을 때만 (보내는 중이면 다음에)
+
+
+class LockBusy(RuntimeError):
+    """화면·마우스 차례를 못 잡음 (아무것도 누르지 않았음)."""
+
+
 RETRY_PREFIX = "대기: 전송 못 함 — 1분마다 다시 시도"   # 채팅 앱 전송이 누르기 전에 막힘 (보내지 않았으므로 다시 보내도 안전)
 RETRY_SECONDS = 60
 CONSENSUS_MIN = 3         # 채팅에서 같은 답이 이만큼 겹치면 그 답을 정답으로 채택
@@ -1121,7 +1129,11 @@ class Runner:
         if app is None or self.deps.refind is None or config.route(self.conn) != "app":
             return False
         try:
-            report = self.deps.refind(self.conn, app)
+            # 창을 앞으로 가져오고 누를 수 있으므로 다른 청취기(동시 청취)가 보내는 동안에는 하지 않는다 (잠금, 잠깐만 기다림)
+            with self.input_turn(REFIND_LOCK_WAIT):
+                report = self.deps.refind(self.conn, app)
+        except LockBusy:
+            return False
         except Exception as e:
             db.log(self.conn, "gorilla", f"[{config.app_label(app)}] 자동 다시 찾기 오류: {type(e).__name__}: {str(e)[:80]}")
             return False
@@ -1131,6 +1143,25 @@ class Runner:
         if hasattr(sender, "cfg"):
             sender.cfg = config.GorillaConfig.load(self.conn, app)
         return self.chat_ok(channel)
+
+    @contextmanager
+    def input_turn(self, wait_seconds: int):
+        """화면·마우스를 쓰는 차례 (동시 청취의 다른 청취기·게시판 입력과 겹치지 않게). 못 잡으면 LockBusy."""
+        if self.deps.lock is None:
+            yield
+            return
+        try:
+            cm = self.deps.lock(wait_seconds)
+        except TypeError:                  # 기다릴 시간을 받지 않는 잠금
+            cm = self.deps.lock()
+        try:
+            cm.__enter__()
+        except Exception as e:
+            raise LockBusy(str(e)) from e
+        try:
+            yield
+        finally:
+            cm.__exit__(None, None, None)
 
     def chat_ok(self, channel: str | None) -> bool:
         app = config.chat_app(self.conn, channel)
@@ -1203,13 +1234,13 @@ class Runner:
         try:
             if route == "sms":
                 result = self.deps.sms.send(number, text)
-            elif self.deps.lock is not None:
-                with self.deps.lock():
-                    result = self.chat_sender(app).send(text)
             else:
-                result = self.chat_sender(app).send(text)
+                with self.input_turn(SEND_LOCK_WAIT):
+                    result = self.chat_sender(app).send(text)
             status, detail = result.status, result.detail
             shots = getattr(result, "shots", None) or []
+        except LockBusy as e:   # 차례를 못 잡음 = 아무것도 누르지 않았음 → 보내지 않은 것 (0.58 전에는 '결과 불명'으로 끝났음)
+            status, detail, shots = "failed", f"다른 입력 작업이 끝나지 않아 아직 못 보냄 ({str(e)[:60]})", []
         except Exception as e:  # 보냈는지 알 수 없다 → 결과 불명 유지
             status, detail = "unknown", f"전송 중 오류: {type(e).__name__}: {str(e)[:120]}"
             shots = []
@@ -1256,7 +1287,7 @@ def board_corner(conn: sqlite3.Connection, program: str, hint: str = ""):
 
 
 @contextmanager
-def shared_input_lock(wait_seconds: int = 20):
+def shared_input_lock(wait_seconds: int = SEND_LOCK_WAIT):
     """웹 입력 도구와 같은 잠금. 다른 입력 작업이 돌고 있으면 잠깐 기다린다."""
     from ..autofill import AutofillError, input_lock
 
