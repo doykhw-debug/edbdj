@@ -115,7 +115,7 @@ def watch_runner(interval: float = WATCHDOG_SECONDS) -> None:
                 lanes.ensure(conn, launch_quizbot)   # 동시 청취: 꺼진 보조 채널 청취기를 다시 띄움
                 fixed = repair.auto(conn)   # 음성 인식 부품이 없으면 스스로 고침 (설치 / Python 3.12 로 다시 켬)
                 boards.tick(conn)           # 코너 게시판 매일 자동 등록 (정한 시각이 된 코너)
-                schedules.tick(conn)        # 전 채널 편성표: 일주일 지나면 MBC·KBS·CBS·EBS(웹 검색)·SBS(공식 페이지) 다시
+                schedules.tick(conn)        # 전 채널 편성표: 일주일 지나면 MBC·KBS·CBS(웹 검색)·SBS(공식 페이지) 다시
             finally:
                 conn.close()
             if done and done != "limit":

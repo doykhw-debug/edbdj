@@ -50,7 +50,7 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
-SYSTEM = """당신은 라디오 방송(SBS·MBC·KBS·CBS·EBS 등)의 음성 인식 녹취를 읽고, 청취자 참여 퀴즈를 정리하는 도우미입니다.
+SYSTEM = """당신은 라디오 방송(SBS·MBC·KBS·CBS 등)의 음성 인식 녹취를 읽고, 청취자 참여 퀴즈를 정리하는 도우미입니다.
 녹취는 자동 음성 인식 결과라서 받아쓰기 오류가 있을 수 있습니다. 앞뒤 맥락으로 원래 말을 추정하세요.
 
 판단 규칙:
@@ -187,7 +187,7 @@ STORY_SCHEMA = {
     "additionalProperties": False,
 }
 
-STORY_SYSTEM = f"""당신은 라디오(SBS·MBC·KBS·CBS·EBS 등) 녹취를 듣고, 청취자 본인의 '실제 경험' 목록에서 방송 주제에 맞는 것을 골라
+STORY_SYSTEM = f"""당신은 라디오(SBS·MBC·KBS·CBS 등) 녹취를 듣고, 청취자 본인의 '실제 경험' 목록에서 방송 주제에 맞는 것을 골라
 앱 채팅(SBS 고릴라 공감로그 등)이나 문자로 보낼 짧은 글 초안을 쓰는 도우미입니다. 녹취는 음성 인식 결과라 오류가 있을 수 있습니다.
 
 판단:
@@ -420,7 +420,7 @@ NOTICE_SCHEMA = {
                  "needs_real", "deadline", "air_days", "needs_attachment", "reason"],
     "additionalProperties": False,
 }
-NOTICE_SYSTEM = """당신은 라디오 프로그램(SBS·MBC·KBS·CBS·EBS) 홈페이지의 코너 게시판 화면 글을 읽고,
+NOTICE_SYSTEM = """당신은 라디오 프로그램(SBS·MBC·KBS·CBS) 홈페이지의 코너 게시판 화면 글을 읽고,
 청취자가 이 코너에 글을 올리기 전에 지켜야 할 안내(공지)를 정리하는 도우미입니다.
 
 - 화면 글에는 메뉴, 다른 코너 이름, 다른 청취자들이 올린 글·소개된 글, 광고가 섞여 있습니다.
@@ -562,7 +562,7 @@ SONG_SCHEMA = {
     "additionalProperties": False,
 }
 
-SONG_SYSTEM = """당신은 라디오 청취자로서 채팅(공감로그·mini·콩·레인보우·반디)에 보낼 신청곡 하나를 고르는 도우미입니다.
+SONG_SYSTEM = """당신은 라디오 청취자로서 채팅(공감로그·mini·콩·레인보우)에 보낼 신청곡 하나를 고르는 도우미입니다.
 - 실제로 있는 곡만 고릅니다 (가수와 제목이 정확해야 함). 확실하지 않은 곡은 고르지 않습니다.
 - 오늘의 날씨·이슈(조사 결과)와 프로그램 분위기·시간대, DJ 한마디에 어울리는 곡을 고릅니다.
   조사 결과에 없는 날씨·사건을 지어내지 않습니다.

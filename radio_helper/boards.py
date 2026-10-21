@@ -1,4 +1,4 @@
-"""방송국(SBS·MBC·KBS·CBS·EBS) 상관없이 코너 게시판에 자동으로 글을 올린다.
+"""방송국(SBS·MBC·KBS·CBS) 상관없이 코너 게시판에 자동으로 글을 올린다.
 
     python -m radio_helper.boards run --corner 12 [--test | --real]
 
@@ -49,11 +49,11 @@ def notice_of(corner) -> dict:
 
 
 def add_corner(conn, url: str, title: str = "") -> int:
-    """코너 주소로 추가 (SBS·MBC·KBS·CBS·EBS 의 https 주소만). 이미 있으면 그 코너 번호."""
+    """코너 주소로 추가 (SBS·MBC·KBS·CBS 의 https 주소만). 이미 있으면 그 코너 번호."""
     url = (url or "").strip()
     station = stations.station_of(url)
     if station is None:
-        raise ValueError("SBS·MBC·KBS·CBS·EBS 홈페이지의 https 코너 주소만 추가할 수 있습니다.")
+        raise ValueError("SBS·MBC·KBS·CBS 홈페이지의 https 코너 주소만 추가할 수 있습니다.")
     row = conn.execute("SELECT id FROM corners WHERE board_url = ?", (url,)).fetchone()
     if row:
         return row["id"]
@@ -264,7 +264,7 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
     if db.is_stopped(conn):
         return finish(conn, cid, "일괄 중지가 켜져 있어 하지 않음")
     if stations.corner_station(corner) is None:
-        return finish(conn, cid, "SBS·MBC·KBS·CBS·EBS 의 https 코너 주소가 아니라 하지 않음")
+        return finish(conn, cid, "SBS·MBC·KBS·CBS 의 https 코너 주소가 아니라 하지 않음")
     try:
         if answerer is None:
             from .quizbot.answerer import make, ready
@@ -361,7 +361,7 @@ def next_run(corner, now: datetime) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="코너 게시판 자동 등록 (SBS·MBC·KBS·CBS·EBS)")
+    ap = argparse.ArgumentParser(description="코너 게시판 자동 등록 (SBS·MBC·KBS·CBS)")
     ap.add_argument("action", choices=["run"])
     ap.add_argument("--corner", type=int, required=True)
     mode = ap.add_mutually_exclusive_group()

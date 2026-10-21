@@ -9,7 +9,7 @@ import io
 import threading
 import time
 import zipfile
-from ctypes import POINTER, byref, c_int, c_int64, c_long, c_uint32, c_void_p
+from ctypes import POINTER, byref, c_float, c_int, c_int64, c_long, c_uint32, c_void_p
 
 import numpy as np
 import pytest
@@ -249,25 +249,33 @@ def test_not_supported_off_windows():
 
 
 # ── 동시 청취에서 고르기 ───────────────────────────────────────────
-def test_lane_source_app_when_device_blank(conn, monkeypatch):
+def test_lane_source_app_even_when_devices_typed(conn, monkeypatch):
+    # 실제 사례 (0.55): 모든 앱이 스피커로 나오는데 칸마다 장치를 골라 둠 → 주 채널은 네 방송이 섞이고 나머지는 소리 0
     monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)
     db.set_setting(conn, "live.channel", "파워FM")
     db.set_setting(conn, "live.multi", "1")
-    db.set_setting(conn, "live.lanes", '[{"channel": "KBS 쿨FM", "device": ""}, {"channel": "MBC FM4U", "device": "CABLE Input"}]')
+    db.set_setting(conn, "live.device", "스피커(High Definition Audio Device)")
+    db.set_setting(conn, "live.lanes", '[{"channel": "KBS 쿨FM", "device": "LG SMART WQHD(NVIDIA High Definition Audio)"}, '
+                                       '{"channel": "MBC FM4U", "device": "디지털 오디오(S/PDIF)(High Definition Audio Device)"}]')
     main, kong, mini = lanes.all_lanes(conn)
-    assert [lanes.source(conn, x) for x in (main, kong, mini)] == ["app", "app", "device"]
-    assert lanes.source_label(conn, kong) == "앱 소리 (설치 없음)" and lanes.source_label(conn, mini) == "CABLE Input"
-    assert lanes.problems(conn, [main, kong, mini]) == []                         # 비워 둔 칸 둘이어도 앱이 다르면 괜찮음
-    assert [x["source"] for x in lanes.status(conn)] == ["app", "app", "device"]
+    assert [lanes.source(conn, x) for x in (main, kong, mini)] == ["app", "app", "app"]   # 장치 칸은 쓰지 않음
+    assert lanes.source_label(conn, kong) == "앱 소리 (설치 없음)"
+    assert lanes.problems(conn, [main, kong, mini]) == []                         # 앱이 다르면 괜찮음
+    assert [x["source"] for x in lanes.status(conn)] == ["app", "app", "app"]
+    db.set_setting(conn, "live.device_mode", "1")                                # 고급: 출력 장치로 나눠 녹음을 켰을 때만
+    assert [lanes.source(conn, x) for x in (main, kong, mini)] == ["device", "device", "device"]
+    assert lanes.source_label(conn, mini).startswith("디지털 오디오")
+    db.set_setting(conn, "live.device_mode", "0")
     rec = lanes.recorder(conn, kong, 10)
     assert isinstance(rec, appaudio.AppLoopbackRecorder)
     db.set_setting(conn, "kong.process_name", "kongpc.exe")
     monkeypatch.setattr(appaudio, "processes", lambda: PROCS)
     assert rec.locate() == (20, "kongpc.exe")                                    # 그 채널의 앱(KBS → 콩)
     db.set_setting(conn, "live.multi", "0")
-    assert lanes.source(conn, main) == "speaker"                                 # 한 채널만 들을 때는 예전처럼 스피커
+    assert lanes.source(conn, main) == "device"                                  # 한 채널만 들을 때는 예전처럼 적은 장치
+    assert lanes.source(conn, {**main, "device": ""}) == "speaker"               # 비우면 기본 스피커
     monkeypatch.setattr(lanes, "app_audio_supported", lambda: False)
-    blank = [main, {**kong, "device": ""}]
+    blank = [{**main, "device": ""}, {**kong, "device": ""}]
     assert "가상 장치 자동 설치" in lanes.problems(conn, blank)[0]                # 지원 안 되면 같은 스피커 → 안내
 
 
@@ -411,7 +419,133 @@ def test_home_shows_install_button_and_launches(client, conn, monkeypatch):
     assert launched == [["vbcable-install"]] and "VB-CABLE" in r.get_data(as_text=True)
     monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)
     html = client.get("/").get_data(as_text=True)
-    assert "설치 필요 없음" in html and "비우면 앱 소리 (설치 없음)" in html
+    assert "설치 필요 없음" in html and "고급: 출력 장치로 나눠 녹음" in html and 'name="device_mode"' in html
     monkeypatch.setattr(lanes, "devices", lambda: ["CABLE Input (VB-Audio Virtual Cable)"])
     assert "CABLE Input 있음" in client.get("/").get_data(as_text=True)
     assert config.get(conn, "live.multi") == "0"
+
+
+# ── 소리 내는 프로그램 (오디오 세션) ───────────────────────────────
+class FakeSessions:
+    """출력 장치 → 세션 관리자 → 세션(프로세스 번호·상태·소리 크기)을 가짜 COM 객체로."""
+
+    def __init__(self, devices):          # devices: [[(pid, state, [peak, ...]), ...], ...]
+        self.keep, self.released = [], 0
+        self.enum = self.com([], [(P(c_long, c_void_p, c_int, c_uint32, POINTER(c_void_p)), self.enum_endpoints)])
+        self.devices = [self.device(sessions) for sessions in devices]
+
+    def com(self, iids, methods, others=None):
+        obj = appaudio.ComObject(iids, methods, others)
+        orig = obj._release
+
+        def counted(this):
+            self.released += 1
+            return orig(this)
+        obj._fns[2] = appaudio.ComObject.REF(counted)
+        obj._vtbl[2] = ctypes.cast(obj._fns[2], c_void_p).value
+        self.keep.append(obj)
+        return obj
+
+    def enum_endpoints(self, _this, flow, mask, out):
+        assert (flow, mask) == (0, 1)                                            # 출력(eRender) · 켜진 장치만
+        coll = self.com([], [(P(c_long, c_void_p, POINTER(c_uint32)), lambda _t, n: n.__setitem__(0, len(self.devices)) or 0),
+                             (P(c_long, c_void_p, c_uint32, POINTER(c_void_p)),
+                              lambda _t, i, o: o.__setitem__(0, self.devices[i].ptr) or 0)])
+        out[0] = coll.ptr
+        return 0
+
+    def device(self, sessions):
+        controls = []
+        for pid, state, peaks in sessions:
+            seq = list(peaks)
+            meter = self.com([appaudio.IID_IAUDIOMETERINFORMATION], [
+                (P(c_long, c_void_p, POINTER(c_float)), lambda _t, v, seq=seq: v.__setitem__(0, seq.pop(0) if seq else 0.0) or 0)])
+            nop = P(c_long, c_void_p)
+            ctl2 = self.com([appaudio.IID_IAUDIOSESSIONCONTROL2], [
+                (P(c_long, c_void_p, POINTER(c_int)), lambda _t, o, st=state: o.__setitem__(0, st) or 0),
+                *[(nop, lambda _t: 0)] * 10,
+                (P(c_long, c_void_p, POINTER(c_uint32)), lambda _t, o, p=pid: o.__setitem__(0, p) or 0)])
+            controls.append(self.com([], [], others=[(appaudio.IID_IAUDIOSESSIONCONTROL2, ctl2.ptr),
+                                                     (appaudio.IID_IAUDIOMETERINFORMATION, meter.ptr)]))
+        senum = self.com([], [(P(c_long, c_void_p, POINTER(c_int)), lambda _t, n: n.__setitem__(0, len(controls)) or 0),
+                              (P(c_long, c_void_p, c_int, POINTER(c_void_p)),
+                               lambda _t, i, o: o.__setitem__(0, controls[i].ptr) or 0)])
+        nop = P(c_long, c_void_p)
+        mgr = self.com([appaudio.IID_IAUDIOSESSIONMANAGER2], [(nop, lambda _t: 0), (nop, lambda _t: 0),
+                                                              (P(c_long, c_void_p, POINTER(c_void_p)),
+                                                               lambda _t, o: o.__setitem__(0, senum.ptr) or 0)])
+
+        def activate(_t, iid, ctx, params, out):
+            assert bytes(iid.contents) == bytes(appaudio.IID_IAUDIOSESSIONMANAGER2) and ctx == 23
+            out[0] = mgr.ptr
+            return 0
+        return self.com([], [(P(c_long, c_void_p, POINTER(GUID), c_uint32, c_void_p, POINTER(c_void_p)), activate)])
+
+    def scanner(self):
+        return appaudio.SessionScanner(create=lambda: self.enum.ptr, sleep=lambda s: None)
+
+
+def test_session_scanner_reads_pids_and_loudness():
+    fake = FakeSessions([[(4321, 1, [0.1, 0.42, 0.3]), (0, 1, [0.9]), (777, 0, [0.0])],    # 0 = 시스템 소리 (뺌)
+                         [(4321, 1, [0.05]), (999, 1, [0.25])]])                         # 같은 앱이 장치 둘 → 합침
+    out = fake.scanner().scan()
+    assert [(x["pid"], round(x["peak"], 2), x["active"]) for x in out] == [(4321, 0.42, True), (999, 0.25, True),
+                                                                           (777, 0.0, False)]
+    assert fake.released > 10                                                    # 다 쓴 COM 객체는 놓아줌
+    assert sorted(x["pid"] for x in appaudio.audio_sessions(factory=fake.scanner)) == [777, 999, 4321]   # 따로 스레드에서
+    assert appaudio.audio_sessions(factory=lambda: 1 / 0) == []                  # 못 읽으면 빈 목록
+
+
+AUDIO_PROCS = {1: (0, "explorer.exe"), 10: (1, "cbsrainbow.exe"), 11: (10, "cbsrainbow.exe"), 12: (10, "cbsrainbow.exe"),
+               20: (1, "applicationframehost.exe"), 30: (7, "kongpc.exe"), 40: (1, "gorealra.exe"), 41: (40, "gorealra.exe")}
+
+
+def test_pick_session_finds_the_process_that_really_plays():
+    sessions = [{"pid": 12, "peak": 0.4, "active": True}, {"pid": 30, "peak": 0.3, "active": True},
+                {"pid": 41, "peak": 0.5, "active": True}]
+    hint = appaudio._app_hint("rainbow")
+    assert appaudio.pick_session(AUDIO_PROCS, sessions, "cbsrainbow.exe")["pid"] == 12     # 소리는 하위 프로세스가 냄
+    assert appaudio.pick_session(AUDIO_PROCS, sessions, "", hint)["pid"] == 12               # 이름을 몰라도 앱다운 이름
+    assert appaudio.pick_session(AUDIO_PROCS, sessions, "", None, window_pid=40)["pid"] == 41  # 앱 창 프로세스 아래
+    assert appaudio.pick_session(AUDIO_PROCS, sessions, "mini.exe", appaudio._app_hint("mini")) is None
+
+
+def test_app_process_prefers_sound_session_over_window_process(conn):
+    db.set_setting(conn, "rainbow.process_name", "CBSRainbow.exe")
+    sessions = [{"pid": 12, "peak": 0.4, "active": True}]
+    assert appaudio.app_process(conn, "rainbow", AUDIO_PROCS, sessions=sessions) == (12, "cbsrainbow.exe")
+    assert appaudio.app_process(conn, "rainbow", AUDIO_PROCS, sessions=[]) == (10, "cbsrainbow.exe")   # 재생 전: 맨 위
+
+
+def test_device_test_tells_capture_failure_from_silent_app(conn, monkeypatch):
+    monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)
+    db.set_setting(conn, "live.channel", "파워FM")
+    db.set_setting(conn, "live.multi", "1")
+    db.set_setting(conn, "live.lanes", '[{"channel": "CBS 음악FM", "device": ""}, {"channel": "KBS 쿨FM", "device": ""}]')
+    db.set_setting(conn, "gorilla.process_name", "gorealra.exe")
+
+    class Rec:
+        def __init__(self, samples):
+            self.samples, self.device_name = samples, "앱"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read_chunk(self):
+            return self.samples
+
+    loud = (0.3 * np.sin(np.arange(160_000) / 5)).astype(np.float32)
+    silent = np.zeros(160_000, np.float32)
+    sessions = [{"pid": 41, "peak": 0.5, "active": True}, {"pid": 12, "peak": 0.4, "active": True}]
+    result = lanes.device_test(conn, seconds=1, recorder_factory=lambda x: Rec(loud if not x["lane"] else silent),
+                               transcriber=None, gpu_ok=True, scan=lambda: (AUDIO_PROCS, sessions))
+    items = {it["channel"]: it for it in result["items"]}
+    assert items["CBS 음악FM"]["app_process"] == "cbsrainbow.exe" and items["CBS 음악FM"]["app_peak"] == 40
+    assert items["KBS 쿨FM"]["app_peak"] is None
+    text = " ".join(result["warnings"])
+    assert "cbsrainbow.exe 은(는) 소리를 내는데(소리 40) 받지 못했습니다" in text           # 받기 문제
+    assert "'KBS 쿨FM': 소리가 없습니다" in text and "소리 길이" in text                     # 앱이 소리를 안 냄
+    assert [x["exe"] for x in result["sessions"]] == ["gorealra.exe", "cbsrainbow.exe"]

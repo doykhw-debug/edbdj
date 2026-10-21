@@ -18,7 +18,7 @@
   </form>
   <form method="post" action="{{ url_for('programs_schedules') }}" class="actions">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button {{ 'disabled' if stopped }}>MBC·KBS·CBS·EBS 편성표 가져오기 (웹 검색)</button>
+    <button {{ 'disabled' if stopped }}>MBC·KBS·CBS 편성표 가져오기 (웹 검색)</button>
     <span class="muted">듣는 채널 중 SBS 가 아닌 채널({{ other_channels | join(', ') }})의 현재 편성표를 Claude 가 웹에서 찾아
       (공식 홈페이지 우선) 넣습니다. 채널마다 1~3분, 일주일마다 저절로 다시 확인합니다.</span>
     {% if last_sched %}<br><span class="muted">마지막: {{ last_sched.at }} · {{ last_sched.message | truncate(300) }}</span>{% endif %}

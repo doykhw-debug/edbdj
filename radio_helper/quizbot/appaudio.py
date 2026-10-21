@@ -1,4 +1,4 @@
-"""앱 소리만 녹음 — 가상 오디오 장치 없이 앱(고릴라·콩·mini·레인보우·반디)마다 소리를 따로 받는다 (동시 청취, 0.54).
+"""앱 소리만 녹음 — 가상 오디오 장치 없이 앱(고릴라·콩·mini·레인보우)마다 소리를 따로 받는다 (동시 청취, 0.54).
 
 윈도우의 '프로세스 루프백'(윈도우 11 · 윈도우 10 최신 판)을 쓴다. 그 앱과 그 앱이 띄운 하위 프로세스가 재생하는
 소리만 녹음하므로, 여러 앱이 모두 같은 스피커로 나와도 섞이지 않는다. 볼륨 믹서에서 출력 장치를 나눌 필요도 없다.
@@ -14,8 +14,9 @@ import ctypes
 import queue
 import sys
 import threading
+import time
 import uuid
-from ctypes import POINTER, byref, c_int, c_int64, c_long, c_ubyte, c_uint16, c_uint32, c_void_p
+from ctypes import POINTER, byref, c_float, c_int, c_int64, c_long, c_ubyte, c_uint16, c_uint32, c_void_p
 
 from . import config
 from .audio import LoopbackRecorder
@@ -124,14 +125,16 @@ def release(obj: int | None) -> None:
 
 class ComObject:
     """파이썬 함수로 만든 COM 객체 (IUnknown + 메서드들). ptr 을 COM 에 넘긴다.
-    methods: [(함수 원형, 파이썬 함수(this, ...))]  — QueryInterface 는 iids 에 있는 것만 자기 자신을 돌려준다."""
+    methods: [(함수 원형, 파이썬 함수(this, ...))]  — QueryInterface 는 iids 에 있는 것만 자기 자신을 돌려준다
+    (others: [(인터페이스, 다른 COM 객체 ptr)] 는 그 객체를 돌려준다 — 시험용 가짜 세션)."""
 
     QI = FUNCTYPE(c_long, c_void_p, POINTER(GUID), POINTER(c_void_p))
     REF = FUNCTYPE(c_uint32, c_void_p)
 
-    def __init__(self, iids: list[GUID], methods: list[tuple]):
+    def __init__(self, iids: list[GUID], methods: list[tuple], others: list[tuple] | None = None):
         self.refs = 1
         self._iids = [bytes(IID_IUNKNOWN)] + [bytes(g) for g in iids]
+        self._others = {bytes(g): ptr for g, ptr in (others or [])}
         self._fns = [self.QI(self._query), self.REF(self._addref), self.REF(self._release)] + \
             [proto(fn) for proto, fn in methods]
         self._vtbl = (c_void_p * len(self._fns))(*[ctypes.cast(f, c_void_p).value for f in self._fns])
@@ -142,6 +145,9 @@ class ComObject:
         if bytes(riid.contents) in self._iids:
             ppv[0] = this
             self.refs += 1
+            return 0
+        if bytes(riid.contents) in self._others:
+            ppv[0] = self._others[bytes(riid.contents)]
             return 0
         ppv[0] = None
         return E_NOINTERFACE
@@ -293,6 +299,164 @@ class Wasapi:
             self.kernel32.CloseHandle(event)
 
 
+# ── 소리 내는 프로그램 (오디오 세션) ─────────────────────────────────
+# 윈도우 볼륨 믹서에 보이는 '앱마다의 소리 길'. 실제로 소리를 내는 프로세스 번호와 지금 소리 크기를 준다.
+# 앱 창의 프로세스와 소리를 내는 프로세스가 다른 앱(소리를 하위·별도 프로세스가 냄)도 여기서 바로 찾는다.
+CLSID_MMDEVICEENUMERATOR = guid("BCDE0395-E52F-467C-8E3D-C4579291692E")
+IID_IMMDEVICEENUMERATOR = guid("A95664D2-9614-4F35-A746-DE8DB63617E6")
+IID_IAUDIOSESSIONMANAGER2 = guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F")
+IID_IAUDIOSESSIONCONTROL2 = guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D")
+IID_IAUDIOMETERINFORMATION = guid("C02216F6-8C67-4B5B-9D00-D008E73E0064")
+CLSCTX_ALL = 23
+METER_SAMPLES, METER_GAP = 6, 0.1     # 순간 소리 크기를 0.1초 간격으로 여러 번 재어 가장 큰 값
+
+
+def out_ptr(obj: int, index: int, argtypes: list, *args) -> int:
+    """마지막 인자로 COM 객체를 돌려받는 메서드."""
+    p = c_void_p()
+    com_call(obj, index, [*argtypes, POINTER(c_void_p)], *args, byref(p))
+    return p.value
+
+
+class SessionScanner:
+    """출력 장치마다 오디오 세션 → [{pid, peak(0~1), active}] (시험에서는 create 를 가짜로)."""
+
+    def __init__(self, create=None, ole32=None, sleep=time.sleep):
+        self.ole32 = ole32
+        if create is None:
+            self.ole32 = ole32 = ole32 if ole32 is not None else ctypes.WinDLL("ole32")
+            ole32.CoCreateInstance.argtypes = [POINTER(GUID), c_void_p, c_uint32, POINTER(GUID), POINTER(c_void_p)]
+            ole32.CoCreateInstance.restype = c_long
+
+            def create():
+                p = c_void_p()
+                hr = ole32.CoCreateInstance(byref(CLSID_MMDEVICEENUMERATOR), None, CLSCTX_ALL,
+                                            byref(IID_IMMDEVICEENUMERATOR), byref(p))
+                if hr < 0:
+                    raise ComError(hr, "오디오 장치 목록")
+                return p.value
+        self.create, self.sleep = create, sleep
+
+    def co_init(self) -> None:
+        if self.ole32 is not None:
+            self.ole32.CoInitializeEx(None, 0)
+
+    def co_uninit(self) -> None:
+        if self.ole32 is not None:
+            self.ole32.CoUninitialize()
+
+    def scan(self) -> list[dict]:
+        held, found = [], []           # held: 끝나면 Release 할 객체
+        try:
+            enum = self.create()
+            held.append(enum)
+            coll = out_ptr(enum, 3, [c_int, c_uint32], 0, 1)        # EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
+            held.append(coll)
+            n = c_uint32()
+            com_call(coll, 3, [POINTER(c_uint32)], byref(n))        # GetCount
+            for i in range(n.value):
+                try:
+                    dev = out_ptr(coll, 4, [c_uint32], i)            # Item
+                    held.append(dev)
+                    mgr = out_ptr(dev, 3, [POINTER(GUID), c_uint32, c_void_p], byref(IID_IAUDIOSESSIONMANAGER2),
+                                  CLSCTX_ALL, None)                  # Activate
+                    held.append(mgr)
+                    senum = out_ptr(mgr, 5, [])                     # GetSessionEnumerator
+                    held.append(senum)
+                    count = c_int()
+                    com_call(senum, 3, [POINTER(c_int)], byref(count))
+                except ComError:
+                    continue
+                for j in range(count.value):
+                    try:
+                        ctl = out_ptr(senum, 4, [c_int], j)          # GetSession
+                        held.append(ctl)
+                        ctl2 = out_ptr(ctl, 0, [POINTER(GUID)], byref(IID_IAUDIOSESSIONCONTROL2))
+                        held.append(ctl2)
+                        pid, state = c_uint32(), c_int()
+                        com_call(ctl2, 14, [POINTER(c_uint32)], byref(pid))     # GetProcessId
+                        com_call(ctl2, 3, [POINTER(c_int)], byref(state))       # GetState (1 = 재생 중)
+                        meter = out_ptr(ctl, 0, [POINTER(GUID)], byref(IID_IAUDIOMETERINFORMATION))
+                        held.append(meter)
+                    except ComError:
+                        continue
+                    if pid.value:                                    # 0 = 시스템 소리
+                        found.append({"pid": pid.value, "active": state.value == 1, "peak": 0.0, "meter": meter})
+            for k in range(METER_SAMPLES):
+                for f in found:
+                    v = c_float()
+                    try:
+                        com_call(f["meter"], 3, [POINTER(c_float)], byref(v))     # GetPeakValue
+                        f["peak"] = max(f["peak"], float(v.value))
+                    except ComError:
+                        pass
+                if k < METER_SAMPLES - 1:
+                    self.sleep(METER_GAP)
+        finally:
+            for obj in reversed(held):
+                release(obj)
+        merged: dict[int, dict] = {}                                 # 같은 프로세스가 장치 여럿에 소리 길을 열 수 있음
+        for f in found:
+            m = merged.setdefault(f["pid"], {"pid": f["pid"], "active": False, "peak": 0.0})
+            m["active"] = m["active"] or f["active"]
+            m["peak"] = max(m["peak"], f["peak"])
+        return sorted(merged.values(), key=lambda x: -x["peak"])
+
+
+def audio_sessions(factory=SessionScanner, timeout: float = 10) -> list[dict]:
+    """지금 소리 길을 연 프로그램들 (COM 은 따로 MTA 스레드에서). 못 읽으면 빈 목록."""
+    box: dict = {}
+
+    def run():
+        try:
+            scanner = factory()
+            scanner.co_init()
+            try:
+                box["out"] = scanner.scan()
+            finally:
+                scanner.co_uninit()
+        except Exception as e:
+            box["error"] = e
+
+    t = threading.Thread(target=run, name="audio-sessions", daemon=True)
+    t.start()
+    t.join(timeout)
+    return box.get("out") or []
+
+
+def chain(procs: dict[int, tuple[int, str]], pid: int, limit: int = 12) -> list[tuple[int, str]]:
+    """그 프로세스와 부모들 [(번호, 이름)] (번호 재사용 고리에 안 걸리게)."""
+    out, seen = [], set()
+    while pid and pid in procs and pid not in seen and len(out) < limit:
+        seen.add(pid)
+        parent, exe = procs[pid]
+        out.append((pid, exe))
+        pid = parent
+    return out
+
+
+def pick_session(procs: dict, sessions: list[dict], name: str = "", hint=None, window_pid: int | None = None) -> dict | None:
+    """그 앱의 소리 길: 소리 내는 프로세스(또는 부모)가 앱 프로그램 이름이거나, 앱 창의 프로세스 아래이거나,
+    이름이 앱답다(hint). 여럿이면 점수 → 지금 소리 큰 것."""
+    best = None
+    for s in sessions:
+        c = chain(procs, s["pid"])
+        exes, pids = [e for _, e in c], [p for p, _ in c]
+        score = (10 if name and name in exes else 0) + (8 if window_pid and window_pid in pids else 0) + \
+            (5 if hint is not None and any(hint.search(e) for e in exes) else 0)
+        if score and (best is None or (score, s["peak"]) > (best[0], best[1]["peak"])):
+            best = (score, s)
+    return best[1] if best else None
+
+
+def _app_hint(app: str):
+    try:
+        from .finder import APP_HINTS
+    except Exception:
+        return None
+    return APP_HINTS.get(app, {}).get("process")
+
+
 # ── 앱 프로세스 찾기 ─────────────────────────────────────────────────
 def processes() -> dict[int, tuple[int, str]]:
     """{프로세스 번호: (부모 번호, 실행 파일 이름 소문자)} (윈도우 전용)."""
@@ -357,16 +521,22 @@ def _window_pid(conn, app: str) -> int | None:
         return None
 
 
-def app_process(conn, app: str | None, procs: dict | None = None, window_pid=_window_pid) -> tuple[int, str]:
-    """채널 앱의 프로세스 → (번호, 실행 파일 이름). 앱 설정의 프로그램 이름, 없으면 창으로 찾는다."""
+def app_process(conn, app: str | None, procs: dict | None = None, window_pid=_window_pid,
+                sessions: list[dict] | None = None) -> tuple[int, str]:
+    """채널 앱의 소리를 받을 프로세스 → (번호, 실행 파일 이름).
+    1) 그 앱이 연 소리 길(오디오 세션)의 프로세스 — 소리를 실제로 내는 곳 (0.56)
+    2) 없으면(아직 재생 전) 앱 설정의 프로그램 이름·앱 창으로 찾은 맨 위 프로세스 (하위 프로세스까지 함께 녹음)."""
     if app not in config.CHAT_APPS:
-        raise RuntimeError("이 채널의 앱(고릴라·콩·mini·레인보우·반디)을 몰라 앱 소리를 받을 수 없습니다 — 채널 설정에서 앱을 정하세요")
+        raise RuntimeError("이 채널의 앱(고릴라·콩·mini·레인보우)을 몰라 앱 소리를 받을 수 없습니다 — 채널 설정에서 앱을 정하세요")
     label = config.app_label(app)
     procs = processes() if procs is None else procs
     name = (config.get(conn, f"{app}.process_name") or "").strip().lower()
+    wpid = None if name else window_pid(conn, app)
+    s = pick_session(procs, audio_sessions() if sessions is None else sessions, name, _app_hint(app), wpid)
+    if s is not None:
+        return s["pid"], procs[s["pid"]][1]
     if not name:
-        pid = window_pid(conn, app)
-        name = procs.get(pid, (0, ""))[1] if pid else ""
+        name = procs.get(wpid, (0, ""))[1] if wpid else ""
     if not name:
         raise RuntimeError(f"{label} 앱을 찾지 못했습니다 — {label}을(를) 켜고 '앱 채팅·인식 설정 → 모든 앱 찾기'를 한 번 하세요")
     found = roots(procs, name)

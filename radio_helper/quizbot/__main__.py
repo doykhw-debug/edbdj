@@ -126,6 +126,8 @@ def cmd_device_test(conn) -> int:
     for it in result["items"]:
         say(f"{it['label']} {it['channel']} [{it.get('device_name') or lanes.source_label(conn, it)}] 소리 {it['level']}"
             f" → '{it.get('text') or it.get('error') or ''}'")
+    if result.get("sessions"):
+        say("지금 소리 내는 프로그램: " + " · ".join(f"{x['exe']}(#{x['pid']}) {x['peak']}" for x in result["sessions"]))
     for w in result["warnings"]:
         say(f"[확인] {w}")
     say(f"받아쓰기 장치: {'그래픽카드' if device == 'cuda' else 'CPU'} ({note})")
@@ -502,8 +504,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("target", nargs="?", choices=["window", "input", "send", "chat"])
     ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
-    ap.add_argument("--all", action="store_true", help="find: 모든 앱(고릴라·콩·mini·레인보우·반디)")
-    ap.add_argument("--lane", choices=["2", "3", "4", "5"], help="lane: 동시 청취의 보조 채널 칸")
+    ap.add_argument("--all", action="store_true", help="find: 모든 앱(고릴라·콩·mini·레인보우)")
+    ap.add_argument("--lane", choices=["2", "3", "4"], help="lane: 동시 청취의 보조 채널 칸")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
     ignore_ctrl_c()
@@ -518,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run(conn)
         if args.command == "lane":
             if not args.lane:
-                ap.error("lane 에는 --lane 2~5 가 필요합니다.")
+                ap.error("lane 에는 --lane 2~4 가 필요합니다.")
             return cmd_lane(conn, args.lane)
         if args.command == "device-test":
             return cmd_device_test(conn)

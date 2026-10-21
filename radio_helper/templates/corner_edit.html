@@ -22,7 +22,7 @@
 
 <div class="panel" id="auto">
   <h2>매일 자동 등록 <span class="muted">{{ station or '방송국 모름' }} · 매번 홈페이지 공지를 읽고 판단</span></h2>
-  {% if not station %}<p class="flash warn">SBS·MBC·KBS·CBS·EBS 의 https 코너 주소가 아니어서 자동 등록을 할 수 없습니다.</p>{% endif %}
+  {% if not station %}<p class="flash warn">SBS·MBC·KBS·CBS 의 https 코너 주소가 아니어서 자동 등록을 할 수 없습니다.</p>{% endif %}
   <p class="muted">정한 시각에 하루 한 번: 코너 화면을 열어 <b>공지를 다시 읽고</b> (Claude) → 지금 받는지·무엇을(사연/짧은 한마디/신청곡)·
     주제·글자 수·AI 글 제한·마감·방송 요일을 확인 → '실제로 있었던 일'로 확인한 경험 중 이 방송국({{ station }})에 아직 안 보낸 것에서
     주제에 맞는 것 하나 → 입력 → <b>시험</b>이면 등록은 누르지 않고 증거 사진만, 아니면 등록까지 누르고 게시판에서 확인합니다.

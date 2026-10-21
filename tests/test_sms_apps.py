@@ -90,7 +90,7 @@ def test_adb_send_refuses_wrong_number_and_unauthorized():
 def test_channel_apps(conn):
     assert config.chat_app(conn, "파워FM") == "gorilla" and config.chat_app(conn, "SBS 라디오") == "gorilla"
     assert config.chat_app(conn, "MBC FM4U") == "mini" and config.chat_app(conn, "KBS 쿨FM") == "kong"
-    assert config.chat_app(conn, "EBS FM") == "bandi" and config.chat_app(conn, "CBS 음악FM") == "rainbow"
+    assert config.chat_app(conn, "EBS FM") is None and config.chat_app(conn, "CBS 음악FM") == "rainbow"
     assert config.chat_app(conn, "TBN 교통방송") is None
     db.set_setting(conn, "channels", config.DEFAULTS["channels"] + "\nTBN 교통방송==콩")
     assert config.chat_app(conn, "TBN 교통방송") == "kong"

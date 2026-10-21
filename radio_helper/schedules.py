@@ -1,4 +1,4 @@
-"""전 채널 편성표 — SBS 는 공식 페이지(programs.py), MBC·KBS·CBS·EBS 는 Claude 웹 검색으로 찾아 '프로그램' 목록에 넣는다.
+"""전 채널 편성표 — SBS 는 공식 페이지(programs.py), MBC·KBS·CBS 는 Claude 웹 검색으로 찾아 '프로그램' 목록에 넣는다.
 
     python -m radio_helper.schedules refresh [--channel "MBC FM4U"]
 
@@ -32,7 +32,6 @@ DESCRIBE = {
     "KBS 클래식FM": "KBS 클래식FM (KBS 1FM, 수도권 93.1MHz)",
     "CBS 음악FM": "CBS 음악FM (CBS 기독교방송 음악FM, 수도권 93.9MHz)",
     "CBS 표준FM": "CBS 표준FM (CBS 기독교방송 표준FM, 수도권 98.1MHz)",
-    "EBS FM": "EBS FM (EBS 라디오, 수도권 104.5MHz)",
 }
 HHMM = re.compile(r"^([01]?\d|2[0-4]):([0-5]\d)$")
 LOG_PREFIX = "방송사 편성표"           # 웹 검색 편성표 기록 (0.54 까지는 'MBC·KBS 편성표')
@@ -40,7 +39,7 @@ LOG_LIKE = f"(message LIKE '{LOG_PREFIX}%' OR message LIKE 'MBC·KBS 편성표%'
 
 
 def channels_to_fetch(conn) -> list[str]:
-    """듣는 채널 중 SBS 가 아닌 것 (MBC·KBS·CBS·EBS·기타)."""
+    """듣는 채널 중 SBS 가 아닌 것 (MBC·KBS·CBS·기타)."""
     from .quizbot import config
 
     return [c for c in config.channels(conn) if c not in SBS_CHANNELS]
@@ -204,7 +203,7 @@ def tick(conn, now: datetime | None = None, launch=None, launch_sbs=None) -> lis
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="MBC·KBS·CBS·EBS 편성표 가져오기 (웹 검색)")
+    ap = argparse.ArgumentParser(description="MBC·KBS·CBS 편성표 가져오기 (웹 검색)")
     ap.add_argument("action", choices=["refresh"])
     ap.add_argument("--channel", action="append", help="이 채널만 (여러 번 가능)")
     args = ap.parse_args(argv)

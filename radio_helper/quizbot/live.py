@@ -296,7 +296,7 @@ def listening_report(conn: sqlite3.Connection, now: datetime | None = None, hour
             top = sorted(r["held"].items(), key=lambda kv: -kv[1])[:2]
             notes.append("보류: " + " / ".join(f"{k} ({v}건)" for k, v in top))
         if r["programs"] and all(unscheduled(p, r["channel"]) for p in r["programs"]):
-            notes.append("편성표가 없어 프로그램 이름을 모름 (프로그램 화면의 'MBC·KBS·CBS·EBS 편성표 가져오기')")
+            notes.append("편성표가 없어 프로그램 이름을 모름 (프로그램 화면의 'MBC·KBS·CBS 편성표 가져오기')")
         out.append({**r, "programs": sorted(r["programs"]), "notes": notes,
                     "held": sorted(r["held"].items(), key=lambda kv: -kv[1])})
     if events["error"]:

@@ -732,8 +732,7 @@ def _control_names(w, control_type: str, limit: int = 300) -> list[str]:
 
 
 CHAT_SHORTCUT_NAMES = {"gorilla": ("고릴라", "gorealra", "gorilla"), "mini": ("mbc mini", "미니"),
-                       "kong": ("kbs 콩", "kong"), "rainbow": ("cbs 레인보우", "레인보우", "rainbow"),
-                       "bandi": ("ebs 반디", "반디", "bandi")}
+                       "kong": ("kbs 콩", "kong"), "rainbow": ("cbs 레인보우", "레인보우", "rainbow")}
 
 
 class Gorilla:

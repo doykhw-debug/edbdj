@@ -1,13 +1,13 @@
-"""게시판 주소 → 방송국 (SBS·MBC·KBS·CBS·EBS). 자동 입력은 이 방송국들의 https 주소에서만 한다 (안전장치)."""
+"""게시판 주소 → 방송국 (SBS·MBC·KBS·CBS). 자동 입력은 이 방송국들의 https 주소에서만 한다 (안전장치)."""
 
 from __future__ import annotations
 
 from urllib.parse import urlparse
 
-STATIONS = ("SBS", "MBC", "KBS", "CBS", "EBS")
+STATIONS = ("SBS", "MBC", "KBS", "CBS")
 EXACT_HOSTS = {"programs.sbs.co.kr": "SBS", "m.programs.sbs.co.kr": "SBS"}
 DOMAIN_SUFFIXES = {"imbc.com": "MBC", "kbs.co.kr": "KBS",   # 이 도메인과 그 아래 주소 (www.imbc.com, program.kbs.co.kr …)
-                   "cbs.co.kr": "CBS", "ebs.co.kr": "EBS"}    # 0.55: CBS(www.cbs.co.kr/board/…) · EBS(www.ebs.co.kr/radio/…)
+                   "cbs.co.kr": "CBS"}                        # 0.55: CBS (www.cbs.co.kr/board/…)
 
 
 def station_of(url: str | None) -> str | None:

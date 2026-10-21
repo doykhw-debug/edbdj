@@ -13,7 +13,7 @@ import sqlite3
 from . import db
 
 KIND_LABELS = {"new": "새 문제", "rerun": "재방송", "answer_reveal": "정답 발표"}
-# 퀴즈 답·공감로그 사연은 앱 채팅(고릴라·mini·콩·레인보우·반디)이나 문자로 보낸다. 게시판 등록은 제출 이력(gates.STATUS_LABELS)이 따로 맡고,
+# 퀴즈 답·공감로그 사연은 앱 채팅(고릴라·mini·콩·레인보우)이나 문자로 보낸다. 게시판 등록은 제출 이력(gates.STATUS_LABELS)이 따로 맡고,
 # 게시판 자동 등록으로 보낸 사연(via 'board')은 그 결과를 따라 아래 이름으로 보인다.
 ENTRY_LABELS = {
     "pending": "대기",

@@ -53,7 +53,7 @@
   <form method="post" action="{{ url_for('listen_start') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="row">
-      <div><label>듣는 채널 <span class="hint">PC에서 틀어 둔 방송 (고릴라·mini·콩·레인보우·반디·웹 어디서 듣든 PC 소리를 받아씀)</span></label>
+      <div><label>듣는 채널 <span class="hint">PC에서 틀어 둔 방송 (고릴라·mini·콩·레인보우·웹 어디서 듣든 PC 소리를 받아씀)</span></label>
         <select name="channel" id="channel-select">{% for ch in channels %}<option value="{{ ch.name }}" data-app="{{ ch.app }}" data-app-label="{{ ch.app_label }}" data-number="{{ ch.number }}" {{ 'selected' if ch.name == vm.channel }}>{{ ch.name }}{{ ' · ' ~ ch.app_label if ch.app_label }}{{ ' · ' ~ ch.number if ch.number }}</option>{% endfor %}</select></div>
       <div><label>보내는 방법 <span class="hint">퀴즈 정답·사연을 어디로 보낼지</span></label>
         <label class="inline"><input type="radio" name="route" value="app" id="route-app" {{ 'checked' if route == 'app' }}> <span id="route-app-label">앱 채팅 (무료)</span></label>
@@ -106,26 +106,27 @@
 </div>
 
 <div class="panel" id="multi">
-  <h2>동시 청취 <span class="muted">여러 채널을 한 PC 에서 함께 — 방송국마다 하나 (SBS 고릴라 · KBS 콩 · MBC mini · CBS 레인보우 · EBS 반디)</span>
+  <h2>동시 청취 <span class="muted">여러 채널을 한 PC 에서 함께 — 방송국마다 하나 (SBS 고릴라 · KBS 콩 · MBC mini · CBS 레인보우)</span>
     {% if multi.on %}<span class="badge ok">켜짐</span>{% else %}<span class="badge">꺼짐</span>{% endif %}</h2>
   {% for p in multi.problems %}<div class="flash error">{{ p }}</div>{% endfor %}
   {% if vm.lanes %}
   <div class="table-wrap"><table>
     <tr><th>칸</th><th>채널</th><th>앱</th><th>녹음 장치</th><th>상태</th></tr>
     {% for l in vm.lanes %}
-    <tr><td>{{ l.label }}</td><td>{{ l.channel }}</td><td>{{ l.app }}</td><td class="muted">{{ l.source_label }}</td>
-      <td>{% if l.alive %}<span class="badge ok">듣는 중</span> 소리 {{ l.level }}{% elif vm.active %}<span class="badge warn">신호 없음</span>{% else %}<span class="badge">멈춤</span>{% endif %}
+    <tr><td>{{ l.label }}</td><td>{{ l.channel }}</td><td>{{ l.app }}</td>
+      <td class="muted">{{ l.source_label }}{% if l.alive and l.recording and l.recording != l.source_label %}<br><span class="hint">{{ l.recording }}</span>{% endif %}</td>
+      <td>{% if l.alive and l.level == 0 %}<span class="badge warn">소리 0</span> <span class="hint">지금 아무 소리도 못 받음</span>{% elif l.alive %}<span class="badge ok">듣는 중</span> 소리 {{ l.level }}{% elif vm.active %}<span class="badge warn">신호 없음</span>{% else %}<span class="badge">멈춤</span>{% endif %}
         <span class="muted">{{ l.state }}</span></td></tr>
     {% endfor %}
   </table></div>
   {% endif %}
   <details {{ 'open' if not multi.on }}><summary class="muted">처음 준비 (한 번)</summary>
     {% if multi.app_audio %}
-    <p class="muted"><span class="badge ok">설치 필요 없음</span> 이 PC 는 <b>앱마다 소리를 직접</b> 받을 수 있습니다 —
-      가상 장치 설치·볼륨 믹서 설정 없이 녹음 장치 칸을 <b>비워 두면</b> 됩니다. 여러 앱이 같은 스피커로 나와도 섞이지 않습니다.</p>
+    <p class="muted"><span class="badge ok">설치 필요 없음</span> 이 PC 는 <b>앱마다 소리를 직접</b> 받습니다 —
+      모든 앱이 그대로 스피커로 나와도 섞이지 않습니다. 가상 장치·볼륨 믹서·녹음 장치 고르기는 필요 없습니다.</p>
     <ol class="muted">
-      <li>들을 앱(고릴라·콩·mini·레인보우·반디)을 켜고 각각 채널을 재생합니다 (소리가 스피커에서 함께 들립니다).</li>
-      <li>아래에서 보조 채널을 고르고(녹음 장치 칸은 비움) 저장 → <b>장치 점검 (10초)</b>로 채널마다 그 방송이 받아써지는지 확인합니다.</li>
+      <li>들을 앱(고릴라·콩·mini·레인보우)을 켜고 각각 채널을 재생합니다 (소리가 스피커에서 함께 들립니다).</li>
+      <li>아래에서 보조 채널만 고르고 저장 → <b>장치 점검 (10초)</b>로 채널마다 그 방송이 받아써지는지 확인합니다.</li>
       <li>각 앱은 '앱 채팅·인식 설정 → 모든 앱 찾기'로 채팅 자리를 맞춰 둡니다.</li>
     </ol>
     {% else %}
@@ -134,7 +135,7 @@
       <li>아래 <b>가상 장치 자동 설치</b>를 누릅니다 (무료 VB-CABLE, 장치 1개 — 채널 2개까지). 세 번째 채널은 모니터(HDMI) 소리처럼
         이미 있는 다른 출력 장치가 있으면 씁니다.</li>
       <li>윈도우 <b>설정 → 시스템 → 소리 → 볼륨 믹서</b>에서 앱마다 <b>출력 장치</b>를 고릅니다. 예: 고릴라 → 스피커, 콩 → CABLE Input.</li>
-      <li>아래 녹음 장치 칸에 같은 장치를 적고 저장 → <b>장치 점검 (10초)</b>.</li>
+      <li>아래 칸마다 같은 녹음 장치를 적고 저장 → <b>장치 점검 (10초)</b>.</li>
       <li>각 앱은 '앱 채팅·인식 설정 → 모든 앱 찾기'로 채팅 자리를 맞춰 둡니다.</li>
     </ol>
     {% endif %}
@@ -143,17 +144,30 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label class="inline"><input type="checkbox" name="multi" value="1" {{ 'checked' if multi.on }}> 동시 청취 켜기</label>
     <datalist id="audio-devices">{% for d in multi.devices %}<option value="{{ d }}">{% endfor %}</datalist>
+    {% set show_devices = multi.device_mode or not multi.app_audio %}
     <div class="row3" style="margin-top:8px">
-      <div><label>주 채널 <span class="hint">청취 시작에서 고른 채널 ({{ vm.channel }})</span></label>
-        <input type="text" name="device" value="{{ multi.device }}" list="audio-devices" placeholder="{{ '비우면 앱 소리 (설치 없음)' if multi.app_audio else '기본 스피커 (비우면)' }}"></div>
+      <div><label>주 채널</label>
+        <p class="muted" style="margin:6px 0">청취 시작에서 고른 채널 — <b>{{ vm.channel }}</b></p></div>
       {% for l in multi.lanes %}
-      <div><label>보조 {{ l.lane }} 채널 · 녹음 장치</label>
+      <div><label>보조 {{ l.lane }} 채널</label>
         <select name="lane{{ l.lane }}_channel"><option value="">(사용 안 함)</option>
-          {% for ch in channels %}<option value="{{ ch.name }}" {{ 'selected' if ch.name == l.channel }}>{{ ch.name }}{{ ' · ' ~ ch.app_label if ch.app_label }}</option>{% endfor %}</select>
-        <input type="text" name="lane{{ l.lane }}_device" value="{{ l.device }}" list="audio-devices" placeholder="{{ '비우면 앱 소리 (설치 없음)' if multi.app_audio else '예: CABLE Input (VB-Audio Virtual Cable)' }}" style="margin-top:6px"></div>
+          {% for ch in channels %}<option value="{{ ch.name }}" {{ 'selected' if ch.name == l.channel }}>{{ ch.name }}{{ ' · ' ~ ch.app_label if ch.app_label }}</option>{% endfor %}</select></div>
       {% endfor %}
     </div>
-    <p class="hint">{% if multi.app_audio %}녹음 장치 칸은 비워 두세요 (그 채널 앱 소리만 받음). 장치 이름을 적으면 그 출력 장치를 녹음합니다{% else %}녹음 장치 칸을 누르면 이 PC 의 출력 장치 목록이 나옵니다{% endif %}{{ ' (' ~ multi.devices|length ~ '개)' if multi.devices else '' }}. 한 장치에 한 앱 소리만 들어가야 합니다.</p>
+    <details {{ 'open' if show_devices }} style="margin-top:8px"><summary class="muted">{% if multi.app_audio %}고급: 출력 장치로 나눠 녹음 (가상 장치·볼륨 믹서로 앱마다 장치를 나눴을 때만){% else %}녹음 장치 (앱마다 다른 출력 장치){% endif %}</summary>
+      {% if multi.app_audio %}<label class="inline" style="margin-top:6px"><input type="checkbox" name="device_mode" value="1" {{ 'checked' if multi.device_mode }}>
+        칸마다 아래 출력 장치를 녹음 <span class="hint">끄면(기본) 장치 칸은 쓰지 않고 앱마다 소리를 직접 받습니다</span></label>{% endif %}
+      <div class="row3" style="margin-top:8px">
+        <div><label>주 채널 녹음 장치</label>
+          <input type="text" name="device" value="{{ multi.device }}" list="audio-devices" placeholder="기본 스피커 (비우면)"></div>
+        {% for l in multi.lanes %}
+        <div><label>보조 {{ l.lane }} 녹음 장치</label>
+          <input type="text" name="lane{{ l.lane }}_device" value="{{ l.device }}" list="audio-devices" placeholder="예: CABLE Input (VB-Audio Virtual Cable)"></div>
+        {% endfor %}
+      </div>
+      <p class="hint">칸을 누르면 이 PC 의 출력 장치 목록이 나옵니다{{ ' (' ~ multi.devices|length ~ '개)' if multi.devices else '' }}.
+        한 장치에 한 앱 소리만 들어가야 합니다 — 모든 앱이 스피커로 나오는데 다른 장치를 고르면 소리 0, 스피커를 고르면 여러 방송이 섞입니다.</p>
+    </details>
     <div class="actions">
       <button>저장</button>
       <button class="secondary" formaction="{{ url_for('listen_lanes_test') }}">장치 점검 (10초)</button>
@@ -172,8 +186,11 @@
     <ul class="list">{% for it in multi.test['items'] %}
       <li>{% if it.error or it.level < 8 %}<span class="badge bad">확인 필요</span>{% else %}<span class="badge ok">소리 {{ it.level }}</span>{% endif %}
         {{ it.label }} {{ it.channel }} <span class="muted">[{{ it.device_name or it.device or ('앱 소리' if it.source == 'app' else '기본 스피커') }}]</span>
-        {% if it.text %} → '{{ it.text }}'{% endif %}{% if it.error %} <span class="muted">{{ it.error }}</span>{% endif %}</li>
+        {% if it.text %} → '{{ it.text }}'{% endif %}{% if it.error %} <span class="muted">{{ it.error }}</span>{% endif %}
+        {% if it.app_process %}<span class="hint">(볼륨 믹서: {{ it.app_process }} 소리 {{ it.app_peak }})</span>{% elif it.source == 'app' and it.app_peak is none and multi.test.sessions %}<span class="hint">(볼륨 믹서에 이 앱 소리 없음)</span>{% endif %}</li>
     {% endfor %}</ul>
+    {% if multi.test.sessions %}<p class="muted" style="margin:6px 0">지금 소리 내는 프로그램 (볼륨 믹서):
+      {% for x in multi.test.sessions %}{{ x.exe }} <b>{{ x.peak }}</b>{{ ' · ' if not loop.last }}{% endfor %}</p>{% endif %}
     {% for w in multi.test.warnings %}<div class="flash warn">{{ w }}</div>{% endfor %}
     {% if not multi.test.warnings %}<div class="flash">채널마다 소리가 따로 들어옵니다. 받아쓴 말이 그 채널 방송인지 확인하세요.</div>{% endif %}
     {% endif %}
@@ -234,11 +251,11 @@
         함께 찍어(설정 → 앱 채팅 ④) 녹취와 교차 분석해 주제와 맥락을 파악합니다.</li>
       <li>퀴즈는 정답만 보내지 않고, 웃긴 포인트가 있는 '기발한 오답'을 섞습니다 (진행자가 재밌는 오답을 환영하거나 정답이 불확실할 때, 그 밖에는 30% 정도).</li>
       <li>사연은 기본으로 채팅창에 보내고, 진행자가 '게시판에만' 받는다고 하면 게시판용 원고를 원고 검토함에 만듭니다 (게시판 등록은 직접).</li>
-      <li>퀴즈: 앞뒤 몇 분 자막을 Claude로 분석해 정답을 찾고, 확신도가 기준 이상이면 고른 방법(앱 채팅: 고릴라·mini·콩·레인보우·반디 / 휴대폰 문자)으로 보냅니다. 한 번 보낸 문제는 다시 보내지 않습니다.</li>
+      <li>퀴즈: 앞뒤 몇 분 자막을 Claude로 분석해 정답을 찾고, 확신도가 기준 이상이면 고른 방법(앱 채팅: 고릴라·mini·콩·레인보우 / 휴대폰 문자)으로 보냅니다. 한 번 보낸 문제는 다시 보내지 않습니다.</li>
       <li>사연: 내 '실제 경험' 중 주제에 맞는 것으로 짧은 글을 만들고, 검사 경고가 없으면 보냅니다. 경고가 있으면 '사연'에서 확인을 기다립니다. 없는 일을 지어내지 않습니다.</li>
       <li>선물: 선물 이름·조건·응모 방법을 채널·프로그램별로 기록만 합니다.</li>
       <li>앱 창이나 휴대폰을 못 찾으면 듣기·자막은 계속하고, 보낼 글은 찾을 때까지 보류합니다 (20분 지나면 확인 대기로 남김).</li>
-      <li>MBC·KBS·CBS·EBS는 앱(mini·콩·레인보우·반디) 채팅이나 문자로 보냅니다. 앱마다 설정 → 앱 채팅에서 입력칸·전송 버튼을 한 번 지정하세요.</li>
+      <li>MBC·KBS·CBS는 앱(mini·콩·레인보우) 채팅이나 문자로 보냅니다. 앱마다 설정 → 앱 채팅에서 입력칸·전송 버튼을 한 번 지정하세요.</li>
     </ol>
   </details>
 </div>

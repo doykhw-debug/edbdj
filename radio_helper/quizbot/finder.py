@@ -1,4 +1,4 @@
-"""원버튼 찾기 — 채팅 앱(SBS 고릴라·KBS 콩·MBC mini·CBS 레인보우·EBS 반디)이 켜져 있는지, 입력칸·전송 버튼·채팅 목록이 어디인지 한 번에 찾아 저장한다.
+"""원버튼 찾기 — 채팅 앱(SBS 고릴라·KBS 콩·MBC mini·CBS 레인보우)이 켜져 있는지, 입력칸·전송 버튼·채팅 목록이 어디인지 한 번에 찾아 저장한다.
 
     python -m radio_helper.quizbot find --app gorilla      (관리 화면: 앱 채팅·인식 설정 → '원버튼 찾기')
 
@@ -8,7 +8,7 @@
 3. 자리 찾기 — 앞의 방법으로 찾은 것은 그대로 쓰고, 못 찾은 것만 다음 방법으로:
    a. 화면 요소(UIA): 입력칸(Edit)·'전송/등록/보내기' 버튼이 보이면 그 자리 (가장 정확)
    b. Claude: 찍은 사진을 보고 입력칸·전송 버튼·채팅 목록 네모를 알려 준다 (Claude 연결이 있을 때)
-   c. 알려진 배치: 고릴라·콩·mini 화면(관리자가 보낸 사진)에서 잰 위치 (창 크기 대비 비율). 레인보우·반디는 a·b 로만
+   c. 알려진 배치: 고릴라·콩·mini·레인보우 화면(관리자가 보낸 사진)에서 잰 위치 (창 크기 대비 비율)
 4. 채팅이 닫혀 있으면(고릴라 공감로그·콩 채팅) 여는 말풍선 버튼을 한 번 누르고 다시 찾는다.
 5. 로그인 안내가 보이면 알려 준다 (로그인은 사용자가 직접 한다).
 6. 모니터 기준 위치로 저장하고(보낼 때 그 자리를 누름), 네모를 그린 확인 사진(<app>_found.png)을 남긴다.
@@ -40,13 +40,13 @@ APP_HINTS = {
     "mini": {"process": re.compile(r"mbc|\bmini", re.I), "title": re.compile(r"MBC|\bmini\b|미니", re.I)},
     "rainbow": {"process": re.compile(r"rainbow|레인보우|^cbs", re.I),
                 "title": re.compile(r"레인보우|rainbow|\bCBS\b", re.I)},
-    "bandi": {"process": re.compile(r"bandi|반디|^ebs", re.I), "title": re.compile(r"반디|bandi|\bEBS\b", re.I)},
 }
 
 # 알려진 배치 (창 크기 대비 비율 왼·위·오른·아래). 관리자가 보낸 화면에서 잼:
 #   고릴라: 공감로그가 플레이어 오른쪽에 따로 뜬 창 (634×949). 닫혀 있으면 플레이어 오른쪽 아래 말풍선으로 연다.
 #   콩: 한 창의 왼쪽 플레이어·오른쪽 채팅 (1271×842). 닫혀 있으면(세로로 긴 창) 오른쪽 위 초록 말풍선.
 #   mini: 한 창의 왼쪽 플레이어·오른쪽 mini 메시지 (766×555).
+#   레인보우: 세로로 긴 한 창 (409×754). 가운데 채팅 목록, 그 아래 '일반 ∨ | 채팅을 입력하세요 ☺' 칸과 오른쪽 파란 전송 단추.
 TEMPLATES = {
     "gorilla": {"input": (0.14, 0.915, 0.79, 0.99), "send": (0.82, 0.915, 0.99, 0.99),
                 "chat": (0.02, 0.20, 0.98, 0.90), "toggle": (0.895, 0.94), "combined_split": 0.533},
@@ -54,6 +54,8 @@ TEMPLATES = {
              "chat": (0.51, 0.10, 0.99, 0.81), "toggle": (0.929, 0.154)},
     "mini": {"input": (0.53, 0.915, 0.91, 0.99), "send": (0.935, 0.92, 0.995, 0.99),
              "chat": (0.52, 0.19, 0.99, 0.89), "toggle": None},
+    "rainbow": {"input": (0.161, 0.652, 0.797, 0.711), "send": (0.888, 0.649, 0.997, 0.712),
+                "chat": (0.012, 0.172, 0.988, 0.644), "toggle": None},
 }
 OPEN_RATIO = 1.2          # 콩·mini: 가로/세로가 이보다 크면 채팅이 열린 넓은 창
 SEND_NAME = re.compile(r"^\s*(전송|보내기|등록|로그인)\s*$")
@@ -148,13 +150,15 @@ def chat_window(app: str, wins: list[dict]) -> tuple[Rect | None, Rect | None]:
             return (split, player[1], player[2], player[3]), None
         return None, player                                  # 공감로그가 닫혀 있음 (광고 띠만)
     main = max(shown, key=lambda w: width(w["rect"]) * height(w["rect"]))["rect"]
+    if app == "rainbow":                                     # 세로 창 한가운데 채팅이 늘 보임
+        return main, None
     if width(main) >= height(main) * OPEN_RATIO:
         return main, None
     return None, main
 
 
 def template_find(app: str, wins: list[dict]) -> Found:
-    """알려진 배치로 찾기 (순수 계산). 배치를 모르는 앱(레인보우·반디)은 빈 결과."""
+    """알려진 배치로 찾기 (순수 계산). 배치를 모르는 앱은 빈 결과."""
     found = Found()
     t = TEMPLATES.get(app)
     if t is None:

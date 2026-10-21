@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}사연 · 라디오 참여 도우미{% endblock %}
 {% block content %}
-<h1>사연 <span class="muted">앱 채팅(고릴라·mini·콩·레인보우·반디) · 문자 · 게시판 사연</span></h1>
+<h1>사연 <span class="muted">앱 채팅(고릴라·mini·콩·레인보우) · 문자 · 게시판 사연</span></h1>
 
 <div class="grid" style="margin-bottom:16px">
   <a class="stat" href="{{ url_for('experiences') }}"><span class="muted">실제 경험</span><b>{{ counts.experiences }}</b><span class="muted">사실 확인 {{ counts.confirmed }}건 · 사연은 이것으로만 씀</span></a>
@@ -72,7 +72,7 @@
         <br><span class="muted">{{ p.sent_at or p.updated_at }}</span></td></tr>
     {% else %}<tr><td colspan="5" class="muted">없음</td></tr>{% endfor %}
   </table>
-  <p class="muted">한 번 보낸 경험은 같은 방송국(SBS·MBC·KBS·CBS·EBS)에 다시 보내지 않습니다. 다른 방송국에는 보낼 수 있습니다.</p>
+  <p class="muted">한 번 보낸 경험은 같은 방송국(SBS·MBC·KBS·CBS)에 다시 보내지 않습니다. 다른 방송국에는 보낼 수 있습니다.</p>
 </div>
 
 <div class="panel">

@@ -17,7 +17,7 @@
     로그인이 필요하면 알려 드리니 앱에서 직접 로그인하세요. 듣는 중에 채팅 창을 못 찾으면 5분에 한 번 저절로 다시 찾습니다.</p>
   <div class="actions">
     <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="find"><button {{ 'disabled' if stopped }}>{{ label }} 원버튼 찾기</button></form>
-    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="find-all"><button class="secondary" {{ 'disabled' if stopped }}>모든 앱 찾기 (고릴라·콩·mini·레인보우·반디)</button></form>
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="find-all"><button class="secondary" {{ 'disabled' if stopped }}>모든 앱 찾기 (고릴라·콩·mini·레인보우)</button></form>
   </div>
   {% if found %}
     <div class="flash {{ '' if found.settings else 'warn' }}" style="margin-top:10px">

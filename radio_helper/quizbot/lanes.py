@@ -1,4 +1,4 @@
-"""동시 청취 — 한 PC 에서 여러 채널(방송국마다 하나: SBS 고릴라 · KBS 콩 · MBC mini · CBS 레인보우 · EBS 반디)을
+"""동시 청취 — 한 PC 에서 여러 채널(방송국마다 하나: SBS 고릴라 · KBS 콩 · MBC mini · CBS 레인보우)을
 함께 듣고 받아쓰고 보낸다.
 
 소리 나누기 (0.54): 녹음 장치 칸을 비워 두면 '앱 소리'를 직접 받는다 (appaudio — 윈도우 프로세스 루프백,
@@ -7,11 +7,11 @@
 (vbcable 이 자동 설치)로 하나 생긴다. 한 장치에 두 앱 소리가 섞이면 받아쓰기가 망가진다.
 
 - 주 채널(1번): 지금까지처럼 '청취 시작'의 채널, 녹음 장치는 live.device (비우면 기본 스피커).
-- 보조 채널(2~5번): live.lanes 에 {channel, device}. 청취 중이고 '동시 청취'가 켜져 있으면 채널마다
+- 보조 채널(2~4번): live.lanes 에 {channel, device}. 청취 중이고 '동시 청취'가 켜져 있으면 채널마다
   보조 청취기(python -m radio_helper.quizbot lane --lane N)를 띄운다. 받아쓰기·자막 기록·퀴즈·사연·DJ 한마디·신청곡이
   채널마다 따로 돌고, 채팅 보내기는 공용 입력 잠금으로 하나씩 차례로 한다.
 - 한 앱은 한 번에 한 채널만 재생·채팅하므로 같은 앱(예: 파워FM·러브FM 둘 다 고릴라)을 두 번 고르면 막는다.
-- 상태는 lane2.* ~ lane5.* 설정에 따로 남긴다 (주 채널은 예전처럼 quizbot.*).
+- 상태는 lane2.* ~ lane4.* 설정에 따로 남긴다 (주 채널은 예전처럼 quizbot.*).
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from datetime import datetime
 from .. import db
 from . import config
 
-EXTRA_LANES = ("2", "3", "4", "5")   # 주 채널 + 4칸 = 방송국 다섯 (SBS·MBC·KBS·CBS·EBS)
+EXTRA_LANES = ("2", "3", "4")   # 주 채널 + 3칸 = 방송국 넷 (SBS·MBC·KBS·CBS)
 GPU_LARGE_LANES = 3       # 그래픽카드 large-v3 는 채널당 약 3~4GB 라 3칸까지 — 넘으면 auto 를 large-v3-turbo(약 2GB)로
 LAUNCH_GRACE = 120        # 막 띄운 보조 청취기는 이 시간 동안 다시 띄우지 않는다
 QUIET = 8                 # 장치 점검: 소리 크기(0~100)가 이보다 작으면 '소리 없음'
@@ -79,13 +79,20 @@ def app_audio_supported() -> bool:
     return appaudio.supported()
 
 
+def device_mode(conn: sqlite3.Connection) -> bool:
+    """동시 청취에서 칸에 적은 출력 장치로 녹음할지 (볼륨 믹서로 앱마다 장치를 나눴을 때만 켬, 기본 꺼짐)."""
+    return config.get(conn, "live.device_mode") == "1"
+
+
 def source(conn: sqlite3.Connection, item: dict, multi: bool | None = None) -> str:
-    """녹음 방식: device(칸에 적은 출력 장치) · app(그 채널 앱 소리만 — 동시 청취에서 칸을 비우면) · speaker(기본 스피커).
-    한 채널만 들을 때는 예전처럼 기본 스피커를 녹음한다."""
-    if (item.get("device") or "").strip():
-        return "device"
+    """녹음 방식: app(그 채널 앱 소리만) · device(칸에 적은 출력 장치) · speaker(기본 스피커).
+    동시 청취는 앱 소리를 받을 수 있으면 칸에 장치를 적어 두었어도 앱 소리 (0.56 — 모든 앱이 스피커로 나올 때
+    다른 장치를 고르면 소리 0, 스피커를 고르면 여러 방송이 섞였음). '출력 장치로 나눠 녹음'을 켰을 때만 장치.
+    한 채널만 들을 때는 예전처럼 적은 장치, 비우면 기본 스피커."""
     multi = enabled(conn) if multi is None else multi
-    return "app" if multi and app_audio_supported() else "speaker"
+    if multi and app_audio_supported() and not device_mode(conn):
+        return "app"
+    return "device" if (item.get("device") or "").strip() else "speaker"
 
 
 def source_label(conn: sqlite3.Connection, item: dict) -> str:
@@ -155,6 +162,7 @@ def status(conn: sqlite3.Connection, now: datetime | None = None) -> list[dict]:
             age = None
         out.append({**x, "label": "주 채널" if not x["lane"] else f"보조 {x['lane']}",
                     "source": source(conn, x), "source_label": source_label(conn, x),
+                    "recording": db.get_setting(conn, key(x["lane"], "recording")) or "",
                     "app": config.app_label(config.chat_app(conn, x["channel"])),
                     "state": db.get_setting(conn, key(x["lane"], "state")) or "",
                     "alive": age is not None and age < config.HEARTBEAT_FRESH_SECONDS,
@@ -233,9 +241,14 @@ def judge(items: list[dict], gpu_ok: bool) -> list[str]:
     for it in items:
         if it.get("error"):
             out.append(f"{it['label']} '{it['channel']}': 녹음 장치를 열지 못함 — {it['error']}")
+        elif it["level"] < QUIET and it.get("source") == "app" and (it.get("app_peak") or 0) >= QUIET:
+            out.append(f"{it['label']} '{it['channel']}': {it.get('app_process') or '앱'} 은(는) 소리를 내는데(소리 "
+                       f"{it['app_peak']}) 받지 못했습니다 — 이 PC 에서 앱 소리 받기가 안 되는 것 같습니다. 이 화면을 찍어 "
+                       "보내 주세요 (그동안은 '출력 장치로 나눠 녹음' + 가상 장치로 들을 수 있음)")
         elif it["level"] < QUIET and it.get("source") == "app":
             out.append(f"{it['label']} '{it['channel']}': 소리가 없습니다 — 그 앱이 켜져 있고 채널을 재생 중인지 확인하세요 "
-                       "(앱 안의 볼륨·음소거도)")
+                       "(앱 안의 볼륨·음소거도)" + ("" if it.get("app_process") else
+                                                  ". 그 앱의 소리 길이 아래 '지금 소리 내는 프로그램'에 없습니다"))
         elif it["level"] < QUIET:
             out.append(f"{it['label']} '{it['channel']}': 소리가 없습니다 — 그 앱이 재생 중인지, 윈도우 볼륨 믹서에서 그 앱의 "
                        f"출력 장치를 '{it['device'] or '기본 스피커'}'(으)로 지정했는지 확인하세요")
@@ -255,13 +268,31 @@ def judge(items: list[dict], gpu_ok: bool) -> list[str]:
     return out
 
 
+def scan_sessions() -> tuple[dict, list[dict]]:
+    """(프로세스 표, 지금 소리 길을 연 프로그램들) — 윈도우가 아니거나 못 읽으면 빈 것."""
+    try:
+        from . import appaudio
+
+        return appaudio.processes(), appaudio.audio_sessions()
+    except Exception:
+        return {}, []
+
+
 def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=None, transcriber=None,
-                gpu_ok: bool | None = None) -> dict:
+                gpu_ok: bool | None = None, scan=None) -> dict:
     """채널마다 그 녹음(앱 소리 또는 장치)을 동시에 seconds 초 → 소리 크기 · 받아쓴 말 · 같은 소리 겹침 · 그래픽카드 안내.
-    recorder_factory(칸) → 녹음기 (기본: recorder)."""
+    녹음하는 동안 '지금 소리 내는 프로그램'(볼륨 믹서의 앱별 소리 크기)도 함께 재서, 앱이 소리를 내는데 못 받는지
+    앱이 소리를 안 내는지 가린다. recorder_factory(칸) → 녹음기 (기본: recorder), scan() → (프로세스 표, 세션들)."""
     from . import live
 
     lanes = all_lanes(conn)
+    scanned: dict = {}
+
+    def do_scan():
+        time.sleep(min(2.0, seconds / 2))          # 녹음이 시작된 뒤 재기
+        scanned["out"] = (scan or scan_sessions)()
+
+    scanner = threading.Thread(target=do_scan, daemon=True)
     if recorder_factory is None:
         def recorder_factory(item):
             return recorder(conn, item, seconds)
@@ -278,10 +309,22 @@ def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=No
             items[i]["error"] = f"{type(e).__name__}: {str(e)[:200]}"
 
     threads = [threading.Thread(target=record, args=(i, x), daemon=True) for i, x in enumerate(lanes)]
-    for t in threads:
+    for t in threads + [scanner]:
         t.start()
-    for t in threads:
+    for t in threads + [scanner]:
         t.join(seconds + 20)
+    procs, sessions = scanned.get("out") or ({}, [])
+    if any(it["source"] == "app" for it in items):
+        from .appaudio import _app_hint, pick_session
+
+        for it in items:
+            if it["source"] != "app":
+                continue
+            app = config.chat_app(conn, it["channel"])
+            hit = pick_session(procs, sessions, (config.get(conn, f"{app}.process_name") or "").lower(),
+                               _app_hint(app)) if app else None
+            it["app_process"] = procs[hit["pid"]][1] if hit else ""
+            it["app_peak"] = int(round(hit["peak"] * 100)) if hit else None
     from .audio import rms
 
     for i, it in enumerate(items):
@@ -300,7 +343,9 @@ def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=No
 
         gpu_ok = bool((gpu.saved_check(conn) or {}).get("ok"))
     result = {"at": db.now(), "items": [{k: v for k, v in it.items() if k != "envelope"} for it in items],
-              "warnings": judge(items, gpu_ok), "gpu_ok": gpu_ok}
+              "warnings": judge(items, gpu_ok), "gpu_ok": gpu_ok,
+              "sessions": [{"exe": procs.get(x["pid"], (0, "?"))[1], "pid": x["pid"], "peak": int(round(x["peak"] * 100)),
+                            "active": x["active"]} for x in sessions[:12]]}
     db.set_setting(conn, TEST_KEY, json.dumps(result, ensure_ascii=False))
     db.log(conn, "quizbot", "동시 청취 장치 점검: " + " / ".join(
         f"{it['channel']} 소리 {it['level']}" + (f" '{it['text'][:20]}'" if it.get("text") else "") for it in items)

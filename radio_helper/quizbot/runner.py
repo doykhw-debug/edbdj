@@ -274,6 +274,7 @@ class Runner:
             after = reopen()
         except Exception as e:
             return f" 녹음 장치를 다시 열지 못했습니다({type(e).__name__}: {str(e)[:80]}) — 스피커 연결을 확인하세요."
+        db.set_setting(self.conn, self.key("recording"), after or "")
         return silence.speaker_note(before, after)
 
     def handle_silence(self, recorder, now: datetime) -> None:
@@ -428,6 +429,7 @@ class Runner:
                 recorder.on_level = self.on_second  # 녹음 중 1초마다 소리 크기를 화면에 알리고 끊김을 살핀다
             if getattr(recorder, "device_name", ""):
                 self.event(f"녹음 시작 — {recorder.device_name}")
+            db.set_setting(self.conn, self.key("recording"), getattr(recorder, "device_name", "") or "")
             while keep_going(self.deps.now()) and not self.should_stop():
                 session, w = get_session(self.deps.now())
                 program = session["program"]
@@ -1108,7 +1110,7 @@ class Runner:
         return chosen if chosen in config.ROUTES else config.route(self.conn)
 
     def chat_sender(self, app: str | None):
-        """앱 채팅 전송 도구 (고릴라·mini·콩·레인보우·반디). 테스트처럼 앱별 도구가 없으면 기본 sender."""
+        """앱 채팅 전송 도구 (고릴라·mini·콩·레인보우). 테스트처럼 앱별 도구가 없으면 기본 sender."""
         if self.deps.chat_senders and app in self.deps.chat_senders:
             return self.deps.chat_senders[app]
         return self.deps.sender

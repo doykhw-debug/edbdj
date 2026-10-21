@@ -354,7 +354,7 @@ def create_app(data_dir: str | None = None) -> Flask:
 
         extra = lanes.extras(c)
         devices = lanes.devices()
-        multi = {"on": lanes.enabled(c), "device": qconfig.get(c, "live.device"),
+        multi = {"on": lanes.enabled(c), "device": qconfig.get(c, "live.device"), "device_mode": lanes.device_mode(c),
                  "lanes": [next((x for x in extra if x["lane"] == n), {"lane": n, "channel": "", "device": ""})
                            for n in lanes.EXTRA_LANES],
                  "app_audio": lanes.app_audio_supported(), "cable": vbcable.installed(devices),
@@ -378,6 +378,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             extra.append({"channel": channel, "device": form(f"lane{n}_device")})
         db.set_setting(c, "live.device", form("device"))
         db.set_setting(c, "live.lanes", json.dumps(extra, ensure_ascii=False))
+        db.set_setting(c, "live.device_mode", "1" if request.form.get("device_mode") else "0")
         wanted = bool(request.form.get("multi"))
         trial = [{"lane": "", "channel": qconfig.get(c, "live.channel"), "device": form("device")}] + \
             [{"lane": n, **x} for n, x in zip(lanes.EXTRA_LANES, extra) if x["channel"]]
@@ -612,7 +613,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("programs"))
         db.set_setting(g.conn, "schedules.started_at", db.now())
         log_name = launch_module("radio_helper.schedules", ["refresh"], "schedules")
-        flash("MBC·KBS·CBS·EBS 편성표를 웹에서 찾는 중입니다 (채널마다 1~3분). 끝나면 이 화면을 새로 고치세요. "
+        flash("MBC·KBS·CBS 편성표를 웹에서 찾는 중입니다 (채널마다 1~3분). 끝나면 이 화면을 새로 고치세요. "
               f"(기록: {log_name})")
         return redirect(url_for("programs"))
 
@@ -1851,7 +1852,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             "auto-setup": "열린 창 중에서 고릴라 채팅창을 찾습니다 (읽기만 함). 10~30초 뒤 이 화면을 새로 고치세요.",
             "find": "원버튼 찾기: 고릴라 앱이 켜져 있는지 보고 입력칸·전송 버튼·채팅 목록을 찾아 저장합니다. 고릴라 창이 잠깐 "
                     "앞으로 나오고, 채팅이 닫혀 있으면 말풍선 버튼을 한 번 누릅니다 (20~60초, 글은 보내지 않음).",
-            "find-all": "원버튼 찾기: 고릴라·콩·mini·레인보우·반디를 차례로 찾습니다 (켜져 있는 앱만, 1~2분, 글은 보내지 않음).",
+            "find-all": "원버튼 찾기: 고릴라·콩·mini·레인보우를 차례로 찾습니다 (켜져 있는 앱만, 1~2분, 글은 보내지 않음).",
             "inspect": "고릴라 창의 화면 요소를 읽습니다 (아무것도 누르지 않음).",
             "select-window": "화면이 어두워지면 고릴라 창 전체를 마우스로 끌어 네모로 감싸세요. 손을 떼면 저장됩니다.",
             "select-input": "화면이 어두워지면 고릴라의 '공감로그 글쓰기' 칸을 마우스로 끌어 네모로 그리세요.",
@@ -1907,7 +1908,7 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.route("/gorilla", methods=["GET", "POST"])
     def gorilla():
-        """채팅 앱(고릴라·mini·콩·레인보우·반디) 창 맞추기와 인식 설정. ?app= 으로 앱을 고른다."""
+        """채팅 앱(고릴라·mini·콩·레인보우) 창 맞추기와 인식 설정. ?app= 으로 앱을 고른다."""
         app_ = request.args.get("app", "gorilla")
         if app_ not in qconfig.CHAT_APPS:
             abort(404)
