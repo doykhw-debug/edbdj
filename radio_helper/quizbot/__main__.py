@@ -127,7 +127,9 @@ def cmd_device_test(conn) -> int:
         say(f"{it['label']} {it['channel']} [{it.get('device_name') or lanes.source_label(conn, it)}] 소리 {it['level']}"
             f" → '{it.get('text') or it.get('error') or ''}'")
     if result.get("sessions"):
-        say("지금 소리 내는 프로그램: " + " · ".join(f"{x['exe']}(#{x['pid']}) {x['peak']}" for x in result["sessions"]))
+        say("지금 소리 내는 프로그램: " + " · ".join(
+            f"{x['exe']}(#{x['pid']}) {x['peak']}" + ("" if x.get("default", True) else f" [{x.get('device')}]")
+            for x in result["sessions"]))
     for w in result["warnings"]:
         say(f"[확인] {w}")
     say(f"받아쓰기 장치: {'그래픽카드' if device == 'cuda' else 'CPU'} ({note})")

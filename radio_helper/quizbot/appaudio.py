@@ -310,6 +310,19 @@ IID_IAUDIOSESSIONCONTROL2 = guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D")
 IID_IAUDIOMETERINFORMATION = guid("C02216F6-8C67-4B5B-9D00-D008E73E0064")
 CLSCTX_ALL = 23
 METER_SAMPLES, METER_GAP = 6, 0.1     # 순간 소리 크기를 0.1초 간격으로 여러 번 재어 가장 큰 값
+VT_LPWSTR = 31
+
+
+class PROPERTYKEY(ctypes.Structure):
+    _fields_ = [("fmtid", GUID), ("pid", c_uint32)]
+
+
+class PROPVARIANT_PTR(ctypes.Structure):     # 글자(VT_LPWSTR)를 담은 PROPVARIANT
+    _fields_ = [("vt", c_uint16), ("r1", c_uint16), ("r2", c_uint16), ("r3", c_uint16), ("ptr", c_void_p),
+                ("extra", c_void_p)]
+
+
+PKEY_DEVICE_FRIENDLYNAME = PROPERTYKEY(guid("A45C254E-DF1C-4EFD-8020-67D146A850E0"), 14)
 
 
 def out_ptr(obj: int, index: int, argtypes: list, *args) -> int:
@@ -346,6 +359,30 @@ class SessionScanner:
         if self.ole32 is not None:
             self.ole32.CoUninitialize()
 
+    def device_id(self, dev: int) -> str:
+        p = c_void_p()
+        com_call(dev, 5, [POINTER(c_void_p)], byref(p))              # IMMDevice::GetId
+        try:
+            return ctypes.wstring_at(p.value) if p.value else ""
+        finally:
+            if self.ole32 is not None and p.value:
+                self.ole32.CoTaskMemFree(p)
+
+    def device_name(self, dev: int) -> str:
+        """출력 장치 이름 (예: 스피커(Realtek Audio), CABLE In 16ch(VB-Audio Virtual Cable))."""
+        store = out_ptr(dev, 4, [c_uint32], 0)                        # OpenPropertyStore(STGM_READ)
+        try:
+            pv = PROPVARIANT_PTR()
+            com_call(store, 5, [POINTER(PROPERTYKEY), POINTER(PROPVARIANT_PTR)], byref(PKEY_DEVICE_FRIENDLYNAME),
+                     byref(pv))                                       # IPropertyStore::GetValue
+            try:
+                return ctypes.wstring_at(pv.ptr) if pv.vt == VT_LPWSTR and pv.ptr else ""
+            finally:
+                if self.ole32 is not None:
+                    self.ole32.PropVariantClear(byref(pv))
+        finally:
+            release(store)
+
     def scan(self) -> list[dict]:
         held, found = [], []           # held: 끝나면 Release 할 객체
         try:
@@ -353,12 +390,22 @@ class SessionScanner:
             held.append(enum)
             coll = out_ptr(enum, 3, [c_int, c_uint32], 0, 1)        # EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE)
             held.append(coll)
+            try:                                                     # 기본 출력 장치 (eRender, eMultimedia)
+                default = out_ptr(enum, 4, [c_int, c_int], 0, 1)
+                held.append(default)
+                default_id = self.device_id(default)
+            except ComError:
+                default_id = ""
             n = c_uint32()
             com_call(coll, 3, [POINTER(c_uint32)], byref(n))        # GetCount
             for i in range(n.value):
                 try:
                     dev = out_ptr(coll, 4, [c_uint32], i)            # Item
                     held.append(dev)
+                    try:
+                        name, is_default = self.device_name(dev), self.device_id(dev) == default_id
+                    except ComError:
+                        name, is_default = "", True
                     mgr = out_ptr(dev, 3, [POINTER(GUID), c_uint32, c_void_p], byref(IID_IAUDIOSESSIONMANAGER2),
                                   CLSCTX_ALL, None)                  # Activate
                     held.append(mgr)
@@ -382,7 +429,8 @@ class SessionScanner:
                     except ComError:
                         continue
                     if pid.value:                                    # 0 = 시스템 소리
-                        found.append({"pid": pid.value, "active": state.value == 1, "peak": 0.0, "meter": meter})
+                        found.append({"pid": pid.value, "active": state.value == 1, "peak": 0.0, "meter": meter,
+                                      "device": name, "default": is_default})
             for k in range(METER_SAMPLES):
                 for f in found:
                     v = c_float()
@@ -397,8 +445,9 @@ class SessionScanner:
             for obj in reversed(held):
                 release(obj)
         merged: dict[int, dict] = {}                                 # 같은 프로세스가 장치 여럿에 소리 길을 열 수 있음
-        for f in found:
-            m = merged.setdefault(f["pid"], {"pid": f["pid"], "active": False, "peak": 0.0})
+        for f in sorted(found, key=lambda x: (x["peak"], x["active"]), reverse=True):   # 장치는 가장 크게·재생 중인 것
+            m = merged.setdefault(f["pid"], {"pid": f["pid"], "active": False, "peak": 0.0, "device": f["device"],
+                                             "default": f["default"]})
             m["active"] = m["active"] or f["active"]
             m["peak"] = max(m["peak"], f["peak"])
         return sorted(merged.values(), key=lambda x: -x["peak"])

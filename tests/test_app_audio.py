@@ -429,10 +429,13 @@ def test_home_shows_install_button_and_launches(client, conn, monkeypatch):
 class FakeSessions:
     """출력 장치 → 세션 관리자 → 세션(프로세스 번호·상태·소리 크기)을 가짜 COM 객체로."""
 
-    def __init__(self, devices):          # devices: [[(pid, state, [peak, ...]), ...], ...]
-        self.keep, self.released = [], 0
-        self.enum = self.com([], [(P(c_long, c_void_p, c_int, c_uint32, POINTER(c_void_p)), self.enum_endpoints)])
-        self.devices = [self.device(sessions) for sessions in devices]
+    def __init__(self, devices, names=None, default=0):   # devices: [[(pid, state, [peak, ...]), ...], ...]
+        self.keep, self.released, self.strings = [], 0, []
+        names = names or [f"장치 {i}" for i in range(len(devices))]
+        self.devices = [self.device(sessions, names[i], f"id-{i}") for i, sessions in enumerate(devices)]
+        self.enum = self.com([], [(P(c_long, c_void_p, c_int, c_uint32, POINTER(c_void_p)), self.enum_endpoints),
+                                  (P(c_long, c_void_p, c_int, c_int, POINTER(c_void_p)),
+                                   lambda _t, flow, role, o: o.__setitem__(0, self.devices[default].ptr) or 0)])
 
     def com(self, iids, methods, others=None):
         obj = appaudio.ComObject(iids, methods, others)
@@ -454,7 +457,12 @@ class FakeSessions:
         out[0] = coll.ptr
         return 0
 
-    def device(self, sessions):
+    def text(self, value):
+        buf = ctypes.create_unicode_buffer(value)
+        self.strings.append(buf)
+        return ctypes.addressof(buf)
+
+    def device(self, sessions, name, dev_id):
         controls = []
         for pid, state, peaks in sessions:
             seq = list(peaks)
@@ -479,7 +487,17 @@ class FakeSessions:
             assert bytes(iid.contents) == bytes(appaudio.IID_IAUDIOSESSIONMANAGER2) and ctx == 23
             out[0] = mgr.ptr
             return 0
-        return self.com([], [(P(c_long, c_void_p, POINTER(GUID), c_uint32, c_void_p, POINTER(c_void_p)), activate)])
+
+        def get_value(_t, key, pv):
+            assert bytes(key.contents) == bytes(appaudio.PKEY_DEVICE_FRIENDLYNAME)
+            pv.contents.vt, pv.contents.ptr = appaudio.VT_LPWSTR, self.text(name)
+            return 0
+        store = self.com([], [(nop, lambda _t: 0), (nop, lambda _t: 0),
+                              (P(c_long, c_void_p, POINTER(appaudio.PROPERTYKEY), POINTER(appaudio.PROPVARIANT_PTR)),
+                               get_value)])
+        return self.com([], [(P(c_long, c_void_p, POINTER(GUID), c_uint32, c_void_p, POINTER(c_void_p)), activate),
+                             (P(c_long, c_void_p, c_uint32, POINTER(c_void_p)), lambda _t, mode, o: o.__setitem__(0, store.ptr) or 0),
+                             (P(c_long, c_void_p, POINTER(c_void_p)), lambda _t, o: o.__setitem__(0, self.text(dev_id)) or 0)])
 
     def scanner(self):
         return appaudio.SessionScanner(create=lambda: self.enum.ptr, sleep=lambda s: None)
@@ -491,8 +509,18 @@ def test_session_scanner_reads_pids_and_loudness():
     out = fake.scanner().scan()
     assert [(x["pid"], round(x["peak"], 2), x["active"]) for x in out] == [(4321, 0.42, True), (999, 0.25, True),
                                                                            (777, 0.0, False)]
+    assert [(x["device"], x["default"]) for x in out] == [("장치 0", True), ("장치 1", False), ("장치 0", True)]
+
+
+def test_session_scanner_names_the_output_device():
+    # 실제 사례: 레인보우(flutter_rainbow.exe, VLC 로 재생)의 출력을 'CABLE In 16ch' 로 돌려 두자 소리 0
+    fake = FakeSessions([[(41, 1, [0.5])], [(12, 1, [0.0])]],
+                        names=["스피커(High Definition Audio Device)", "CABLE In 16ch(VB-Audio Virtual Cable)"])
+    out = {x["pid"]: x for x in fake.scanner().scan()}
+    assert out[41]["device"].startswith("스피커") and out[41]["default"]
+    assert out[12]["device"].startswith("CABLE In 16ch") and not out[12]["default"]
     assert fake.released > 10                                                    # 다 쓴 COM 객체는 놓아줌
-    assert sorted(x["pid"] for x in appaudio.audio_sessions(factory=fake.scanner)) == [777, 999, 4321]   # 따로 스레드에서
+    assert sorted(x["pid"] for x in appaudio.audio_sessions(factory=fake.scanner)) == [12, 41]   # 따로 스레드에서
     assert appaudio.audio_sessions(factory=lambda: 1 / 0) == []                  # 못 읽으면 빈 목록
 
 
@@ -582,3 +610,22 @@ def test_app_recorder_locates_in_other_thread_without_db(conn, monkeypatch):
     bad = lanes.recorder(conn, {"lane": "9", "channel": "TBN 교통방송", "device": ""}, 1)
     with pytest.raises(RuntimeError, match="앱"):
         bad.locate()
+
+
+def test_device_test_real_path_never_touches_db_from_threads(conn, monkeypatch):
+    # 실제 사례 (0.57): 찾기만 고쳤고 녹음기를 스레드에서 만들면서 설정을 읽어 네 칸 모두 'SQLite objects created in a thread'
+    monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)
+    db.set_setting(conn, "live.channel", "파워FM")
+    db.set_setting(conn, "live.multi", "1")
+    db.set_setting(conn, "live.lanes", '[{"channel": "MBC FM4U", "device": ""}, {"channel": "KBS 쿨FM", "device": ""}]')
+    procs = {1: (0, "explorer.exe"), 40: (1, "gorealra.exe"), 50: (1, "mbc mini.exe"), 30: (1, "kbskong.exe")}
+    monkeypatch.setattr(appaudio, "processes", lambda: procs)
+    monkeypatch.setattr(appaudio, "audio_sessions", lambda: [{"pid": p, "peak": 0.3, "active": True} for p in (40, 50, 30)])
+    located = []
+    real = appaudio.locate_app
+    monkeypatch.setattr(appaudio, "locate_app", lambda *a, **k: located.append(real(*a, **k)) or located[-1])
+    result = lanes.device_test(conn, seconds=1, transcriber=None, gpu_ok=True, scan=lambda: (procs, []))   # 기본 녹음기
+    errors = [it["error"] for it in result["items"]]
+    assert not any("SQLite" in e or "ProgrammingError" in e for e in errors), errors
+    assert sorted(p for p, _ in located) == [30, 40, 50]                         # 칸마다 그 앱을 찾음 (스레드에서)
+    assert all("앱 소리를 받지 못했습니다" in e for e in errors)                  # (여기는 윈도우가 아니라 녹음만 못 함)

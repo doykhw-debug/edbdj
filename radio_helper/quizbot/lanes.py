@@ -245,6 +245,11 @@ def judge(items: list[dict], gpu_ok: bool) -> list[str]:
             out.append(f"{it['label']} '{it['channel']}': {it.get('app_process') or '앱'} 은(는) 소리를 내는데(소리 "
                        f"{it['app_peak']}) 받지 못했습니다 — 이 PC 에서 앱 소리 받기가 안 되는 것 같습니다. 이 화면을 찍어 "
                        "보내 주세요 (그동안은 '출력 장치로 나눠 녹음' + 가상 장치로 들을 수 있음)")
+        elif it["level"] < QUIET and it.get("source") == "app" and it.get("app_process") and not it.get("app_default", True):
+            out.append(f"{it['label']} '{it['channel']}': {it['app_process']} 소리가 기본 스피커가 아닌 "
+                       f"'{it.get('app_device') or '다른 장치'}'(으)로 나가고, 볼륨 믹서에서도 소리가 {it.get('app_peak') or 0} 입니다 — "
+                       "윈도우 설정 → 시스템 → 소리 → 볼륨 믹서에서 그 앱의 출력 장치를 '기본값'으로 돌리세요 "
+                       "(가상 장치·16ch 장치에서는 재생이 안 되는 앱이 있음)")
         elif it["level"] < QUIET and it.get("source") == "app" and it.get("app_process"):
             out.append(f"{it['label']} '{it['channel']}': 윈도우 볼륨 믹서에서도 {it['app_process']} 소리가 "
                        f"{it.get('app_peak') or 0} 입니다 — 앱이 소리를 내지 않고 있습니다. 앱에서 재생(▶)을 누르고, 볼륨 믹서에서 "
@@ -302,16 +307,27 @@ def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=No
     items = [{"label": "주 채널" if not x["lane"] else f"보조 {x['lane']}", **x, "source": source(conn, x),
               "level": 0, "text": "", "error": ""} for x in lanes]
     audio: dict[int, object] = {}
-
-    def record(i, item):
+    # 녹음기는 여기(이 DB 연결을 만든 스레드)에서 만들고, 스레드에서는 열고 녹음만 한다 (0.59 — 0.57 까지는 스레드에서
+    # 만들다가 설정을 읽어 'SQLite objects created in a thread …' 로 모든 칸이 '확인 필요'였음)
+    recorders: list = []
+    for i, x in enumerate(lanes):
         try:
-            with recorder_factory(item) as rec:
-                items[i]["device_name"] = getattr(rec, "device_name", "") or item["device"]
+            recorders.append(recorder_factory(x))
+        except Exception as e:
+            items[i]["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            recorders.append(None)
+
+    def record(i, made):
+        if made is None:
+            return
+        try:
+            with made as rec:
+                items[i]["device_name"] = getattr(rec, "device_name", "") or lanes[i]["device"]
                 audio[i] = rec.read_chunk()
         except Exception as e:
             items[i]["error"] = f"{type(e).__name__}: {str(e)[:200]}"
 
-    threads = [threading.Thread(target=record, args=(i, x), daemon=True) for i, x in enumerate(lanes)]
+    threads = [threading.Thread(target=record, args=(i, made), daemon=True) for i, made in enumerate(recorders)]
     for t in threads + [scanner]:
         t.start()
     for t in threads + [scanner]:
@@ -328,6 +344,8 @@ def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=No
                                _app_hint(app)) if app else None
             it["app_process"] = procs[hit["pid"]][1] if hit else ""
             it["app_peak"] = int(round(hit["peak"] * 100)) if hit else None
+            it["app_device"] = (hit.get("device") or "") if hit else ""
+            it["app_default"] = bool(hit.get("default", True)) if hit else True
     from .audio import rms
 
     for i, it in enumerate(items):
@@ -348,7 +366,8 @@ def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=No
     result = {"at": db.now(), "items": [{k: v for k, v in it.items() if k != "envelope"} for it in items],
               "warnings": judge(items, gpu_ok), "gpu_ok": gpu_ok,
               "sessions": [{"exe": procs.get(x["pid"], (0, "?"))[1], "pid": x["pid"], "peak": int(round(x["peak"] * 100)),
-                            "active": x["active"]} for x in sessions[:12]]}
+                            "active": x["active"], "device": x.get("device") or "", "default": x.get("default", True)}
+                           for x in sessions[:12]]}
     db.set_setting(conn, TEST_KEY, json.dumps(result, ensure_ascii=False))
     db.log(conn, "quizbot", "동시 청취 장치 점검: " + " / ".join(
         f"{it['channel']} 소리 {it['level']}" + (f" '{it['text'][:20]}'" if it.get("text") else "") for it in items)

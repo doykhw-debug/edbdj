@@ -190,7 +190,8 @@
         {% if it.app_process %}<span class="hint">(볼륨 믹서: {{ it.app_process }} 소리 {{ it.app_peak }})</span>{% elif it.source == 'app' and it.app_peak is none and multi.test.sessions %}<span class="hint">(볼륨 믹서에 이 앱 소리 없음)</span>{% endif %}</li>
     {% endfor %}</ul>
     {% if multi.test.sessions %}<p class="muted" style="margin:6px 0">지금 소리 내는 프로그램 (볼륨 믹서):
-      {% for x in multi.test.sessions %}{{ x.exe }} <b>{{ x.peak }}</b>{{ ' · ' if not loop.last }}{% endfor %}</p>{% endif %}
+      {% for x in multi.test.sessions %}{{ x.exe }} <b>{{ x.peak }}</b>{% if x.device and x.default == false %} <span class="badge warn">{{ x.device }}</span>{% endif %}{{ ' · ' if not loop.last }}{% endfor %}
+      <br><span class="hint">노란 장치 이름 = 기본 스피커가 아닌 장치로 나가는 앱</span></p>{% endif %}
     {% for w in multi.test.warnings %}<div class="flash warn">{{ w }}</div>{% endfor %}
     {% if not multi.test.warnings %}<div class="flash">채널마다 소리가 따로 들어옵니다. 받아쓴 말이 그 채널 방송인지 확인하세요.</div>{% endif %}
     {% endif %}
