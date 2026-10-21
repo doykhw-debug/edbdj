@@ -234,12 +234,12 @@ def test_roots_pick_top_process_with_most_children():
 def test_app_process_by_saved_name_or_window(conn):
     db.set_setting(conn, "gorilla.process_name", "GoRealra.exe")
     assert appaudio.app_process(conn, "gorilla", PROCS) == (10, "gorealra.exe")
-    assert appaudio.app_process(conn, "kong", PROCS, window_pid=lambda c, a: 20) == (20, "kongpc.exe")
+    assert appaudio.app_process(conn, "kong", PROCS, window_pid=lambda cfg: 20) == (20, "kongpc.exe")
     db.set_setting(conn, "mini.process_name", "mini.exe")
     with pytest.raises(RuntimeError, match="켜져 있지 않습니다"):
         appaudio.app_process(conn, "mini", PROCS)
     with pytest.raises(RuntimeError, match="모든 앱 찾기"):
-        appaudio.app_process(conn, "kong", PROCS, window_pid=lambda c, a: None)
+        appaudio.app_process(conn, "kong", PROCS, window_pid=lambda cfg: None)
     with pytest.raises(RuntimeError, match="앱"):
         appaudio.app_process(conn, None, PROCS)
 
@@ -547,5 +547,38 @@ def test_device_test_tells_capture_failure_from_silent_app(conn, monkeypatch):
     assert items["KBS 쿨FM"]["app_peak"] is None
     text = " ".join(result["warnings"])
     assert "cbsrainbow.exe 은(는) 소리를 내는데(소리 40) 받지 못했습니다" in text           # 받기 문제
-    assert "'KBS 쿨FM': 소리가 없습니다" in text and "소리 길이" in text                     # 앱이 소리를 안 냄
+    assert "'KBS 쿨FM': 소리가 없습니다" in text and "소리 길이" in text                     # 앱 소리 길이 없음
+    sessions = [{"pid": 41, "peak": 0.5, "active": True}, {"pid": 12, "peak": 0.0, "active": True}]
+    result = lanes.device_test(conn, seconds=1, recorder_factory=lambda x: Rec(loud if not x["lane"] else silent),
+                               transcriber=None, gpu_ok=True, scan=lambda: (AUDIO_PROCS, sessions))
+    assert "볼륨 믹서에서도 cbsrainbow.exe 소리가 0 입니다 — 앱이 소리를 내지 않고" in " ".join(result["warnings"])
     assert [x["exe"] for x in result["sessions"]] == ["gorealra.exe", "cbsrainbow.exe"]
+
+
+def test_app_recorder_locates_in_other_thread_without_db(conn, monkeypatch):
+    # 실제 사례 (0.56): 장치 점검은 칸마다 다른 스레드에서 녹음기를 여는데, 앱 찾기가 DB 를 읽어
+    # 'SQLite objects created in a thread can only be used in that same thread' 로 네 칸 모두 실패
+    monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)
+    db.set_setting(conn, "live.channel", "파워FM")
+    db.set_setting(conn, "live.multi", "1")
+    db.set_setting(conn, "live.lanes", '[{"channel": "KBS 쿨FM", "device": "LG SMART WQHD(NVIDIA High Definition Audio)"}]')
+    db.set_setting(conn, "kong.process_name", "kbskong.exe")
+    procs = {1: (0, "explorer.exe"), 30: (1, "kbskong.exe"), 31: (30, "kbskong.exe")}
+    monkeypatch.setattr(appaudio, "processes", lambda: procs)
+    monkeypatch.setattr(appaudio, "audio_sessions", lambda: [{"pid": 31, "peak": 0.41, "active": True}])
+    rec = lanes.recorder(conn, lanes.lane_of(conn, "2"), 1)
+    out = {}
+
+    def run():
+        try:
+            out["r"] = rec.locate()
+        except Exception as e:
+            out["e"] = e
+
+    t = threading.Thread(target=run)
+    t.start()
+    t.join(10)
+    assert out.get("r") == (31, "kbskong.exe"), out.get("e")                   # 소리 내는 하위 프로세스
+    bad = lanes.recorder(conn, {"lane": "9", "channel": "TBN 교통방송", "device": ""}, 1)
+    with pytest.raises(RuntimeError, match="앱"):
+        bad.locate()

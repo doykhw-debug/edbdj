@@ -108,8 +108,8 @@ def recorder(conn: sqlite3.Connection, item: dict, chunk_seconds: int):
     if kind == "app":
         from . import appaudio
 
-        app = config.chat_app(conn, item["channel"])
-        return appaudio.AppLoopbackRecorder(chunk_seconds, lambda: appaudio.app_process(conn, app))
+        # 찾기 함수는 DB 를 쓰지 않는다 (장치 점검은 칸마다 다른 스레드에서 연다)
+        return appaudio.AppLoopbackRecorder(chunk_seconds, appaudio.app_locator(config.chat_app(conn, item["channel"])))
     return LoopbackRecorder(chunk_seconds, device=item["device"] if kind == "device" else "")
 
 
@@ -245,10 +245,13 @@ def judge(items: list[dict], gpu_ok: bool) -> list[str]:
             out.append(f"{it['label']} '{it['channel']}': {it.get('app_process') or '앱'} 은(는) 소리를 내는데(소리 "
                        f"{it['app_peak']}) 받지 못했습니다 — 이 PC 에서 앱 소리 받기가 안 되는 것 같습니다. 이 화면을 찍어 "
                        "보내 주세요 (그동안은 '출력 장치로 나눠 녹음' + 가상 장치로 들을 수 있음)")
+        elif it["level"] < QUIET and it.get("source") == "app" and it.get("app_process"):
+            out.append(f"{it['label']} '{it['channel']}': 윈도우 볼륨 믹서에서도 {it['app_process']} 소리가 "
+                       f"{it.get('app_peak') or 0} 입니다 — 앱이 소리를 내지 않고 있습니다. 앱에서 재생(▶)을 누르고, 볼륨 믹서에서 "
+                       "그 앱이 음소거·볼륨 0 이 아닌지, 출력 장치가 '기본값'(스피커)인지 확인하세요")
         elif it["level"] < QUIET and it.get("source") == "app":
             out.append(f"{it['label']} '{it['channel']}': 소리가 없습니다 — 그 앱이 켜져 있고 채널을 재생 중인지 확인하세요 "
-                       "(앱 안의 볼륨·음소거도)" + ("" if it.get("app_process") else
-                                                  ". 그 앱의 소리 길이 아래 '지금 소리 내는 프로그램'에 없습니다"))
+                       "(앱 안의 볼륨·음소거도). 그 앱의 소리 길이 아래 '지금 소리 내는 프로그램'에 없습니다")
         elif it["level"] < QUIET:
             out.append(f"{it['label']} '{it['channel']}': 소리가 없습니다 — 그 앱이 재생 중인지, 윈도우 볼륨 믹서에서 그 앱의 "
                        f"출력 장치를 '{it['device'] or '기본 스피커'}'(으)로 지정했는지 확인하세요")
@@ -303,7 +306,7 @@ def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=No
     def record(i, item):
         try:
             with recorder_factory(item) as rec:
-                items[i]["device_name"] = getattr(rec, "device_name", item["device"])
+                items[i]["device_name"] = getattr(rec, "device_name", "") or item["device"]
                 audio[i] = rec.read_chunk()
         except Exception as e:
             items[i]["error"] = f"{type(e).__name__}: {str(e)[:200]}"

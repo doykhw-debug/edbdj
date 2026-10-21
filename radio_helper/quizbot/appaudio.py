@@ -18,6 +18,7 @@ import time
 import uuid
 from ctypes import POINTER, byref, c_float, c_int, c_int64, c_long, c_ubyte, c_uint16, c_uint32, c_void_p
 
+from .. import db
 from . import config
 from .audio import LoopbackRecorder
 
@@ -511,27 +512,51 @@ def roots(procs: dict[int, tuple[int, str]], name: str) -> list[int]:
     return sorted(found, key=lambda p: (-tree_size(procs, p), p))
 
 
-def _window_pid(conn, app: str) -> int | None:
+def _window_pid(cfg) -> int | None:
+    """앱 창의 프로세스 번호 (cfg: 미리 읽어 둔 그 앱의 화면 설정)."""
     try:
         from .gorilla import Gorilla
 
-        w = Gorilla(config.GorillaConfig.load(conn, app)).find_window()
+        w = Gorilla(cfg).find_window()
         return int(w.element_info.process_id) if w is not None else None
     except Exception:
         return None
 
 
+def app_locator(app: str | None):
+    """녹음기에 넘길 찾기 함수. 부를 때마다 그 스레드에서 DB 를 따로 열어 최신 설정(프로그램 이름·화면 설정)을 읽는다
+    (0.57 — 장치 점검은 칸마다 다른 스레드에서 녹음기를 여는데, 만든 스레드의 DB 연결을 써서
+    'SQLite objects created in a thread can only be used in that same thread' 오류로 네 칸 모두 실패했음)."""
+    def locate():
+        if app not in config.CHAT_APPS:
+            raise RuntimeError("이 채널의 앱(고릴라·콩·mini·레인보우)을 몰라 앱 소리를 받을 수 없습니다 — 채널 설정에서 앱을 정하세요")
+        own = db.connect()
+        try:
+            name = (config.get(own, f"{app}.process_name") or "").strip().lower()
+            cfg = config.GorillaConfig.load(own, app)
+        finally:
+            own.close()
+        return locate_app(app, name, cfg)
+    return locate
+
+
 def app_process(conn, app: str | None, procs: dict | None = None, window_pid=_window_pid,
                 sessions: list[dict] | None = None) -> tuple[int, str]:
-    """채널 앱의 소리를 받을 프로세스 → (번호, 실행 파일 이름).
+    """설정을 DB 에서 읽어 locate_app (같은 스레드에서만)."""
+    if app not in config.CHAT_APPS:
+        return app_locator(app)()
+    return locate_app(app, (config.get(conn, f"{app}.process_name") or "").strip().lower(),
+                      config.GorillaConfig.load(conn, app), procs, window_pid, sessions)
+
+
+def locate_app(app: str, name: str = "", cfg=None, procs: dict | None = None, window_pid=_window_pid,
+               sessions: list[dict] | None = None) -> tuple[int, str]:
+    """채널 앱의 소리를 받을 프로세스 → (번호, 실행 파일 이름). DB 를 쓰지 않아 어느 스레드에서나 부를 수 있다.
     1) 그 앱이 연 소리 길(오디오 세션)의 프로세스 — 소리를 실제로 내는 곳 (0.56)
     2) 없으면(아직 재생 전) 앱 설정의 프로그램 이름·앱 창으로 찾은 맨 위 프로세스 (하위 프로세스까지 함께 녹음)."""
-    if app not in config.CHAT_APPS:
-        raise RuntimeError("이 채널의 앱(고릴라·콩·mini·레인보우)을 몰라 앱 소리를 받을 수 없습니다 — 채널 설정에서 앱을 정하세요")
     label = config.app_label(app)
     procs = processes() if procs is None else procs
-    name = (config.get(conn, f"{app}.process_name") or "").strip().lower()
-    wpid = None if name else window_pid(conn, app)
+    wpid = None if name or cfg is None else window_pid(cfg)
     s = pick_session(procs, audio_sessions() if sessions is None else sessions, name, _app_hint(app), wpid)
     if s is not None:
         return s["pid"], procs[s["pid"]][1]

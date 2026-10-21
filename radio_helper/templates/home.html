@@ -185,7 +185,7 @@
     <p style="margin-top:10px"><b>장치 점검</b> <span class="muted">{{ multi.test.at }}</span></p>
     <ul class="list">{% for it in multi.test['items'] %}
       <li>{% if it.error or it.level < 8 %}<span class="badge bad">확인 필요</span>{% else %}<span class="badge ok">소리 {{ it.level }}</span>{% endif %}
-        {{ it.label }} {{ it.channel }} <span class="muted">[{{ it.device_name or it.device or ('앱 소리' if it.source == 'app' else '기본 스피커') }}]</span>
+        {{ it.label }} {{ it.channel }} <span class="muted">[{% if it.source == 'app' %}{{ it.device_name if it.device_name and it.device_name != it.device else '앱 소리' }}{% else %}{{ it.device_name or it.device or '기본 스피커' }}{% endif %}]</span>
         {% if it.text %} → '{{ it.text }}'{% endif %}{% if it.error %} <span class="muted">{{ it.error }}</span>{% endif %}
         {% if it.app_process %}<span class="hint">(볼륨 믹서: {{ it.app_process }} 소리 {{ it.app_peak }})</span>{% elif it.source == 'app' and it.app_peak is none and multi.test.sessions %}<span class="hint">(볼륨 믹서에 이 앱 소리 없음)</span>{% endif %}</li>
     {% endfor %}</ul>
