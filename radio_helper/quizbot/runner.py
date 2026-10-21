@@ -13,14 +13,14 @@ import json
 import re
 import sqlite3
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Callable, Protocol
 
 from .. import db, evidence, quiz
-from . import config, lanes, live, silence, story
+from . import config, lanes, live, power, silence, story
 from . import sms as sms_mod
 from . import answerer as answerer_mod
 from .answerer import AnswererError, QuizAnalysis, StoryAnalysis
@@ -110,6 +110,7 @@ class Deps:
     chat_senders: dict | None = None                    # 앱별 채팅 전송 {"mini": ..., "kong": ...} (없으면 sender)
     launch_board: Callable[[int], str] | None = None    # 원고 번호 → 게시판 자동 등록 도구를 띄우고 기록 파일 이름
     refind: Callable[[sqlite3.Connection, str], dict | None] | None = None   # 채팅 창을 못 찾을 때 다시 찾기 (finder.auto)
+    clues: Callable[[sqlite3.Connection, str | None], str] | None = None     # 소리가 끊겼을 때 원인 자료 (clues.collect)
 
 
 # ── 판단 ────────────────────────────────────────────────────────────
@@ -285,11 +286,20 @@ class Runner:
         db.set_setting(self.conn, self.key("recording"), after or "")
         return silence.speaker_note(before, after)
 
-    def handle_silence(self, recorder, now: datetime) -> None:
+    def cut_clues(self, channel: str | None) -> str:
+        """끊긴 때의 PC 상태 (앱별 소리·기본 스피커·마지막 입력·그래픽카드 재시작) — 모든 채널이 함께 끊겼는지 가리는 자료."""
+        if self.deps.clues is None:
+            return ""
+        try:
+            return self.deps.clues(self.conn, channel)
+        except Exception as e:
+            return f" (원인 자료를 읽지 못함: {type(e).__name__})"
+
+    def handle_silence(self, recorder, now: datetime, channel: str | None = None) -> None:
         events, self._silence_events = self._silence_events, []
         for kind, quiet, since in events:
             if kind == "cut":
-                notes = self.speaker_check(recorder)
+                notes = self.speaker_check(recorder) + self.cut_clues(channel)
                 if live.stt_test_alive():
                     notes += " (받아쓰기 테스트가 함께 돌고 있었습니다.)"
                 self.event(silence.cut_message(since, quiet, self.silence.touches_before(since), notes))
@@ -431,7 +441,9 @@ class Runner:
         self.silence, self._silence_events = silence.SilenceWatch(), []
         db.set_setting(self.conn, self.key("silent_since"), "")
         self.state("녹음 장치 여는 중")
-        with self.deps.recorder_factory(chunk_seconds) as recorder:
+        # 듣는 동안 화면 꺼짐·절전을 막는다: 모니터 스피커(HDMI·DP)로 듣는데 화면이 꺼지면 모든 라디오 소리가 끊김 (0.61)
+        awake = power.keep_awake() if live.flag(self.conn, "live.keep_awake") else nullcontext(False)
+        with awake, self.deps.recorder_factory(chunk_seconds) as recorder:
             per_second = hasattr(recorder, "on_level")
             if per_second:
                 recorder.on_level = self.on_second  # 녹음 중 1초마다 소리 크기를 화면에 알리고 끊김을 살핀다
@@ -468,7 +480,7 @@ class Runner:
                 self.report_level(live.level_percent(level))
                 if not per_second:
                     self.watch_level(now, live.level_percent(level))
-                self.handle_silence(recorder, now)
+                self.handle_silence(recorder, now, session["channel"])
                 if level < SILENCE_RMS:
                     silent += 1
                     if silent == SILENT_CHUNKS_WARN and not self.silence.heard:  # 듣다가 끊긴 것은 위에서 따로 남긴다
@@ -1330,7 +1342,7 @@ def lane_item(conn: sqlite3.Connection, lane: str) -> dict:
 def build_real_deps(conn: sqlite3.Connection, lane: str = "") -> Deps:
     """윈도우에서 실제로 쓰는 구성. lane: 동시 청취의 칸 (주 채널은 "")."""
     from ..app import launch_autofill
-    from . import finder
+    from . import clues, finder
     from .answerer import make as make_answerer
     from .gorilla import Gorilla
     from .sms import AdbSms
@@ -1355,4 +1367,5 @@ def build_real_deps(conn: sqlite3.Connection, lane: str = "") -> Deps:
         lock=shared_input_lock,
         launch_board=lambda draft_id: launch_autofill(["--draft", str(draft_id), "--mode", "post"]),
         refind=lambda c, app: finder.auto(c, app),
+        clues=lambda c, channel: clues.collect(c, channel),
     )

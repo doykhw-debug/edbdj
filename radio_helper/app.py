@@ -37,7 +37,7 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
                 ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"),
                 ("live.board_auto", "board_auto"), ("live.story_approved", "story_approved"),
                 ("live.song_free", "song_free"), ("live.sms_fallback", "sms_fallback"), ("live.dj_song", "dj_song"),
-                ("live.chat_consensus", "chat_consensus"))
+                ("live.chat_consensus", "chat_consensus"), ("live.keep_awake", "keep_awake"))
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
                      "listen_lanes", "listen_lanes_test", "stt_gpu_recheck", "listen_vbcable",

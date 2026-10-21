@@ -56,6 +56,7 @@ DEFAULTS = {
     "live.board_auto": "1",               # 방송에서 게시판에 남겨 달라는 사연: 검사 경고 없으면 자동 승인·입력·등록
     "live.quiz_always": "1",              # 퀴즈는 확신도와 상관없이 정답 후보를 보냄 (객관식·주관식 모두, 틀려도 손해 없음)
     "live.captions": "1",                 # 자막 창 띄우기
+    "live.keep_awake": "1",               # 듣는 동안 화면 꺼짐·절전 막기 (모니터 스피커로 들을 때 화면이 꺼지면 소리도 끊김, 0.61)
     # 분석 (Claude) — 구독 한도·요금을 아끼려고 Sonnet·low (Opus·medium 일 때 몇 시간 만에 구독 한도에 걸렸음)
     "quizbot.model": "claude-sonnet-5-5",
     "quizbot.effort": "low",

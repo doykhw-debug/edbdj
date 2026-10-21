@@ -396,6 +396,10 @@ class SessionScanner:
                 default_id = self.device_id(default)
             except ComError:
                 default_id = ""
+            try:
+                default_name = self.device_name(default) if default_id else ""
+            except ComError:
+                default_name = ""
             n = c_uint32()
             com_call(coll, 3, [POINTER(c_uint32)], byref(n))        # GetCount
             for i in range(n.value):
@@ -430,7 +434,7 @@ class SessionScanner:
                         continue
                     if pid.value:                                    # 0 = 시스템 소리
                         found.append({"pid": pid.value, "active": state.value == 1, "peak": 0.0, "meter": meter,
-                                      "device": name, "default": is_default})
+                                      "device": name, "default": is_default, "default_name": default_name})
             for k in range(METER_SAMPLES):
                 for f in found:
                     v = c_float()
@@ -447,7 +451,7 @@ class SessionScanner:
         merged: dict[int, dict] = {}                                 # 같은 프로세스가 장치 여럿에 소리 길을 열 수 있음
         for f in sorted(found, key=lambda x: (x["peak"], x["active"]), reverse=True):   # 장치는 가장 크게·재생 중인 것
             m = merged.setdefault(f["pid"], {"pid": f["pid"], "active": False, "peak": 0.0, "device": f["device"],
-                                             "default": f["default"]})
+                                             "default": f["default"], "default_name": f["default_name"]})
             m["active"] = m["active"] or f["active"]
             m["peak"] = max(m["peak"], f["peak"])
         return sorted(merged.values(), key=lambda x: -x["peak"])

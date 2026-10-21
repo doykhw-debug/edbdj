@@ -235,9 +235,16 @@ def similarity(a: list[float], b: list[float]) -> float:
     return float(np.corrcoef(x, y)[0, 1])
 
 
-def judge(items: list[dict], gpu_ok: bool) -> list[str]:
-    """장치 점검 결과 → 안내 (순수 계산). items: [{label, channel, device, source, level, envelope}]"""
+def judge(items: list[dict], gpu_ok: bool, default_device: str = "", hear_device: str = "") -> list[str]:
+    """장치 점검 결과 → 안내 (순수 계산). items: [{label, channel, device, source, level, envelope}]
+    default_device: 윈도우 기본 스피커 이름 · hear_device: 소리가 나는 다른 앱들이 쓰는 출력 장치 (0.61)"""
+    from .clues import is_virtual
+
     out = []
+    if is_virtual(default_device):
+        out.append(f"윈도우 기본 스피커가 가상 장치 '{default_device}' 입니다 — 출력 장치를 '기본값'으로 둔 앱 소리는 귀에 "
+                   "들리지 않습니다. 윈도우 설정 → 시스템 → 소리 → 출력에서 실제 스피커(모니터·스피커)를 고르세요 "
+                   "(가상 오디오를 설치하면 윈도우가 기본 장치를 바꿔 두는 경우가 있음)")
     for it in items:
         if it.get("error"):
             out.append(f"{it['label']} '{it['channel']}': 녹음 장치를 열지 못함 — {it['error']}")
@@ -246,10 +253,15 @@ def judge(items: list[dict], gpu_ok: bool) -> list[str]:
                        f"{it['app_peak']}) 받지 못했습니다 — 이 PC 에서 앱 소리 받기가 안 되는 것 같습니다. 이 화면을 찍어 "
                        "보내 주세요 (그동안은 '출력 장치로 나눠 녹음' + 가상 장치로 들을 수 있음)")
         elif it["level"] < QUIET and it.get("source") == "app" and it.get("app_process") and not it.get("app_default", True):
-            out.append(f"{it['label']} '{it['channel']}': {it['app_process']} 소리가 기본 스피커가 아닌 "
-                       f"'{it.get('app_device') or '다른 장치'}'(으)로 나가고, 볼륨 믹서에서도 소리가 {it.get('app_peak') or 0} 입니다 — "
-                       "윈도우 설정 → 시스템 → 소리 → 볼륨 믹서에서 그 앱의 출력 장치를 '기본값'으로 돌리세요 "
-                       "(가상 장치·16ch 장치에서는 재생이 안 되는 앱이 있음)")
+            # 0.59 는 '기본값'으로 돌리라고만 했는데, 기본값으로 바꿔도 소리 0 인 PC 가 있었다 (레인보우) → 먼저 재생 여부,
+            # 그다음 소리가 나는 다른 앱과 같은 장치로
+            dev = it.get("app_device") or "다른 장치"
+            where = (f"'{hear_device}'(소리가 나는 다른 채널 앱과 같은 장치)" if hear_device and hear_device != dev
+                     else "귀에 들리는 실제 스피커")
+            out.append(f"{it['label']} '{it['channel']}': 윈도우 볼륨 믹서에서도 {it['app_process']} 소리가 "
+                       f"{it.get('app_peak') or 0} 입니다 (출력 '{dev}') — 앱이 소리를 내지 않고 있어 도우미가 받을 소리가 "
+                       "없습니다. 먼저 그 앱에서 재생(▶)을 눌러 귀에 들리는지 보고, 들리지 않으면 윈도우 설정 → 시스템 → 소리 → "
+                       f"볼륨 믹서에서 그 앱의 출력 장치를 {where}(으)로 지정하세요")
         elif it["level"] < QUIET and it.get("source") == "app" and it.get("app_process"):
             out.append(f"{it['label']} '{it['channel']}': 윈도우 볼륨 믹서에서도 {it['app_process']} 소리가 "
                        f"{it.get('app_peak') or 0} 입니다 — 앱이 소리를 내지 않고 있습니다. 앱에서 재생(▶)을 누르고, 볼륨 믹서에서 "
@@ -274,6 +286,18 @@ def judge(items: list[dict], gpu_ok: bool) -> list[str]:
         out.append("그래픽카드 받아쓰기가 꺼져 있어(CPU) 여러 채널을 함께 받아쓰면 녹음보다 느릴 수 있습니다 — "
                    "'그래픽카드 다시 점검'을 해 보고, 그래도 CPU면 모델을 small 로 낮추세요")
     return out
+
+
+def loud_device(procs: dict, sessions: list[dict]) -> str:
+    """소리가 나는 앱(도우미 녹음 제외)이 가장 많이 쓰는 출력 장치 — 사용자가 실제로 듣는 장치일 가능성이 큼."""
+    from collections import Counter
+
+    from .clues import OURS
+
+    count = Counter(x.get("device") or "" for x in sessions
+                    if x["peak"] * 100 >= QUIET and procs.get(x["pid"], (0, ""))[1] not in OURS)
+    count.pop("", None)
+    return count.most_common(1)[0][0] if count else ""
 
 
 def scan_sessions() -> tuple[dict, list[dict]]:
@@ -346,6 +370,8 @@ def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=No
             it["app_peak"] = int(round(hit["peak"] * 100)) if hit else None
             it["app_device"] = (hit.get("device") or "") if hit else ""
             it["app_default"] = bool(hit.get("default", True)) if hit else True
+    default_device = next((x["default_name"] for x in sessions if x.get("default_name")), "")
+    hear_device = loud_device(procs, sessions)
     from .audio import rms
 
     for i, it in enumerate(items):
@@ -364,7 +390,8 @@ def device_test(conn: sqlite3.Connection, seconds: int = 10, recorder_factory=No
 
         gpu_ok = bool((gpu.saved_check(conn) or {}).get("ok"))
     result = {"at": db.now(), "items": [{k: v for k, v in it.items() if k != "envelope"} for it in items],
-              "warnings": judge(items, gpu_ok), "gpu_ok": gpu_ok,
+              "warnings": judge(items, gpu_ok, default_device, hear_device), "gpu_ok": gpu_ok,
+              "default_device": default_device,
               "sessions": [{"exe": procs.get(x["pid"], (0, "?"))[1], "pid": x["pid"], "peak": int(round(x["peak"] * 100)),
                             "active": x["active"], "device": x.get("device") or "", "default": x.get("default", True)}
                            for x in sessions[:12]]}
