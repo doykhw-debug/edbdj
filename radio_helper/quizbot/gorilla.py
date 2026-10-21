@@ -251,6 +251,34 @@ def _dpi_aware() -> None:
         pass
 
 
+MOUSE_DOWN_UP = {False: (0x0002, 0x0004), True: (0x0008, 0x0010)}   # 왼쪽 누름·뗌 (단추를 바꿔 쓰면 오른쪽)
+
+
+def click_at(x: int, y: int, user32=None, sleep=time.sleep) -> None:
+    """화면 한 곳을 클릭한다. 좌표는 모니터 여럿을 합친 가상 화면 기준 (왼쪽·위 모니터는 음수일 수 있음).
+    pywinauto 0.6.9 의 클릭은 커서를 옮긴 뒤 '주 모니터 크기'로 환산한 절대 이동을 한 번 더 보내, 다른 모니터의 자리는
+    주 모니터 가장자리로 끌려가 눌렸다 (0.60 — 모니터가 둘 이상이면 주 모니터에 있는 앱에만 입력됨).
+    여기서는 커서를 그 자리로 옮긴 것을 확인한 뒤, 이동 없이 그 자리에서 누르고 뗀다."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = user32 or ctypes.windll.user32
+    x, y = int(x), int(y)
+    pt = wintypes.POINT()
+    for _ in range(3):
+        user32.SetCursorPos(x, y)
+        sleep(0.05)
+        user32.GetCursorPos(ctypes.byref(pt))
+        if (pt.x, pt.y) == (x, y):
+            break
+    else:
+        raise GorillaError(f"마우스를 ({x}, {y}) 자리로 옮기지 못해 누르지 않았습니다 (모니터 밖이거나 다른 프로그램이 막음)")
+    down, up = MOUSE_DOWN_UP[bool(user32.GetSystemMetrics(23))]          # SM_SWAPBUTTON
+    user32.mouse_event(down, 0, 0, 0, 0)
+    sleep(0.03)
+    user32.mouse_event(up, 0, 0, 0, 0)
+
+
 def _user32():
     """창 번호(HWND)가 잘리지 않도록 형식을 지정한 user32."""
     import ctypes
@@ -1180,10 +1208,8 @@ class Gorilla:
             time.sleep(0.1)
 
     def _click(self, w, point: tuple[int, int], label: str) -> None:
-        from pywinauto import mouse
-
         self._check_point(w, point, label)
-        mouse.click(coords=point)
+        click_at(*point)
 
     @staticmethod
     def _center(control) -> tuple[int, int]:
@@ -1210,7 +1236,7 @@ class Gorilla:
             return None
         edit = self._find_input(w)
         self._check_point(w, self._center(edit), "입력칸")
-        edit.click_input()
+        click_at(*self._center(edit))   # (pywinauto click_input 은 다른 모니터에서 주 모니터 가장자리를 누름)
         time.sleep(0.2)
         self._paste(w, text)
         time.sleep(0.2)
@@ -1239,7 +1265,7 @@ class Gorilla:
                        if pattern.search(b.element_info.name or "") and b.is_visible()]
             if buttons:
                 self._check_point(w, self._center(buttons[-1]), "전송 버튼")
-                buttons[-1].click_input()
+                click_at(*self._center(buttons[-1]))
                 return
             if mode == "button":
                 raise GorillaError("전송 버튼을 찾지 못했습니다.")

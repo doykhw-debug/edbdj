@@ -3,6 +3,39 @@
 {% block content %}
 <h1>코너·게시판 목록 {% if program %}<span class="muted">{{ program }}</span>{% endif %}</h1>
 
+<div class="panel" id="daily">
+  <h2>매일 게시판 확인 <span class="muted">하루 한 번 모든 코너를 하나씩 — 아직 올린 적 없는 게시판이나 새 공지가 있으면 맞는 사연을 길게 올림</span>
+    {% if daily.on %}<span class="badge ok">켜짐</span>{% else %}<span class="badge">꺼짐</span>{% endif %}
+    {% if daily.on %}<span class="badge {{ 'warn' if daily.test else 'info' }}">{{ '시험 (입력만)' if daily.test else '등록까지' }}</span>{% endif %}</h2>
+  <form method="post" action="{{ url_for('corners_daily') }}" class="actions" style="margin-top:0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="inline"><input type="checkbox" name="on" value="1" {{ 'checked' if daily.on }}> 매일 확인</label>
+    <input type="time" name="time" value="{{ daily.time }}" style="max-width:120px">
+    <label class="inline"><input type="checkbox" name="test" value="1" {{ 'checked' if daily.test }}> 시험 (입력하고 증거 사진만, 등록 안 누름)</label>
+    <label class="inline">하루 최대 <input type="number" name="cap" value="{{ daily.cap }}" min="0" max="50" style="max-width:70px"> 건 <small class="muted">(0 = 제한 없음)</small></label>
+    <button>저장</button>
+  </form>
+  <p class="hint">대상 코너 {{ daily.eligible }}개 · 오늘 자동 입력·등록 {{ daily.today }}건. 공지를 매번 다시 읽고, 받지 않음·AI 글 제한·첨부 필요·마감·방송 요일이 아니면
+    올리지 않습니다. 같은 게시판은 공지가 바뀌었을 때만 다시 올리고, 같은 경험은 같은 방송국에 한 번만 씁니다.
+    게시판 글은 채팅용 한 줄이 아니라 확인한 사연 본문 전체(인사·맺음 포함)로 씁니다. 코너마다 따로 정한 '매일 자동'은 그 설정대로 합니다.</p>
+  <p style="margin:10px 0 4px"><b>로그인</b> <span class="muted">정해진 시각의 자동 실행은 창을 띄우지 않으므로, 미리 로그인해 두어야 등록됩니다</span></p>
+  <ul class="list">
+    {% for t in daily.targets %}{% set st = daily.logins.get(t.station) %}
+    <li>{{ t.station }}
+      {% if st and st.ok %}<span class="badge ok">로그인됨</span>{% elif st and st.ok == false %}<span class="badge bad">로그인 필요</span>{% else %}<span class="badge">아직 확인 안 함</span>{% endif %}
+      {% if st %}<span class="muted">{{ st.detail }} ({{ st.at[5:16] }})</span>{% endif %}</li>
+    {% else %}<li class="muted">코너를 추가하면 방송국별 로그인 상태가 나옵니다.</li>{% endfor %}
+  </ul>
+  <div class="actions">
+    <form method="post" action="{{ url_for('corners_login') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">미리 로그인 (도우미 브라우저 창 열기)</button></form>
+    <form method="post" action="{{ url_for('corners_login_check') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">로그인 상태 확인</button></form>
+  </div>
+  <p class="hint">로그인은 도우미 전용 브라우저 창에서 직접 합니다 (아이디·비밀번호·보안 문자는 이 프로그램이 읽거나 저장하지 않음).
+    Aside·크롬 같은 다른 브라우저의 로그인은 가져올 수 없어 이 창에서 한 번 로그인해 두면, 다음부터 창 없이 매일 등록합니다.</p>
+  {% if daily.recent %}<details class="muted"><summary>최근 게시판 작업</summary>
+    {% for e in daily.recent %}<div>{{ e.at[5:16] }} · {{ e.message }}</div>{% endfor %}</details>{% endif %}
+</div>
+
 <div class="panel">
   <form method="post" action="{{ url_for('programs_refresh') }}" class="actions" style="margin-top:0">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -61,6 +61,7 @@ def desk(monkeypatch):
     keyboard.send_keys = lambda keys, pause=None: state.keys.append(keys)
     monkeypatch.setitem(sys.modules, "pywinauto", pw)
     monkeypatch.setitem(sys.modules, "pywinauto.keyboard", keyboard)
+    monkeypatch.setattr(gorilla, "click_at", lambda x, y: state.clicks.append((x, y)))   # 0.60: 여러 모니터용 클릭
     monkeypatch.setattr(gorilla, "window_at_point", lambda x, y: dict(state.at_point, point=(x, y)))
     monkeypatch.setattr(gorilla, "foreground_root", lambda: state.front)
     monkeypatch.setattr(gorilla.Gorilla, "_clipboard", staticmethod(lambda text=None: text))

@@ -385,9 +385,7 @@ class Desk:
 
     def click(self, point: tuple[int, int], wins: list[dict], process: str) -> bool:
         """그 자리의 앱 창을 앞으로 가져온 뒤, 그 자리가 정말 그 앱일 때만 누른다 (다른 프로그램을 누르지 않게)."""
-        from pywinauto import mouse
-
-        from .gorilla import window_at_point
+        from .gorilla import click_at, window_at_point
 
         owner = window_of(point, wins)
         if owner is None:
@@ -398,7 +396,7 @@ class Desk:
                 return False
         except Exception:
             return False
-        mouse.click(coords=(int(point[0]), int(point[1])))
+        click_at(int(point[0]), int(point[1]))   # 여러 모니터 (pywinauto mouse.click 은 주 모니터로 끌려감)
         time.sleep(2.0)   # 채팅 창이 펼쳐질 시간
         return True
 

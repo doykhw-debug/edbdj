@@ -1048,7 +1048,7 @@ class Runner:
             return False
         corner = self.conn.execute("SELECT char_limit FROM corners WHERE id = ?", (d["corner_id"],)).fetchone()
         limit = (corner["char_limit"] if corner and corner["char_limit"] else None) or 2000
-        body = story.approved_text(self.conn, exp, limit)
+        body = story.approved_text(self.conn, exp, limit, board=True)
         title = (exp["label"] or "").strip()[:60] or d["title"]
         self.conn.execute("UPDATE drafts SET title = ?, body = ?, source = 'manual', updated_at = ? WHERE id = ?",
                           (title, body, db.now(), draft_id))

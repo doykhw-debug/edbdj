@@ -94,13 +94,16 @@ def candidate_experiences(conn: sqlite3.Connection, broadcaster: str | None = No
     return out
 
 
-def approved_text(conn: sqlite3.Connection, exp, limit: int, song: str = "") -> str:
+def approved_text(conn: sqlite3.Connection, exp, limit: int, song: str = "", board: bool = False) -> str:
     """사용자가 '실제로 있었던 일'로 확인하고 고친 경험 글 그대로 만든 사연 (AI가 덧붙인 내용 없음).
     공감로그용 한 줄이 있으면 그것, 없으면 본문(게시판처럼 길게 쓸 수 있으면 마무리까지)을 문장 단위로 앞에서부터
-    limit 안에 담는다. 다른 사람 이야기면 '제 ○○ 이야기인데요,'로 시작한다. 가릴 단어(실명 등)는 ○○로 바꾼다."""
+    limit 안에 담는다. 다른 사람 이야기면 '제 ○○ 이야기인데요,'로 시작한다. 가릴 단어(실명 등)는 ○○로 바꾼다.
+    board: 게시판 글 — 채팅용 한 줄보다 본문이 길면 본문을 쓴다 (0.60 — 예전에는 한 줄이 있으면 게시판에도 한 줄만 올렸음)."""
     terms = banned_terms(conn, exp)
     tail = f" (신청곡: {song})" if song else ""
     line = (exp["gorilla_line"] or "").strip()
+    if board and len((exp["story"] or "").strip()) > len(line):
+        line = ""
     if line and len(line) + len(tail) <= limit:
         return generator.mask_terms(line, terms) + tail
     about = about_of(conn, exp)

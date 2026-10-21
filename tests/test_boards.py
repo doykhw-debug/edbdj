@@ -128,7 +128,8 @@ def test_story_corner_uses_approved_text_as_is(conn):
     fake = FakeAnswerer(note=notice(kind="story", corner_title="사연과 신청곡", theme="사연과 신청곡"))
     boards.run(conn, cid, test=True, answerer=fake, reader=page_reader(), poster=record_poster(calls), now=MONDAY)
     body = calls[0]["draft"]["body"]
-    assert body.startswith("주말에 집에서 영상 편집을 하는데") and body.endswith("(신청곡: 아이유 - 밤편지)")
+    assert body.startswith("안녕하세요.\n\n주말에 집에서 영상 편집을 하는데")                 # 0.60: 게시판 글 모양 (인사·맺음)
+    assert body.endswith("(신청곡: 아이유 - 밤편지)\n\n늘 감사합니다.")
     d = conn.execute("SELECT * FROM drafts WHERE id = ?", (calls[0]["draft"]["id"],)).fetchone()
     assert (d["experience_id"], d["fact_confirmed"]) == (eid, 1)
 
@@ -185,6 +186,9 @@ def test_same_station_never_twice_other_station_ok(conn):
                       now=MONDAY)
     assert "등록 확인" in text and fake.seen["candidates"] == [eid]
     text = boards.run(conn, cid, test=False, answerer=fake, reader=page_reader(), poster=record_poster(calls), now=MONDAY)
+    assert "지금 공지로 이미 올렸습니다" in text and len(calls) == 1                   # 0.60: 같은 공지에는 다시 안 올림
+    fake.note = notice(notice="이번 주 주제: 가을 운동회 이야기를 보내 주세요", theme="가을 운동회")   # 새 공지
+    text = boards.run(conn, cid, test=False, answerer=fake, reader=page_reader(), poster=record_poster(calls), now=MONDAY)
     assert "MBC에 아직 안 보낸" in text and len(calls) == 1
     # gates 도 방송국별로 본다: 같은 경험의 MBC 원고는 막힘
     did2 = make_draft(conn, eid, cid)
@@ -214,7 +218,7 @@ def test_tick_once_a_day_at_time_and_days(conn):
     launch = lambda args: launched.append(args) or "boards_x.log"   # noqa: E731
     assert boards.tick(conn, MONDAY.replace(hour=10, minute=29), launch) == []
     assert boards.tick(conn, MONDAY.replace(hour=10, minute=31), launch) == [cid]
-    assert launched == [["run", "--corner", str(cid)]]
+    assert launched == [["run", "--corner", str(cid), "--scheduled"]]          # 정해진 시각 실행 = 창 없이·하루 상한
     assert boards.tick(conn, MONDAY.replace(hour=15), launch) == []                    # 오늘은 했음
     assert boards.tick(conn, MONDAY.replace(day=20, hour=11), launch) == []            # 화요일은 아님
     assert boards.tick(conn, MONDAY.replace(day=21, hour=11), launch) == [cid]         # 수요일

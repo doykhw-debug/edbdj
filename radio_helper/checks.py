@@ -117,8 +117,18 @@ def check_length(body: str, char_limit: int | None) -> list[Finding]:
     return []
 
 
+GREETING, CLOSING = "안녕하세요.", "늘 감사합니다."   # 게시판 글 모양 (boards.letter) — 견줄 때는 뺀다
+
+
+def story_core(text: str) -> str:
+    """인사·맺음 줄을 뺀 본문 (모든 게시판 글에 같은 인사가 붙어 서로 비슷해 보이지 않게)."""
+    return "\n".join(line for line in (text or "").splitlines() if line.strip() not in (GREETING, CLOSING)).strip()
+
+
 def check_similarity(body: str, previous_bodies: Iterable[str], threshold: float = 0.6) -> list[Finding]:
+    body = story_core(body)
     for prev in previous_bodies:
+        prev = story_core(prev)
         if prev and SequenceMatcher(None, body, prev).ratio() >= threshold:
             return [Finding(WARN, "similar_text",
                             "이전에 제출한 글과 문장이 많이 비슷합니다. 같은 사건을 문장만 바꿔 여러 곳에 보내지 않습니다.")]

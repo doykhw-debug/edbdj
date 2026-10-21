@@ -41,6 +41,7 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
                      "listen_lanes", "listen_lanes_test", "stt_gpu_recheck", "listen_vbcable",
+                     "corners_login", "corners_login_check",
                      "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
@@ -64,6 +65,8 @@ def create_app(data_dir: str | None = None) -> Flask:
     qconfig.migrate_defaults(conn)
     qconfig.migrate_channels(conn)
     qconfig.migrate_billing(conn, server.is_server())
+    if not server.is_server():
+        boards.enable_daily_once(conn)
     conn.close()
 
     app.jinja_env.globals.update(
@@ -587,8 +590,44 @@ def create_app(data_dir: str | None = None) -> Flask:
         for c in counts:
             groups.setdefault(c["channel"], []).append(c)
         last = g.conn.execute("SELECT * FROM events WHERE kind = 'programs' ORDER BY id DESC LIMIT 1").fetchone()
+        d = boards.daily(g.conn)
+        board_daily = {**d, "today": boards.done_today(g.conn, datetime.now()), "logins": boards.logins(g.conn),
+                       "targets": boards.login_targets(g.conn),
+                       "eligible": sum(1 for r in g.conn.execute("SELECT * FROM corners WHERE board_exists = 1").fetchall()
+                                       if stations.corner_station(r)),
+                       "recent": g.conn.execute("SELECT * FROM events WHERE kind = 'post' ORDER BY id DESC LIMIT 6").fetchall()}
         return render_template("corners.html", corners=rows, programs=programs_, program=program,
-                               groups=groups, total=sum(c["boards"] for c in counts), last=last)
+                               groups=groups, total=sum(c["boards"] for c in counts), last=last, daily=board_daily)
+
+    @app.post("/corners/daily")
+    def corners_daily():
+        """매일 게시판 확인: 켜기·시각·시험(입력만)·하루 상한."""
+        c = g.conn
+        at = form("time")
+        db.set_setting(c, boards.DAILY_KEY, "1" if request.form.get("on") else "0")
+        db.set_setting(c, boards.DAILY_TIME_KEY, at if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", at) else "10:30")
+        db.set_setting(c, boards.DAILY_TEST_KEY, "1" if request.form.get("test") else "0")
+        cap = form("cap")
+        db.set_setting(c, boards.DAILY_CAP_KEY, str(max(0, min(50, int(cap)))) if cap.isdigit() else "5")
+        d = boards.daily(c)
+        db.log(c, "post", f"매일 게시판 확인 {'켬' if d['on'] else '끔'} · {d['time']} · "
+                          f"{'시험(입력만)' if d['test'] else '등록까지'} · 하루 {d['cap'] or '제한 없이'}건")
+        flash("매일 게시판 확인 설정을 저장했습니다." + (" 지금은 시험 모드라 등록은 누르지 않습니다 — 증거 사진을 확인한 뒤 "
+                                                       "'시험'을 끄면 등록까지 합니다." if d["on"] and d["test"] else ""))
+        return redirect(url_for("corners") + "#daily")
+
+    @app.post("/corners/login")
+    def corners_login():
+        log_name = launch_module("radio_helper.boards", ["login"], "boards")
+        flash("도우미 브라우저 창이 뜹니다. 방송국 탭마다 직접 로그인하고 창을 닫으면 로그인 상태를 확인해 적습니다 "
+              f"(로그인 정보는 이 프로그램이 읽지 않고 도우미 브라우저에만 남습니다). (기록: {log_name})")
+        return redirect(url_for("corners") + "#daily")
+
+    @app.post("/corners/login-check")
+    def corners_login_check():
+        log_name = launch_module("radio_helper.boards", ["login-check"], "boards")
+        flash(f"방송국마다 창 없이 열어 로그인이 살아 있는지 확인합니다. 1~2분 뒤 새로 고치세요. (기록: {log_name})")
+        return redirect(url_for("corners") + "#daily")
 
     # ── 파워FM 프로그램 ───────────────────────────────────────────
     @app.get("/programs")

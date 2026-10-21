@@ -166,3 +166,45 @@ def test_running_check_uses_marked_spot_like_send(desk, screen, monkeypatch):
     assert g.is_running()
     monkeypatch.setattr(gorilla, "app_window_at", lambda x, y, proc: None)
     assert not g.is_running()                                          # 정말 없을 때만 '못 찾음'
+
+
+# ── 0.60: 모니터 여럿 ────────────────────────────────────────────────
+class FakeUser32:
+    """SetCursorPos·GetCursorPos·mouse_event 를 적어 두는 가짜 user32 (가상 화면 좌표 그대로)."""
+
+    def __init__(self, swap=0, stuck=None):
+        self.pos, self.swap, self.stuck, self.events = (0, 0), swap, stuck, []
+
+    def SetCursorPos(self, x, y):
+        self.pos = self.stuck or (x, y)
+        return 1
+
+    def GetCursorPos(self, ptr):
+        ptr._obj.x, ptr._obj.y = self.pos
+        return 1
+
+    def GetSystemMetrics(self, index):
+        assert index == 23
+        return self.swap
+
+    def mouse_event(self, flags, dx, dy, data, extra):
+        self.events.append((flags, dx, dy, self.pos))
+
+
+def test_click_lands_on_other_monitors():
+    # 주 모니터 1920×1080 + 오른쪽 모니터(2500, 400) + 왼쪽 모니터(-1500, 300): 그 자리에서 누르고 뗌, 이동·절대 좌표 없음
+    for point in ((2500, 400), (-1500, 300), (800, 500)):
+        u = FakeUser32()
+        gorilla.click_at(*point, user32=u, sleep=lambda s: None)
+        assert [e[0] for e in u.events] == [0x0002, 0x0004] and all(e[3] == point for e in u.events)
+        assert all(e[0] & (0x0001 | 0x8000) == 0 for e in u.events)          # MOVE·ABSOLUTE 를 보내지 않음
+    u = FakeUser32(swap=1)
+    gorilla.click_at(10, 10, user32=u, sleep=lambda s: None)
+    assert [e[0] for e in u.events] == [0x0008, 0x0010]                     # 단추를 바꿔 쓰면 오른쪽이 주 단추
+
+
+def test_click_refuses_when_cursor_cannot_get_there():
+    u = FakeUser32(stuck=(1919, 400))                                       # 모니터 사이 빈 곳 등 → 다른 자리
+    with pytest.raises(gorilla.GorillaError, match="옮기지 못해 누르지 않았습니다"):
+        gorilla.click_at(2500, 400, user32=u, sleep=lambda s: None)
+    assert u.events == []

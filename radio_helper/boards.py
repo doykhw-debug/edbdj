@@ -1,6 +1,13 @@
 """방송국(SBS·MBC·KBS·CBS) 상관없이 코너 게시판에 자동으로 글을 올린다.
 
-    python -m radio_helper.boards run --corner 12 [--test | --real]
+    python -m radio_helper.boards run --corner 12 [--test | --real] [--scheduled]
+    python -m radio_helper.boards login          (미리 로그인: 도우미 브라우저 창에서 방송국마다 직접 로그인)
+    python -m radio_helper.boards login-check    (방송국마다 로그인이 살아 있는지 창 없이 확인)
+
+매일 게시판 확인 (0.60, 코너 화면 맨 위): 모든 코너를 하루 한 번 하나씩 확인해, 아직 올린 적 없는 게시판이거나
+그때와 공지가 달라졌으면(새 공지) 맞는 사연을 길게(채팅용 한 줄이 아닌 본문) 올린다. 같은 공지에는 다시 올리지 않는다.
+하루 상한(기본 5건)과 시험(입력만·증거 사진) 모드가 있다. 정해진 시각의 자동 실행은 창을 띄우지 않으므로, 로그인이
+풀렸으면 기다리지 않고 '로그인 필요'로 남긴다 (미리 로그인 버튼으로 다시 로그인).
 
 매번 (코너마다 정한 시각에 하루 한 번, 또는 화면의 '지금 실행'):
 1. 코너 화면을 연다 (창 없이, 도우미 전용 브라우저 — 한 번 로그인하면 기억). 글쓰기 칸이 없으면 '글쓰기'를 눌러 찾는다.
@@ -19,15 +26,31 @@ import argparse
 import json
 import re
 import sys
+import time
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
 from . import db, gates, stations
+from .checks import CLOSING, GREETING
 
 DAYS = "월화수목금토일"
 DEFAULT_LIMIT = {"short": 120}
 WRITE_LINK = re.compile(r"^\s*(글\s*쓰기|사연\s*(보내기|쓰기|올리기)|글\s*작성|작성하기|참여하기)\s*$")
 MAX_LINKS = 40
+BOARD_LOCK = "board_post.lock"   # 게시판 작업(공지 읽기·입력·로그인 확인)은 하나씩 — 도우미 브라우저 프로필 하나를 같이 씀
+DAILY_KEY, DAILY_TIME_KEY, DAILY_TEST_KEY, DAILY_CAP_KEY = "boards.daily", "boards.daily_time", "boards.daily_test", \
+    "boards.daily_cap"
+DAILY_DEFAULTS = {DAILY_KEY: "0", DAILY_TIME_KEY: "10:30", DAILY_TEST_KEY: "1", DAILY_CAP_KEY: "5"}
+DAILY_ENABLED = "meta.boards_daily_060"
+LOGIN_KEY = "boards.logins"
+LAUNCHED_KEY = "boards.launched_at"
+LAUNCH_GAP_SECONDS = 60          # 하나 띄운 뒤 잠금을 잡을 때까지 다음 것을 띄우지 않는다
+SAME_NOTICE = 0.8                # 공지 원문이 이만큼 비슷하면 같은 공지 (Claude 가 옮겨 적은 글이 조금씩 달라도)
+SAME_THEME = 0.6                 # 원문이 없을 때 주제 한 문장으로 견줌
+HOMES = {"SBS": "https://www.sbs.co.kr", "MBC": "https://www.imbc.com", "KBS": "https://www.kbs.co.kr",
+         "CBS": "https://www.cbs.co.kr"}
+LOGIN_WAIT_MINUTES = 20
 
 
 class BoardSkip(RuntimeError):
@@ -205,12 +228,18 @@ def pick_text(conn, notice: dict, exp, pick: dict) -> tuple[str, str] | None:
                 return None
     else:
         song = (exp["song"] or "").strip() if kind in ("song", "story") else ""
-        body = story.approved_text(conn, exp, limit, song=song)
+        body = letter(story.approved_text(conn, exp, limit, song=song, board=True), limit)
     title = (pick.get("title") or "").strip()
     if not title or len(title) > 40 or any(f["level"] in ("block", "warn") for f in
                                           story.message_checks(conn, title, exp, "ai", limit=40)):
         title = (exp["label"] or "").strip()[:40] or re.split(r"(?<=[.!?。])\s", body)[0][:40]
     return title, body
+
+
+def letter(body: str, limit: int) -> str:
+    """게시판 글 모양: 인사 — 본문 — 맺음 (글자 수 안에 들 때만, 사실은 덧붙이지 않음)."""
+    full = f"{GREETING}\n\n{body}\n\n{CLOSING}"
+    return full if len(full) <= limit else body
 
 
 def choose(conn, corner, notice: dict, answerer) -> tuple[int, str, str, str]:
@@ -254,18 +283,37 @@ def finish(conn, corner_id: int, text: str) -> str:
 
 
 def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime | None = None,
-        reader=read_page, poster=None, allow_window: bool | None = None) -> str:
-    """공지 읽기 → 판단 → 고르기 → 입력(·등록). 결과 글 (코너의 '마지막 결과'에도 적음)."""
+        reader=read_page, poster=None, allow_window: bool | None = None, scheduled: bool = False) -> str:
+    """공지 읽기 → 판단 → 고르기 → 입력(·등록). 결과 글 (코너의 '마지막 결과'에도 적음).
+    scheduled: 정해진 시각의 자동 실행 — 창을 띄우지 않고(로그인이 풀렸으면 기다리지 않음) 하루 상한을 지킨다."""
     from . import autofill
 
     now = now or datetime.now()
     corner = corner_row(conn, cid)
-    test = bool(corner["auto_test"]) if test is None else test
+    if test is None:
+        test = bool(corner["auto_test"]) if corner["auto_on"] else daily(conn)["test"]
     if db.is_stopped(conn):
         return finish(conn, cid, "일괄 중지가 켜져 있어 하지 않음")
     if stations.corner_station(corner) is None:
         return finish(conn, cid, "SBS·MBC·KBS·CBS 의 https 코너 주소가 아니라 하지 않음")
+    if scheduled:
+        allow_window = False
     try:
+        with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
+            return _run(conn, cid, test, answerer, now, reader, poster, allow_window, scheduled)
+    except autofill.AutofillError as e:     # 다른 게시판 작업이 오래 끝나지 않음
+        return finish(conn, cid, f"입력 중단 — {e}")
+
+
+def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, allow_window, scheduled: bool) -> str:
+    from . import autofill
+
+    corner = corner_row(conn, cid)
+    try:
+        if scheduled:
+            cap = daily(conn)["cap"]
+            if cap and done_today(conn, now) >= cap:                  # 0 = 제한 없음
+                raise BoardSkip(f"오늘 자동 게시판 글 {cap}건을 채워 내일 다시 확인합니다")
         if answerer is None:
             from .quizbot.answerer import make, ready
 
@@ -277,7 +325,7 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
         notice = answerer.read_notice(stations.corner_station(corner) or "", corner["board_url"], page["text"][:12000])
         save_notice(conn, corner, notice, page)
         corner = corner_row(conn, cid)
-        why = skip_reason(notice, corner, now)
+        why = skip_reason(notice, corner, now) or already_posted(conn, corner, notice, test)
         if why:
             raise BoardSkip(why)
         eid, title, body, reason = choose(conn, corner, notice, answerer)
@@ -291,9 +339,10 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
         if allow_window is None:
             allow_window = not autofill.no_window()
         post = poster or autofill.run_post
-        with autofill.input_lock("board_post.lock", wait_s=autofill.POST_LOCK_WAIT_SECONDS):
-            sub_id = post(conn, draft, corner, allow_window=allow_window, dry_run=test)
+        sub_id = post(conn, draft, corner, allow_window=allow_window, dry_run=test)   # (게시판 잠금은 run 이 잡고 있음)
         status = conn.execute("SELECT post_status FROM submissions WHERE id = ?", (sub_id,)).fetchone()
+        if status and status[0] in ("test", "posted", "unknown"):
+            record_posted(conn, cid, notice, test=status[0] == "test", at=db.now())
         label = {"test": "시험 입력 완료 (등록 안 누름)", "posted": "등록 확인", "unknown": "등록 누름·결과 불명"}.get(
             status[0] if status else "", status[0] if status else "?")
         return finish(conn, cid, f"{label} — 경험 #{eid} '{title}' (원고 #{did}, 제출 이력 #{sub_id})"
@@ -301,27 +350,64 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
     except BoardSkip as e:
         return finish(conn, cid, f"올리지 않음 — {e}")
     except autofill.AutofillError as e:
+        if "로그인" in str(e):
+            mark_login(conn, stations.corner_station(corner) or "", False,
+                       "자동 등록 중 로그인이 풀린 것을 발견 — '미리 로그인'으로 다시 로그인하세요")
         return finish(conn, cid, f"입력 중단 — {e}")
     except Exception as e:   # 브라우저·API 오류 등
         return finish(conn, cid, f"오류 — {type(e).__name__}: {str(e)[:200]}")
 
 
-def due(corner, now: datetime) -> bool:
-    if not corner["auto_on"] or (corner["auto_last_on"] or "") == now.strftime("%Y-%m-%d"):
+def due(corner, now: datetime, d: dict | None = None) -> bool:
+    """오늘 실행할 때가 됐는지: 코너마다 정한 '매일 자동'은 그 시각·요일, 아니면 '매일 게시판 확인'의 시각."""
+    if (corner["auto_last_on"] or "") == now.strftime("%Y-%m-%d"):
         return False
-    if corner["auto_days"] and DAYS[now.weekday()] not in corner["auto_days"]:
+    if corner["auto_on"]:
+        if corner["auto_days"] and DAYS[now.weekday()] not in corner["auto_days"]:
+            return False
+        return (now.hour, now.minute) >= _time(corner)
+    if d and d["on"]:
+        return (now.hour, now.minute) >= _hhmm(d["time"])
+    return False
+
+
+def _hhmm(text: str) -> tuple[int, int]:
+    try:
+        hh, mm = (int(x) for x in (text or "10:30").split(":"))
+        return hh, mm
+    except ValueError:
+        return 10, 30
+
+
+def board_busy() -> bool:
+    """게시판 작업이 지금 돌고 있는지 (잠금 파일의 주인이 살아 있음)."""
+    from . import autofill
+
+    path = db.data_dir() / BOARD_LOCK
+    try:
+        return path.exists() and not autofill.lock_owner_gone(path) and \
+            time.time() - path.stat().st_mtime < autofill.LOCK_STALE_SECONDS
+    except OSError:
         return False
-    return (now.hour, now.minute) >= _time(corner)
 
 
 def tick(conn, now: datetime | None = None, launch=None) -> list[int]:
-    """관리 화면 서버가 30초마다 부른다: 시각이 된 코너를 하나씩 따로 실행한다 (하루 한 번)."""
+    """관리 화면 서버가 30초마다 부른다: 시각이 된 코너를 하나 띄운다 (하루 한 번). 게시판 작업은 같은 브라우저 프로필을
+    쓰므로 하나가 끝나야 다음 것을 띄운다 (0.60 — 예전에는 같은 시각의 코너를 한꺼번에 띄워 프로필이 겹쳤음)."""
     now = now or datetime.now()
-    if db.is_stopped(conn):
+    if db.is_stopped(conn) or board_busy():
         return []
-    started = []
-    for corner in conn.execute("SELECT * FROM corners WHERE auto_on = 1 ORDER BY id").fetchall():
-        if not due(corner, now):
+    try:
+        last = float(db.get_setting(conn, LAUNCHED_KEY) or 0)
+    except ValueError:
+        last = 0.0
+    if 0 <= now.timestamp() - last < LAUNCH_GAP_SECONDS:
+        return []
+    d = daily(conn)
+    rows = conn.execute("SELECT * FROM corners WHERE auto_on = 1 OR (? = 1 AND board_exists = 1) "
+                        "ORDER BY auto_on DESC, is_target DESC, (posted_notice IS NOT NULL), id", (int(d["on"]),)).fetchall()
+    for corner in rows:
+        if stations.corner_station(corner) is None or not due(corner, now, d):
             continue
         conn.execute("UPDATE corners SET auto_last_on = ? WHERE id = ?", (now.strftime("%Y-%m-%d"), corner["id"]))
         conn.commit()
@@ -329,10 +415,221 @@ def tick(conn, now: datetime | None = None, launch=None) -> list[int]:
             from .app import launch_module
 
             launch = lambda args: launch_module("radio_helper.boards", args, "boards")   # noqa: E731
-        log_name = launch(["run", "--corner", str(corner["id"])])
-        db.log(conn, "post", f"{corner['title']} 매일 자동 등록 시작 ({'시험' if corner['auto_test'] else '등록'}, 기록: {log_name})")
-        started.append(corner["id"])
-    return started
+        log_name = launch(["run", "--corner", str(corner["id"]), "--scheduled"])
+        db.set_setting(conn, LAUNCHED_KEY, str(now.timestamp()))
+        test = corner["auto_test"] if corner["auto_on"] else d["test"]
+        db.log(conn, "post", f"{corner['title']} 매일 {'자동 등록' if corner['auto_on'] else '게시판 확인'} 시작 "
+                             f"({'시험' if test else '등록'}, 기록: {log_name})")
+        return [corner["id"]]
+    return []
+
+
+# ── 매일 게시판 확인 설정 · 이미 올린 공지 ──────────────────────────────
+def daily(conn) -> dict:
+    get = lambda k: db.get_setting(conn, k, DAILY_DEFAULTS[k])   # noqa: E731
+    try:
+        cap = max(0, int(get(DAILY_CAP_KEY)))
+    except ValueError:
+        cap = 5
+    at = get(DAILY_TIME_KEY)
+    return {"on": get(DAILY_KEY) == "1", "time": at if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", at or "") else "10:30",
+            "test": get(DAILY_TEST_KEY) != "0", "cap": cap}
+
+
+def enable_daily_once(conn) -> bool:
+    """0.60: 매일 게시판 확인을 한 번 켠다 (시험 모드로 시작 — 증거 사진을 확인한 뒤 '등록까지'로 바꿈)."""
+    if db.get_setting(conn, DAILY_ENABLED) == "1":
+        return False
+    db.set_setting(conn, DAILY_ENABLED, "1")
+    if db.get_setting(conn, DAILY_KEY, None) is not None:
+        return False
+    db.set_setting(conn, DAILY_KEY, "1")
+    db.log(conn, "post", "매일 게시판 확인을 켰습니다 (시험 모드: 입력하고 증거 사진만, 등록은 누르지 않음) — 코너 화면 맨 위")
+    return True
+
+
+def done_today(conn, now: datetime) -> int:
+    """오늘 자동으로 입력·등록한 게시판 글 수 (시험 입력 포함)."""
+    return conn.execute("SELECT COUNT(*) FROM submissions WHERE created_at >= ? AND note LIKE '게시판 자동 등록%'",
+                        (now.strftime("%Y-%m-%d") + " 00:00:00",)).fetchone()[0]
+
+
+def _norm(text) -> str:
+    return " ".join(str(text or "").split())
+
+
+def same_notice(old: dict, new: dict) -> bool:
+    """그때 공지와 지금 공지가 같은지. 원문이 둘 다 있으면 원문이 비슷한지, 없으면 주제가 비슷한지, 마감이 바뀌면 새 공지."""
+    if old.get("deadline") and new.get("deadline") and old["deadline"] != new["deadline"]:
+        return False
+    a, b = _norm(old.get("notice")), _norm(new.get("notice"))
+    if a and b:
+        return SequenceMatcher(None, a, b).ratio() >= SAME_NOTICE
+    ta, tb = _norm(old.get("theme")), _norm(new.get("theme"))
+    if ta and tb:
+        return SequenceMatcher(None, ta, tb).ratio() >= SAME_THEME
+    return True
+
+
+def record_posted(conn, cid: int, notice: dict, test: bool, at: str | None = None) -> None:
+    keep = {k: notice.get(k) or "" for k in ("notice", "theme", "deadline")}
+    conn.execute("UPDATE corners SET posted_notice = ? WHERE id = ?",
+                 (json.dumps({**keep, "at": at or db.now(), "test": bool(test)}, ensure_ascii=False), cid))
+    conn.commit()
+
+
+def already_posted(conn, corner, notice: dict, test: bool) -> str | None:
+    """이 게시판에 이미 올렸고 공지가 그때와 같으면 그 이유 (올리지 않음). 올린 적 없거나 새 공지면 None.
+    시험 입력만 한 공지는 '등록까지' 모드에서 다시 (실제로) 올린다."""
+    try:
+        saved = json.loads(corner["posted_notice"] or "null") if "posted_notice" in corner.keys() else None
+    except ValueError:
+        saved = None
+    if not isinstance(saved, dict):
+        row = conn.execute("SELECT created_at FROM submissions WHERE corner_id = ? AND post_status IN ('posted', 'unknown') "
+                           "ORDER BY id DESC LIMIT 1", (corner["id"],)).fetchone()
+        if row is None:
+            return None
+        # 예전 버전에서 올린 게시판: 그때 공지를 몰라 지금 공지를 그때 것으로 보고, 공지가 바뀌면 올린다
+        record_posted(conn, corner["id"], notice, test=False, at=row["created_at"])
+        return f"이미 {row['created_at'][:10]}에 올린 게시판입니다 — 새 공지가 올라오면 다시 올립니다"
+    if saved.get("test") and not test:
+        return None
+    if same_notice(saved, notice):
+        done = "시험 입력했습니다" if saved.get("test") else "올렸습니다"
+        return f"{(saved.get('at') or '')[:10]}에 지금 공지로 이미 {done} — 새 공지가 올라오면 다시 올립니다"
+    return None
+
+
+# ── 미리 로그인 · 로그인 확인 ─────────────────────────────────────────
+def login_targets(conn) -> list[dict]:
+    """방송국마다 로그인을 확인할 곳: 그 방송국 코너의 글쓰기 화면(로그인해야 열림), 없으면 게시판 화면."""
+    from . import autofill
+
+    out: dict[str, dict] = {}
+    for c in conn.execute("SELECT * FROM corners WHERE board_exists = 1 "
+                          "ORDER BY (write_url IS NULL), auto_on DESC, is_target DESC, id").fetchall():
+        st = stations.corner_station(c)
+        url = c["write_url"] or c["board_url"]
+        if st and st not in out and url and autofill._allowed_real_url(url):
+            out[st] = {"station": st, "url": url, "write": bool(c["write_url"]), "home": HOMES.get(st, "")}
+    return [out[s] for s in stations.STATIONS if s in out]
+
+
+def login_state(page) -> tuple[bool | None, str]:
+    """(로그인됨?, 근거). 글쓰기 칸이 보이면 됨, 비밀번호 칸이 보이면 안 됨, 그 밖에는 '로그아웃'·'로그인' 글자로."""
+    from . import autofill
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=10000)
+    except Exception:
+        pass
+    found = autofill.guess_selectors(page)
+    if found["title"] and found["body"]:
+        return True, "글쓰기 화면이 열림"
+    try:
+        if page.locator("input[type=password]").count():
+            return False, "로그인 화면이 뜸"
+    except Exception:
+        pass
+    text = autofill.page_text(page)
+    if "로그아웃" in text:
+        return True, "'로그아웃'이 보임"
+    if "로그인" in text:
+        return False, "'로그인'만 보임"
+    return None, "확인 못 함"
+
+
+def mark_login(conn, station: str, ok: bool | None, detail: str) -> None:
+    if not station:
+        return
+    try:
+        saved = json.loads(db.get_setting(conn, LOGIN_KEY) or "{}")
+    except ValueError:
+        saved = {}
+    saved[station] = {"ok": ok, "detail": detail, "at": db.now()}
+    db.set_setting(conn, LOGIN_KEY, json.dumps(saved, ensure_ascii=False))
+
+
+def logins(conn) -> dict:
+    try:
+        data = json.loads(db.get_setting(conn, LOGIN_KEY) or "{}")
+    except ValueError:
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def _check(conn, ctx, targets, say) -> dict:
+    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    for t in targets:
+        try:
+            page.goto(t["url"])
+            ok, detail = login_state(page)
+        except Exception as e:
+            ok, detail = None, f"열지 못함 ({type(e).__name__})"
+        mark_login(conn, t["station"], ok, detail)
+        say(f"{t['station']}: {'로그인됨' if ok else '로그인 필요' if ok is False else '확인 못 함'} — {detail}")
+    return logins(conn)
+
+
+def check_logins(conn, say=print) -> dict:
+    """방송국마다 창 없이 열어 로그인이 살아 있는지 확인해 적어 둔다."""
+    from playwright.sync_api import sync_playwright
+
+    from . import autofill
+
+    targets = login_targets(conn)
+    if not targets:
+        say("확인할 코너가 없습니다.")
+        return logins(conn)
+    with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
+        with sync_playwright() as p:
+            ctx, _page = autofill.launch_profile(p, headless=True)
+            try:
+                return _check(conn, ctx, targets, say)
+            finally:
+                ctx.close()
+
+
+def open_login(conn, say=print, minutes: int = LOGIN_WAIT_MINUTES) -> dict:
+    """미리 로그인: 도우미 브라우저 창에 방송국마다 탭을 열어 두고, 사용자가 직접 로그인한 뒤 창을 닫으면 확인한다.
+    로그인 정보는 이 프로그램이 읽지 않고 도우미 브라우저 프로필에만 남는다 (다음부터 창 없이 등록)."""
+    from playwright.sync_api import sync_playwright
+
+    from . import autofill
+
+    targets = login_targets(conn)
+    if not targets:
+        say("코너가 없어 열 곳이 없습니다. 먼저 코너를 추가하세요.")
+        return logins(conn)
+    with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
+        with sync_playwright() as p:
+            ctx, page = autofill.launch_profile(p, headless=False)
+            for i, t in enumerate(targets):
+                tab = page if i == 0 else ctx.new_page()
+                try:
+                    tab.goto(t["url"])
+                except Exception:
+                    pass
+            say(f"뜬 브라우저 창의 탭({', '.join(t['station'] for t in targets)})마다 직접 로그인하고, 다 되면 창을 닫으세요 "
+                f"({minutes}분 기다림).")
+            deadline = time.time() + minutes * 60
+            while time.time() < deadline:
+                try:
+                    if not ctx.pages:
+                        break
+                except Exception:
+                    break
+                time.sleep(1)
+            try:
+                ctx.close()
+            except Exception:
+                pass
+            ctx, _page = autofill.launch_profile(p, headless=True)
+            try:
+                return _check(conn, ctx, targets, say)
+            finally:
+                ctx.close()
 
 
 def _time(corner) -> tuple[int, int]:
@@ -362,8 +659,9 @@ def next_run(corner, now: datetime) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="코너 게시판 자동 등록 (SBS·MBC·KBS·CBS)")
-    ap.add_argument("action", choices=["run"])
-    ap.add_argument("--corner", type=int, required=True)
+    ap.add_argument("action", choices=["run", "login", "login-check"])
+    ap.add_argument("--corner", type=int)
+    ap.add_argument("--scheduled", action="store_true", help="정해진 시각의 자동 실행 (창 없이, 하루 상한)")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--test", action="store_true", help="입력만 하고 등록은 누르지 않음")
     mode.add_argument("--real", action="store_true", help="등록까지")
@@ -371,7 +669,15 @@ def main(argv: list[str] | None = None) -> int:
     conn = db.connect()
     db.init_db(conn)
     try:
-        text = run(conn, args.corner, test=True if args.test else False if args.real else None)
+        if args.action == "login":
+            open_login(conn)
+            return 0
+        if args.action == "login-check":
+            check_logins(conn)
+            return 0
+        if args.corner is None:
+            ap.error("run 에는 --corner 가 필요합니다.")
+        text = run(conn, args.corner, test=True if args.test else False if args.real else None, scheduled=args.scheduled)
     finally:
         conn.close()
     print(text, flush=True)

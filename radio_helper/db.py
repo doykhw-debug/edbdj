@@ -448,6 +448,7 @@ _ADDED_COLUMNS = {
         ("auto_last_on", "TEXT"),                       # 마지막으로 자동 실행한 날 (하루 한 번)
         ("auto_result", "TEXT"),                        # 마지막 결과 (화면 표시)
         ("found_links", "TEXT"),                        # 공지 화면에서 찾은 같은 프로그램의 다른 코너 (JSON)
+        ("posted_notice", "TEXT"),                      # 마지막으로 올렸을 때의 공지 {notice, theme, deadline, at, test} (JSON)
     ],
     "experiences": [
         ("gorilla_line", "TEXT"),                       # 공감로그용 한 줄 (사용자가 직접 씀, 200자 이내)
