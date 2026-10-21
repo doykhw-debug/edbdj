@@ -90,9 +90,10 @@ def test_adb_send_refuses_wrong_number_and_unauthorized():
 def test_channel_apps(conn):
     assert config.chat_app(conn, "파워FM") == "gorilla" and config.chat_app(conn, "SBS 라디오") == "gorilla"
     assert config.chat_app(conn, "MBC FM4U") == "mini" and config.chat_app(conn, "KBS 쿨FM") == "kong"
-    assert config.chat_app(conn, "EBS FM") is None
-    db.set_setting(conn, "channels", config.DEFAULTS["channels"] + "\nEBS FM=#1045=콩")
-    assert config.chat_app(conn, "EBS FM") == "kong"
+    assert config.chat_app(conn, "EBS FM") == "bandi" and config.chat_app(conn, "CBS 음악FM") == "rainbow"
+    assert config.chat_app(conn, "TBN 교통방송") is None
+    db.set_setting(conn, "channels", config.DEFAULTS["channels"] + "\nTBN 교통방송==콩")
+    assert config.chat_app(conn, "TBN 교통방송") == "kong"
     assert config.sms_number(conn, "MBC FM4U") == "#8000" and config.sms_number(conn, "KBS 1라디오") is None
     assert config.app_settings("mini", {"gorilla.input_rect": "1", "quizbot.x": "2"}) == \
         {"mini.input_rect": "1", "quizbot.x": "2"}
@@ -164,9 +165,9 @@ def test_holds_without_number_or_app(conn):
     assert "문자 번호가 없음" in conn.execute("SELECT decision FROM quizzes").fetchone()[0]
 
     conn.execute("DELETE FROM quizzes")
-    db.set_setting(conn, "channels", config.DEFAULTS["channels"] + "\nEBS FM=#1045")
+    db.set_setting(conn, "channels", config.DEFAULTS["channels"] + "\nTBN 교통방송=#0000")
     db.set_setting(conn, "send.route", "app")
-    r = runner_with(conn, QUIZ, [analysis()], channel="EBS FM")
+    r = runner_with(conn, QUIZ, [analysis()], channel="TBN 교통방송")
     r.run_live()
     assert "채팅 앱이 정해지지 않음" in conn.execute("SELECT decision FROM quizzes").fetchone()[0]
 

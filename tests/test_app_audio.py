@@ -238,7 +238,7 @@ def test_app_process_by_saved_name_or_window(conn):
     db.set_setting(conn, "mini.process_name", "mini.exe")
     with pytest.raises(RuntimeError, match="켜져 있지 않습니다"):
         appaudio.app_process(conn, "mini", PROCS)
-    with pytest.raises(RuntimeError, match="세 앱 모두 찾기"):
+    with pytest.raises(RuntimeError, match="모든 앱 찾기"):
         appaudio.app_process(conn, "kong", PROCS, window_pid=lambda c, a: None)
     with pytest.raises(RuntimeError, match="앱"):
         appaudio.app_process(conn, None, PROCS)

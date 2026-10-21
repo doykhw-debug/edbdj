@@ -1108,7 +1108,7 @@ class Runner:
         return chosen if chosen in config.ROUTES else config.route(self.conn)
 
     def chat_sender(self, app: str | None):
-        """앱 채팅 전송 도구 (고릴라·mini·콩). 테스트처럼 앱별 도구가 없으면 기본 sender."""
+        """앱 채팅 전송 도구 (고릴라·mini·콩·레인보우·반디). 테스트처럼 앱별 도구가 없으면 기본 sender."""
         if self.deps.chat_senders and app in self.deps.chat_senders:
             return self.deps.chat_senders[app]
         return self.deps.sender
@@ -1280,7 +1280,7 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
     from .stt import WhisperTranscriber
 
     device, note = gpu.choose_device(conn, config.get(conn, "quizbot.whisper_device"))
-    tr = WhisperTranscriber(model, program, device, beam_size=config.whisper_beam(conn, device),
+    tr = WhisperTranscriber(lanes.stt_model(conn, model, device), program, device, beam_size=config.whisper_beam(conn, device),
                             overlap_seconds=config.get_int(conn, "quizbot.stt_overlap"),
                             hints=stt_hints(conn, program))
     tr.device_note = note

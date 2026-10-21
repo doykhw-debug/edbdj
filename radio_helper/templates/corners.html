@@ -21,12 +21,12 @@
     {% endfor %}
   </div>
   {% endfor %}
-  <p class="muted" style="margin:8px 0 0">노란색 0 은 아직 게시판을 못 찾은 프로그램입니다. MBC·KBS 코너는 아래 <b>코너 주소로 추가</b>로 넣습니다 (같은 프로그램의 다른 코너는 공지를 읽을 때 찾아 줌).</p>
+  <p class="muted" style="margin:8px 0 0">노란색 0 은 아직 게시판을 못 찾은 프로그램입니다. MBC·KBS·CBS·EBS 코너는 아래 <b>코너 주소로 추가</b>로 넣습니다 (같은 프로그램의 다른 코너는 공지를 읽을 때 찾아 줌).</p>
 </div>
 
 <form method="post" action="{{ url_for('corner_add_url') }}" class="panel actions">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <b>코너 주소로 추가</b> <span class="muted">MBC·KBS·SBS 상관없이 — 코너(게시판) 화면 주소를 붙여 넣으세요</span>
+  <b>코너 주소로 추가</b> <span class="muted">SBS·MBC·KBS·CBS·EBS 상관없이 — 코너(게시판) 화면 주소를 붙여 넣으세요</span>
   <input type="url" name="url" placeholder="https://www.imbc.com/broad/radio/fm4u/…/corner/daily/….html" style="min-width:360px" required>
   <button>추가</button>
 </form>

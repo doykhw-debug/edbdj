@@ -118,7 +118,7 @@ def cmd_device_test(conn) -> int:
 
     def transcribe(samples):
         if "tr" not in holder:
-            holder["tr"] = WhisperTranscriber(config.get(conn, "quizbot.whisper_model"), "", device,
+            holder["tr"] = WhisperTranscriber(lanes.stt_model(conn, config.get(conn, "quizbot.whisper_model"), device), "", device,
                                               beam_size=config.whisper_beam(conn, device))
         return holder["tr"].transcribe(samples)
 
@@ -241,7 +241,7 @@ def cmd_auto_setup(conn, app: str = "gorilla") -> int:
 
 
 def cmd_find(conn, app: str = "gorilla", every: bool = False) -> int:
-    """원버튼 찾기: 앱이 켜져 있는지 → 입력칸·전송 버튼·채팅 목록 자리 → 저장 + 확인 사진 (every: 세 앱 모두)."""
+    """원버튼 찾기: 앱이 켜져 있는지 → 입력칸·전송 버튼·채팅 목록 자리 → 저장 + 확인 사진 (every: 모든 앱)."""
     from . import finder
     from .runner import shared_input_lock
 
@@ -502,8 +502,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("target", nargs="?", choices=["window", "input", "send", "chat"])
     ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
-    ap.add_argument("--all", action="store_true", help="find: 세 앱(고릴라·콩·mini) 모두")
-    ap.add_argument("--lane", choices=["2", "3"], help="lane: 동시 청취의 보조 채널 칸")
+    ap.add_argument("--all", action="store_true", help="find: 모든 앱(고릴라·콩·mini·레인보우·반디)")
+    ap.add_argument("--lane", choices=["2", "3", "4", "5"], help="lane: 동시 청취의 보조 채널 칸")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
     ignore_ctrl_c()
@@ -518,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run(conn)
         if args.command == "lane":
             if not args.lane:
-                ap.error("lane 에는 --lane 2 또는 3 이 필요합니다.")
+                ap.error("lane 에는 --lane 2~5 가 필요합니다.")
             return cmd_lane(conn, args.lane)
         if args.command == "device-test":
             return cmd_device_test(conn)

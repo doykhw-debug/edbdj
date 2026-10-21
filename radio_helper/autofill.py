@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import db, gates, server, stations
 
-ALLOWED_HOSTS = {"programs.sbs.co.kr", "m.programs.sbs.co.kr"}   # SBS (MBC·KBS 는 stations.py: imbc.com·kbs.co.kr)
+ALLOWED_HOSTS = {"programs.sbs.co.kr", "m.programs.sbs.co.kr"}   # SBS (나머지는 stations.py: imbc.com·kbs.co.kr·cbs.co.kr·ebs.co.kr)
 MOCK_SELECTORS = {
     "title": 'input[name="title"]',
     "body": 'textarea[name="content"]',
@@ -161,7 +161,7 @@ def _lf(text: str | None) -> str:
 
 
 def _allowed_real_url(url: str) -> bool:
-    """SBS·MBC·KBS 의 https 게시판 주소만 (stations.py)."""
+    """SBS·MBC·KBS·CBS·EBS 의 https 게시판 주소만 (stations.py)."""
     return stations.station_of(url) is not None
 
 
@@ -520,7 +520,7 @@ def run_post(conn, draft, corner, allow_window: bool = True, dry_run: bool = Fal
 
     write_url = corner["write_url"]
     if not write_url or not _allowed_real_url(write_url):
-        raise AutofillError("허용된 게시판 글쓰기 주소가 아닙니다 (SBS·MBC·KBS 의 https 주소만).")
+        raise AutofillError("허용된 게시판 글쓰기 주소가 아닙니다 (SBS·MBC·KBS·CBS·EBS 의 https 주소만).")
     station = stations.corner_station(corner) or "SBS"
     board_url = corner["board_url"] if "board_url" in corner.keys() else None
     DIALOGS.clear()

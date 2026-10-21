@@ -1,4 +1,4 @@
-"""원버튼 찾기 — 채팅 앱(SBS 고릴라·KBS 콩·MBC mini)이 켜져 있는지, 입력칸·전송 버튼·채팅 목록이 어디인지 한 번에 찾아 저장한다.
+"""원버튼 찾기 — 채팅 앱(SBS 고릴라·KBS 콩·MBC mini·CBS 레인보우·EBS 반디)이 켜져 있는지, 입력칸·전송 버튼·채팅 목록이 어디인지 한 번에 찾아 저장한다.
 
     python -m radio_helper.quizbot find --app gorilla      (관리 화면: 앱 채팅·인식 설정 → '원버튼 찾기')
 
@@ -8,7 +8,7 @@
 3. 자리 찾기 — 앞의 방법으로 찾은 것은 그대로 쓰고, 못 찾은 것만 다음 방법으로:
    a. 화면 요소(UIA): 입력칸(Edit)·'전송/등록/보내기' 버튼이 보이면 그 자리 (가장 정확)
    b. Claude: 찍은 사진을 보고 입력칸·전송 버튼·채팅 목록 네모를 알려 준다 (Claude 연결이 있을 때)
-   c. 알려진 배치: 세 앱의 화면(관리자가 보낸 사진)에서 잰 위치 (창 크기 대비 비율)
+   c. 알려진 배치: 고릴라·콩·mini 화면(관리자가 보낸 사진)에서 잰 위치 (창 크기 대비 비율). 레인보우·반디는 a·b 로만
 4. 채팅이 닫혀 있으면(고릴라 공감로그·콩 채팅) 여는 말풍선 버튼을 한 번 누르고 다시 찾는다.
 5. 로그인 안내가 보이면 알려 준다 (로그인은 사용자가 직접 한다).
 6. 모니터 기준 위치로 저장하고(보낼 때 그 자리를 누름), 네모를 그린 확인 사진(<app>_found.png)을 남긴다.
@@ -38,6 +38,9 @@ APP_HINTS = {
                 "title": re.compile(r"고릴라|gorealra|공감로그", re.I)},
     "kong": {"process": re.compile(r"kong|kbs", re.I), "title": re.compile(r"\bkong\b|콩|KBS", re.I)},
     "mini": {"process": re.compile(r"mbc|\bmini", re.I), "title": re.compile(r"MBC|\bmini\b|미니", re.I)},
+    "rainbow": {"process": re.compile(r"rainbow|레인보우|^cbs", re.I),
+                "title": re.compile(r"레인보우|rainbow|\bCBS\b", re.I)},
+    "bandi": {"process": re.compile(r"bandi|반디|^ebs", re.I), "title": re.compile(r"반디|bandi|\bEBS\b", re.I)},
 }
 
 # 알려진 배치 (창 크기 대비 비율 왼·위·오른·아래). 관리자가 보낸 화면에서 잼:
@@ -151,10 +154,12 @@ def chat_window(app: str, wins: list[dict]) -> tuple[Rect | None, Rect | None]:
 
 
 def template_find(app: str, wins: list[dict]) -> Found:
-    """알려진 배치로 찾기 (순수 계산)."""
-    t = TEMPLATES[app]
-    chat, closed = chat_window(app, wins)
+    """알려진 배치로 찾기 (순수 계산). 배치를 모르는 앱(레인보우·반디)은 빈 결과."""
     found = Found()
+    t = TEMPLATES.get(app)
+    if t is None:
+        return found
+    chat, closed = chat_window(app, wins)
     if chat is not None:
         found.chat_open = True
         for target in TARGETS:

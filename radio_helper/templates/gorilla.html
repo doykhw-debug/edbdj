@@ -17,7 +17,7 @@
     로그인이 필요하면 알려 드리니 앱에서 직접 로그인하세요. 듣는 중에 채팅 창을 못 찾으면 5분에 한 번 저절로 다시 찾습니다.</p>
   <div class="actions">
     <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="find"><button {{ 'disabled' if stopped }}>{{ label }} 원버튼 찾기</button></form>
-    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="find-all"><button class="secondary" {{ 'disabled' if stopped }}>세 앱 모두 찾기 (고릴라·콩·mini)</button></form>
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="find-all"><button class="secondary" {{ 'disabled' if stopped }}>모든 앱 찾기 (고릴라·콩·mini·레인보우·반디)</button></form>
   </div>
   {% if found %}
     <div class="flash {{ '' if found.settings else 'warn' }}" style="margin-top:10px">
@@ -32,7 +32,7 @@
 <div class="panel">
   <h2>1. {{ label }} 창 맞추기 <span class="muted">원버튼 찾기가 어긋날 때 직접</span></h2>
   <p class="muted">{{ label }} PC 앱을 켜고 <b>듣는 채널의 채팅(글쓰기) 화면</b>을 열어 둔 상태에서 순서대로 하세요. {{ label }} 창을 최소화하지 마세요.
-    세 앱은 원리가 같고, 앱마다 따로 한 번씩 맞추면 됩니다.</p>
+    모든 앱은 원리가 같고, 앱마다 따로 한 번씩 맞추면 됩니다.</p>
   <ol>
     <li><b>입력칸 영역 지정</b> — 버튼을 누르면 화면이 어두워집니다. {{ label }}의 <b>채팅 입력칸</b>{% if app == 'gorilla' %}('공감로그 글쓰기' 칸){% endif %}을 마우스로 끌어 네모로 그리세요. 손을 떼면 저장됩니다.
       네모 가운데의 <b>모니터 화면 위치</b>를 그대로 저장해 그 자리를 누릅니다 (채팅 창이 플레이어 옆에 따로 떠도 됩니다).

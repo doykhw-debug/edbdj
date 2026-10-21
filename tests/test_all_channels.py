@@ -41,7 +41,8 @@ class ScheduleAnswerer:
 
 # ── 편성표 ──────────────────────────────────────────────────────────
 def test_channels_to_fetch_are_non_sbs(conn):
-    assert schedules.channels_to_fetch(conn) == ["MBC FM4U", "KBS 쿨FM", "KBS 해피FM", "KBS 1라디오"]
+    assert schedules.channels_to_fetch(conn) == ["MBC FM4U", "KBS 쿨FM", "KBS 해피FM", "KBS 1라디오",
+                                                 "CBS 음악FM", "CBS 표준FM", "EBS FM"]
     assert "89.1" in schedules.describe("KBS 쿨FM") and schedules.describe("EBS FM").startswith("EBS FM")
 
 
@@ -102,7 +103,7 @@ def test_programs_page_and_button(client, conn, monkeypatch):
     started = []
     monkeypatch.setattr(app_module, "launch_module", lambda module, args, prefix: started.append((module, args)) or "s.log")
     page = client.get("/programs").get_data(as_text=True)
-    assert "MBC·KBS 편성표 가져오기" in page and "MBC FM4U" in page
+    assert "MBC·KBS·CBS·EBS 편성표 가져오기" in page and "MBC FM4U" in page
     client.post("/programs/schedules", data={"csrf_token": csrf(client, "/programs")})
     assert started == [("radio_helper.schedules", ["refresh"])]
 

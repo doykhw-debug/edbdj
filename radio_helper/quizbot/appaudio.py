@@ -1,7 +1,7 @@
-"""앱 소리만 녹음 — 가상 오디오 장치 없이 앱(고릴라·콩·mini)마다 소리를 따로 받는다 (동시 청취, 0.54).
+"""앱 소리만 녹음 — 가상 오디오 장치 없이 앱(고릴라·콩·mini·레인보우·반디)마다 소리를 따로 받는다 (동시 청취, 0.54).
 
 윈도우의 '프로세스 루프백'(윈도우 11 · 윈도우 10 최신 판)을 쓴다. 그 앱과 그 앱이 띄운 하위 프로세스가 재생하는
-소리만 녹음하므로, 세 앱이 모두 같은 스피커로 나와도 섞이지 않는다. 볼륨 믹서에서 출력 장치를 나눌 필요도 없다.
+소리만 녹음하므로, 여러 앱이 모두 같은 스피커로 나와도 섞이지 않는다. 볼륨 믹서에서 출력 장치를 나눌 필요도 없다.
 순서는 Microsoft 예제(Windows-classic-samples/ApplicationLoopback)와 같다:
 ActivateAudioInterfaceAsync("VAD\\Process_Loopback") → IAudioClient.Initialize(LOOPBACK|EVENTCALLBACK|AUTOCONVERTPCM)
 → IAudioCaptureClient 로 꺼내 읽기. COM 은 ctypes 로 직접 부른다 (추가 설치 없음).
@@ -360,7 +360,7 @@ def _window_pid(conn, app: str) -> int | None:
 def app_process(conn, app: str | None, procs: dict | None = None, window_pid=_window_pid) -> tuple[int, str]:
     """채널 앱의 프로세스 → (번호, 실행 파일 이름). 앱 설정의 프로그램 이름, 없으면 창으로 찾는다."""
     if app not in config.CHAT_APPS:
-        raise RuntimeError("이 채널의 앱(고릴라·콩·mini)을 몰라 앱 소리를 받을 수 없습니다 — 채널 설정에서 앱을 정하세요")
+        raise RuntimeError("이 채널의 앱(고릴라·콩·mini·레인보우·반디)을 몰라 앱 소리를 받을 수 없습니다 — 채널 설정에서 앱을 정하세요")
     label = config.app_label(app)
     procs = processes() if procs is None else procs
     name = (config.get(conn, f"{app}.process_name") or "").strip().lower()
@@ -368,7 +368,7 @@ def app_process(conn, app: str | None, procs: dict | None = None, window_pid=_wi
         pid = window_pid(conn, app)
         name = procs.get(pid, (0, ""))[1] if pid else ""
     if not name:
-        raise RuntimeError(f"{label} 앱을 찾지 못했습니다 — {label}을(를) 켜고 '앱 채팅·인식 설정 → 세 앱 모두 찾기'를 한 번 하세요")
+        raise RuntimeError(f"{label} 앱을 찾지 못했습니다 — {label}을(를) 켜고 '앱 채팅·인식 설정 → 모든 앱 찾기'를 한 번 하세요")
     found = roots(procs, name)
     if not found:
         raise RuntimeError(f"{label} 앱({name})이 켜져 있지 않습니다 — {label}을(를) 켜고 채널을 재생하세요")

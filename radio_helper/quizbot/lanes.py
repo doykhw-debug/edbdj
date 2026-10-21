@@ -1,16 +1,17 @@
-"""동시 청취 — 한 PC 에서 여러 채널(방송국마다 하나: SBS 고릴라 · KBS 콩 · MBC mini)을 함께 듣고 받아쓰고 보낸다.
+"""동시 청취 — 한 PC 에서 여러 채널(방송국마다 하나: SBS 고릴라 · KBS 콩 · MBC mini · CBS 레인보우 · EBS 반디)을
+함께 듣고 받아쓰고 보낸다.
 
 소리 나누기 (0.54): 녹음 장치 칸을 비워 두면 '앱 소리'를 직접 받는다 (appaudio — 윈도우 프로세스 루프백,
-설치·볼륨 믹서 설정 필요 없음, 세 앱이 같은 스피커로 나와도 섞이지 않음). 그게 안 되는 PC 는 앱마다 출력 장치를
+설치·볼륨 믹서 설정 필요 없음, 여러 앱이 같은 스피커로 나와도 섞이지 않음). 그게 안 되는 PC 는 앱마다 출력 장치를
 나누고(볼륨 믹서: 고릴라 → 스피커, 콩 → CABLE Input …) 그 장치 이름을 칸에 적는다. 가상 장치는 무료 VB-CABLE
 (vbcable 이 자동 설치)로 하나 생긴다. 한 장치에 두 앱 소리가 섞이면 받아쓰기가 망가진다.
 
 - 주 채널(1번): 지금까지처럼 '청취 시작'의 채널, 녹음 장치는 live.device (비우면 기본 스피커).
-- 보조 채널(2·3번): live.lanes 에 {channel, device}. 청취 중이고 '동시 청취'가 켜져 있으면 채널마다
+- 보조 채널(2~5번): live.lanes 에 {channel, device}. 청취 중이고 '동시 청취'가 켜져 있으면 채널마다
   보조 청취기(python -m radio_helper.quizbot lane --lane N)를 띄운다. 받아쓰기·자막 기록·퀴즈·사연·DJ 한마디·신청곡이
   채널마다 따로 돌고, 채팅 보내기는 공용 입력 잠금으로 하나씩 차례로 한다.
 - 한 앱은 한 번에 한 채널만 재생·채팅하므로 같은 앱(예: 파워FM·러브FM 둘 다 고릴라)을 두 번 고르면 막는다.
-- 상태는 lane2.* / lane3.* 설정에 따로 남긴다 (주 채널은 예전처럼 quizbot.*).
+- 상태는 lane2.* ~ lane5.* 설정에 따로 남긴다 (주 채널은 예전처럼 quizbot.*).
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ from datetime import datetime
 from .. import db
 from . import config
 
-EXTRA_LANES = ("2", "3")
+EXTRA_LANES = ("2", "3", "4", "5")   # 주 채널 + 4칸 = 방송국 다섯 (SBS·MBC·KBS·CBS·EBS)
+GPU_LARGE_LANES = 3       # 그래픽카드 large-v3 는 채널당 약 3~4GB 라 3칸까지 — 넘으면 auto 를 large-v3-turbo(약 2GB)로
 LAUNCH_GRACE = 120        # 막 띄운 보조 청취기는 이 시간 동안 다시 띄우지 않는다
 QUIET = 8                 # 장치 점검: 소리 크기(0~100)가 이보다 작으면 '소리 없음'
 SAME_SOUND = 0.85         # 장치 점검: 두 장치 소리 흐름의 상관이 이보다 크면 '같은 소리'
@@ -56,6 +58,13 @@ def all_lanes(conn: sqlite3.Connection) -> list[dict]:
 
 def lane_of(conn: sqlite3.Connection, lane: str) -> dict | None:
     return next((x for x in all_lanes(conn) if x["lane"] == lane), None)
+
+
+def stt_model(conn: sqlite3.Connection, model: str, device: str) -> str:
+    """받아쓰기 모델: 칸마다 모델을 하나씩 올리므로, 그래픽카드로 4칸 이상 들으면 auto 를 작은 모델로 (16GB 에 맞게)."""
+    if (model or "auto") == "auto" and device == "cuda" and len(all_lanes(conn)) > GPU_LARGE_LANES:
+        return "large-v3-turbo"
+    return model
 
 
 # ── 녹음 방식 ────────────────────────────────────────────────────────

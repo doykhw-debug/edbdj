@@ -86,12 +86,13 @@ DEFAULTS = {
     "gorilla.send_y": "",
     "gorilla.message_template": "{answer}",
     "gorilla.test_message": "파워 FM 화이팅",   # '전송 테스트'로 실제로 보내 보는 글
-    # 보내는 방법: app(고릴라·mini·콩 앱 채팅, 무료) / sms(휴대폰 문자, 건당 요금)
+    # 보내는 방법: app(고릴라·mini·콩·레인보우·반디 앱 채팅, 무료) / sms(휴대폰 문자, 건당 요금)
     "send.route": "app",
     # 휴대폰 문자 (안드로이드 + USB)
     # 듣는 채널과 문자 번호 (한 줄에 '채널=문자번호', 번호를 모르면 비움). 첫 화면 '채널 추가'로도 늘어난다
     # 앱은 이름으로 정해진다 (SBS·파워FM·러브FM·고릴라M → 고릴라, MBC → mini, KBS → 콩). '채널=번호=앱'으로 직접 정할 수도 있다
-    "channels": "파워FM=#1077\n러브FM=#1035\n고릴라M=\nMBC FM4U=#8000\nKBS 쿨FM=#8910\nKBS 해피FM=#1061\nKBS 1라디오=",
+    "channels": "파워FM=#1077\n러브FM=#1035\n고릴라M=\nMBC FM4U=#8000\nKBS 쿨FM=#8910\nKBS 해피FM=#1061\nKBS 1라디오=\n"
+                "CBS 음악FM=#9390\nCBS 표준FM=\nEBS FM=#1045",
     "sms.signature": "1",                 # 끝에 방송용 별명 붙이기
     "sms.quiz_template": "정답 {answer}",
     "sms.verify_number": "1",             # 작성 화면에 받는 번호(#포함)가 보일 때만 보냄
@@ -148,8 +149,14 @@ CHAT_APPS = {
              "test": "MBC FM4U 화이팅"},
     "kong": {"label": "콩", "station": "KBS", "title": r"콩|\bkong\b|KBS", "input": "메시지|채팅|글쓰기|댓글",
              "test": "KBS 화이팅"},
+    # 0.55: CBS 레인보우(PC 레인보우 — 토크·실시간 댓글) · EBS 반디(반디톡). 화면 배치는 원버튼 찾기(화면 요소·Claude)로 잡는다
+    "rainbow": {"label": "레인보우", "station": "CBS", "title": r"레인보우|rainbow|\bCBS\b",
+                "input": "토크|댓글|메시지|채팅|글쓰기|사연", "test": "CBS 화이팅"},
+    "bandi": {"label": "반디", "station": "EBS", "title": r"반디|bandi|\bEBS\b", "input": "반디톡|메시지|채팅|글쓰기|댓글",
+              "test": "EBS 화이팅"},
 }
-APP_ALIASES = {"고릴라": "gorilla", "gorilla": "gorilla", "mini": "mini", "미니": "mini", "콩": "kong", "kong": "kong"}
+APP_ALIASES = {"고릴라": "gorilla", "gorilla": "gorilla", "mini": "mini", "미니": "mini", "콩": "kong", "kong": "kong",
+               "레인보우": "rainbow", "rainbow": "rainbow", "반디": "bandi", "bandi": "bandi"}
 _APP_FIELDS = {  # 앱마다 따로 저장하는 화면 설정 (고릴라는 기존 'gorilla.*' 키를 그대로 쓴다)
     "process_name": "", "window_size": "", "screen_region": "", "region_window": "", "input_rect": "", "send_rect": "",
     "chat_rect": "", "input_point": "", "send_point": "", "point_window": "", "chat_screen": "", "exe_path": "", "input_mode": "uia", "input_auto_id": "", "send_mode": "auto", "send_button_name": "전송|보내기|등록",
@@ -190,23 +197,26 @@ def localize(app: str, message: str) -> str:
 SBS_CHANNELS = ("파워FM", "러브FM", "고릴라M")
 
 
-BROADCASTERS = ("SBS", "MBC", "KBS")
+BROADCASTERS = ("SBS", "MBC", "KBS", "CBS", "EBS")
+STATION_APPS = {"MBC": "mini", "KBS": "kong", "CBS": "rainbow", "EBS": "bandi"}   # SBS 는 고릴라
+NEW_CHANNELS = ("CBS 음악FM=#9390", "CBS 표준FM=", "EBS FM=#1045")   # 0.55 에 기본 목록에 더한 채널
 
 
 def broadcaster_of(channel: str | None) -> str:
-    """채널 → 방송국 (SBS·MBC·KBS). 모르는 채널은 채널 이름 그대로."""
+    """채널 → 방송국 (SBS·MBC·KBS·CBS·EBS). 모르는 채널은 채널 이름 그대로."""
     name = (channel or "").strip()
     upper = name.upper()
     if not name or name in SBS_CHANNELS or upper.startswith("SBS"):
         return "SBS"   # 채널을 적지 않던 예전 기록은 모두 SBS(고릴라)
-    for b in ("MBC", "KBS"):
+    for b in BROADCASTERS[1:]:
         if upper.startswith(b):
             return b
     return name
 
 
 def chat_app(conn: sqlite3.Connection, channel: str | None) -> str | None:
-    """채널의 채팅 앱: '채널=번호=앱'으로 정했으면 그것, 아니면 이름으로 (SBS→고릴라, MBC→mini, KBS→콩)."""
+    """채널의 채팅 앱: '채널=번호=앱'으로 정했으면 그것, 아니면 이름으로
+    (SBS→고릴라, MBC→mini, KBS→콩, CBS→레인보우, EBS→반디)."""
     if not channel:
         return None
     for line in get(conn, "channels").splitlines():
@@ -216,11 +226,7 @@ def chat_app(conn: sqlite3.Connection, channel: str | None) -> str | None:
     name = channel.upper()
     if channel in SBS_CHANNELS or name.startswith("SBS"):
         return "gorilla"
-    if name.startswith("MBC"):
-        return "mini"
-    if name.startswith("KBS"):
-        return "kong"
-    return None
+    return next((app for station, app in STATION_APPS.items() if name.startswith(station)), None)
 
 
 def channels(conn: sqlite3.Connection) -> dict[str, str]:
@@ -286,6 +292,25 @@ def migrate_defaults(conn: sqlite3.Connection) -> list[str]:
     if changed:
         db.log(conn, "quizbot", "감지된 오류(구독 한도·느린 받아쓰기)에 맞춰 예전 기본값을 바꿨습니다: " + ", ".join(changed))
     return changed
+
+
+CHANNELS_MIGRATED = "meta.channels_055"
+
+
+def migrate_channels(conn: sqlite3.Connection) -> list[str]:
+    """0.55: 채널 목록을 저장해 둔 PC 에 CBS·EBS 채널을 한 번 더한다 (이미 있거나 지운 뒤에는 건드리지 않음)."""
+    if db.get_setting(conn, CHANNELS_MIGRATED) == "1":
+        return []
+    db.set_setting(conn, CHANNELS_MIGRATED, "1")
+    saved = db.get_setting(conn, "channels", None)
+    if not saved:
+        return []                       # 저장한 적이 없으면 기본 목록(이미 CBS·EBS 포함)을 씀
+    have = {line.split("=")[0].strip() for line in saved.splitlines() if line.strip()}
+    added = [line for line in NEW_CHANNELS if line.split("=")[0] not in have]
+    if added:
+        db.set_setting(conn, "channels", saved.rstrip("\n") + "\n" + "\n".join(added))
+        db.log(conn, "quizbot", "채널 목록에 CBS·EBS 를 더했습니다: " + ", ".join(a.split("=")[0] for a in added))
+    return added
 
 
 BILLING_MIGRATED = "meta.billing_subscription"
@@ -360,7 +385,7 @@ class GorillaConfig:
     send_y: float | None = None
     message_template: str = "{answer}"
 
-    app: str = "gorilla"   # gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)
+    app: str = "gorilla"   # gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩) / rainbow(CBS 레인보우) / bandi(EBS 반디)
 
     @property
     def label(self) -> str:

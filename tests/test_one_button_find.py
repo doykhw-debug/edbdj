@@ -225,7 +225,7 @@ def test_find_command_and_page(client, data_dir, monkeypatch):
     launched = []
     monkeypatch.setattr(app_module, "launch_quizbot", lambda args: launched.append(args) or "quizbot_x.log")
     html = client.get("/gorilla?app=kong").get_data(as_text=True)
-    assert "원버튼 찾기" in html and "세 앱 모두 찾기" in html
+    assert "원버튼 찾기" in html and "모든 앱 찾기" in html
     token = csrf(client, "/gorilla?app=kong")
     client.post("/quizbot/tool", data={"csrf_token": token, "tool": "find", "app": "kong"})
     client.post("/quizbot/tool", data={"csrf_token": token, "tool": "find-all", "app": "kong"})
