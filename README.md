@@ -564,7 +564,7 @@ MBC·KBS·SBS 어느 코너든 **코너 화면 주소**만 넣으면, 정한 시
 
 - 같은 방송국에는 같은 경험을 다시 보내지 않습니다 (게시판·채팅·문자 모두 합쳐서, 결과 불명이어도). 다른 방송국에는 보낼 수 있습니다.
 - 공지 화면에서 같은 프로그램의 다른 코너(매일코너·요일코너)를 찾아 주면 골라서 한 번에 추가합니다.
-- 자동 입력은 SBS(`programs.sbs.co.kr`)·MBC(`imbc.com`)·KBS(`kbs.co.kr`)의 https 주소에서만 합니다.
+- 자동 입력은 SBS(`programs.sbs.co.kr`)·MBC(`imbc.com`)·KBS(`kbs.co.kr`)·CBS(`cbs.co.kr`, 0.55)의 https 주소에서만 합니다.
 
 ## 서버 운영 — Oracle 서버(ssh haetsal, 우분투 24.04 ARM) · https://radio.haetsallab.com
 
