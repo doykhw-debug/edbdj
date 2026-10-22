@@ -30,7 +30,7 @@ DEFAULTS = {
     "quizbot.story_settle_seconds": "30",
     "quizbot.story_cooldown_seconds": "600",
     "quizbot.max_story_analyses_per_window": "4",
-    "quizbot.max_story_sends_per_hour": "2",
+    "quizbot.max_story_sends_per_hour": "0",   # 0 = 제한 없음 (0.66, 사용자 요청으로 1시간 상한 해제)
     # 선물 정보
     "quizbot.gift_settle_seconds": "30",
     "quizbot.gift_cooldown_seconds": "600",
@@ -117,7 +117,7 @@ LABELS = {
     "quizbot.story_settle_seconds": "사연 모집 신호 후 대기(초)",
     "quizbot.story_cooldown_seconds": "사연 분석 간 최소 간격(초)",
     "quizbot.max_story_analyses_per_window": "예약 1회당 최대 사연 분석 횟수",
-    "quizbot.max_story_sends_per_hour": "시간당 최대 사연 전송 수",
+    "quizbot.max_story_sends_per_hour": "시간당 최대 사연 전송 수 (0 = 제한 없음)",
     "quizbot.gift_settle_seconds": "선물 안내 신호 후 대기(초)",
     "quizbot.gift_cooldown_seconds": "선물 분석 간 최소 간격(초)",
     "quizbot.max_gift_analyses_per_window": "예약 1회당 최대 선물 분석 횟수",
@@ -281,8 +281,30 @@ CHANGED_DEFAULTS = (
 )
 
 
+FORCED_066 = "meta.defaults_066"
+# 0.66: 사용자가 직접 정함 — 사연 1시간 상한 해제, 작업 모델은 Sonnet 5.5 · low (저장된 값과 상관없이 한 번 맞춤)
+FORCED_SETTINGS_066 = (("quizbot.max_story_sends_per_hour", "0"), ("quizbot.model", "claude-sonnet-5-5"),
+                       ("quizbot.effort", "low"))
+
+
+def apply_066(conn: sqlite3.Connection) -> list[str]:
+    if db.get_setting(conn, FORCED_066) == "1":
+        return []
+    changed = []
+    for key, value in FORCED_SETTINGS_066:
+        old = db.get_setting(conn, key, None)
+        if old is not None and old != value:
+            changed.append(f"{LABELS.get(key, key).split(' (')[0]} {old}→{value}")
+        db.set_setting(conn, key, value)
+    db.set_setting(conn, FORCED_066, "1")
+    db.log(conn, "quizbot", "사연 1시간 상한을 풀고(제한 없음) 작업 모델을 Sonnet 5.5 · low 로 맞췄습니다"
+           + (f": {', '.join(changed)}" if changed else ""))
+    return changed
+
+
 def migrate_defaults(conn: sqlite3.Connection) -> list[str]:
     """예전 기본값을 그대로 쓰던 설정만 새 기본값으로 (한 번만). 바꾼 이름 목록."""
+    apply_066(conn)
     if db.get_setting(conn, DEFAULTS_MIGRATED) == "1":
         return []
     changed = []

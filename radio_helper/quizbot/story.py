@@ -214,6 +214,6 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
     channel = post["channel"] if "channel" in post.keys() else None   # 채널마다 센다 (동시 청취)
     sent = conn.execute("SELECT COUNT(*) FROM story_posts WHERE sent_at >= ? AND channel IS ?",
                         (since, channel)).fetchone()[0]
-    if sent >= limit_per_hour:
+    if limit_per_hour and sent >= limit_per_hour:          # 0 = 제한 없음
         reasons.append(f"최근 1시간 사연 전송 {sent}건으로 상한({limit_per_hour}) 도달")
     return reasons

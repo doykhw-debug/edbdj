@@ -276,6 +276,7 @@ def test_paused_answerer_skips_analysis_without_spending_the_cap(conn, monkeypat
 
 # ── 기본값 ────────────────────────────────────────────────────────
 def test_old_defaults_move_once_custom_kept(conn):
+    db.set_setting(conn, config.FORCED_066, "1")                    # 0.66 강제 설정은 아래 시험에서 따로
     db.set_setting(conn, "quizbot.model", "claude-opus-5-5")
     db.set_setting(conn, "quizbot.effort", "high")                  # 직접 고른 값은 그대로
     db.set_setting(conn, "quizbot.whisper_beam", "5")
@@ -287,6 +288,39 @@ def test_old_defaults_move_once_custom_kept(conn):
         ("claude-sonnet-5-5", "high", "auto", "90")
     db.set_setting(conn, "quizbot.model", "claude-opus-5-5")        # 바꾼 뒤 다시 고르면 그대로
     assert config.migrate_defaults(conn) == [] and config.get(conn, "quizbot.model") == "claude-opus-5-5"
+
+
+def test_066_lifts_story_cap_and_sets_sonnet_low_once(conn):
+    # 사용자 요청: 사연 1시간 상한 해제 + 작업 모델 Sonnet 5.5 · low (직접 고른 값이 있어도 한 번 맞춤)
+    db.set_setting(conn, "quizbot.max_story_sends_per_hour", "2")
+    db.set_setting(conn, "quizbot.model", "claude-opus-5-5")
+    db.set_setting(conn, "quizbot.effort", "high")
+    changed = config.migrate_defaults(conn)
+    assert (config.get(conn, "quizbot.max_story_sends_per_hour"), config.get(conn, "quizbot.model"),
+            config.get(conn, "quizbot.effort")) == ("0", "claude-sonnet-5-5", "low")
+    assert isinstance(changed, list)
+    db.set_setting(conn, "quizbot.effort", "medium")                # 그 뒤에 다시 고르면 그대로
+    config.migrate_defaults(conn)
+    assert config.get(conn, "quizbot.effort") == "medium"
+    assert config.DEFAULTS["quizbot.max_story_sends_per_hour"] == "0"
+
+
+def test_story_hour_cap_zero_means_unlimited(conn):
+    from datetime import datetime, timedelta
+
+    from radio_helper.quizbot import story
+
+    now = datetime(2026, 10, 22, 12, 0)
+    for i in range(5):
+        at = (now - timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute("INSERT INTO story_posts (program, broadcast_date, topic, message, source, status, sent_at, "
+                     "created_at, updated_at) VALUES ('파워FM', '2026-10-22', '가을', 'x', 'approved', 'posted', ?, ?, ?)",
+                     (at, at, at))
+    conn.commit()
+    post = conn.execute("SELECT * FROM story_posts LIMIT 1").fetchone()
+    reasons = story.decide(conn, post, None, now, 0, "app")
+    assert not any("1시간" in r for r in reasons)
+    assert any("1시간" in r for r in story.decide(conn, post, None, now, 2, "app"))
 
 
 def test_beam_auto_and_speedup_steps(conn):
