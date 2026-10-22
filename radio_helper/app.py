@@ -15,8 +15,8 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import (__version__, boards, db, evidence, gates, generator, notices, quiz, remote, repair, schedules, server,
-               stations, updater)
+from . import (__version__, aside, boards, broadcast_seed, collect, db, evidence, gates, generator, notices, quiz, remote,
+               repair, schedules, server, stations, updater)
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -41,7 +41,7 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
                      "listen_lanes", "listen_lanes_test", "stt_gpu_recheck", "listen_vbcable",
-                     "corners_login", "corners_login_check",
+                     "corners_login", "corners_login_check", "corners_collect", "corners_browser",
                      "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
@@ -65,6 +65,8 @@ def create_app(data_dir: str | None = None) -> Flask:
     qconfig.migrate_defaults(conn)
     qconfig.migrate_channels(conn)
     qconfig.migrate_billing(conn, server.is_server())
+    broadcast_seed.seed_schedules(conn)                  # 비어 있는 채널 편성표 · 기본 코너 게시판 (0.62)
+    broadcast_seed.seed_boards(conn)
     if not server.is_server():
         boards.enable_daily_once(conn)
     conn.close()
@@ -595,9 +597,15 @@ def create_app(data_dir: str | None = None) -> Flask:
                        "targets": boards.login_targets(g.conn),
                        "eligible": sum(1 for r in g.conn.execute("SELECT * FROM corners WHERE board_exists = 1").fetchall()
                                        if stations.corner_station(r)),
-                       "recent": g.conn.execute("SELECT * FROM events WHERE kind = 'post' ORDER BY id DESC LIMIT 6").fetchall()}
+                       "recent": g.conn.execute("SELECT * FROM events WHERE kind = 'post' ORDER BY id DESC LIMIT 6").fetchall(),
+                       "aside": aside.describe(g.conn),
+                       "collect_last": (db.get_setting(g.conn, collect.LAST_KEY) or "")[:16],
+                       "collect_pages": len(collect.start_pages(g.conn)),
+                       "collect_log": g.conn.execute("SELECT * FROM events WHERE kind = 'post' AND message LIKE "
+                                                     "'코너 게시판 모으기%' ORDER BY id DESC LIMIT 1").fetchone()}
         return render_template("corners.html", corners=rows, programs=programs_, program=program,
-                               groups=groups, total=sum(c["boards"] for c in counts), last=last, daily=board_daily)
+                               groups=groups, total=sum(c["boards"] for c in counts), last=last, daily=board_daily,
+                               aside_choices=aside.CHOICES)
 
     @app.post("/corners/daily")
     def corners_daily():
@@ -621,6 +629,27 @@ def create_app(data_dir: str | None = None) -> Flask:
         log_name = launch_module("radio_helper.boards", ["login"], "boards")
         flash("도우미 브라우저 창이 뜹니다. 방송국 탭마다 직접 로그인하고 창을 닫으면 로그인 상태를 확인해 적습니다 "
               f"(로그인 정보는 이 프로그램이 읽지 않고 도우미 브라우저에만 남습니다). (기록: {log_name})")
+        return redirect(url_for("corners") + "#daily")
+
+    @app.post("/corners/browser")
+    def corners_browser():
+        """게시판 작업 브라우저: Aside(있으면) / Edge, Aside 경로를 직접 적기."""
+        choice = form("browser")
+        db.set_setting(g.conn, aside.BROWSER_KEY, choice if choice in aside.CHOICES else "auto")
+        path = form("aside_path").strip().strip('"')
+        db.set_setting(g.conn, aside.PATH_KEY, path)
+        db.set_setting(g.conn, aside.ERROR_KEY, "")
+        found = aside.describe(g.conn)["found"]
+        flash(f"게시판 작업은 Aside({found})로 엽니다. 처음 한 번은 '미리 로그인'으로 뜨는 Aside 창에서 방송국마다 로그인하세요."
+              if found else "게시판 작업은 Edge 로 엽니다." + (" (적은 경로에 Aside 가 없습니다)" if path else ""))
+        return redirect(url_for("corners") + "#daily")
+
+    @app.post("/corners/collect")
+    def corners_collect():
+        log_name = launch_module("radio_helper.collect", ["run"], "collect")
+        db.set_setting(g.conn, "collect.started_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        flash("프로그램 홈페이지를 창 없이 하나씩 열어 사연·신청곡·코너 게시판 주소를 모읍니다 (몇 분 걸림, 게시판 작업이 "
+              f"끝난 뒤 시작). 끝나면 아래 목록에 '코너 게시판 모으기'로 붙습니다. (기록: {log_name})")
         return redirect(url_for("corners") + "#daily")
 
     @app.post("/corners/login-check")

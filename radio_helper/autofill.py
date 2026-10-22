@@ -470,17 +470,45 @@ def launch_profile(p, headless: bool):
     headless = headless or no_window()
     exe = os.environ.get("RADIO_HELPER_CHROMIUM")
     channel = os.environ.get("RADIO_HELPER_BROWSER_CHANNEL")
-    if channel is None and sys.platform.startswith("win"):
+    ctx = None
+    if not exe and channel is None and sys.platform.startswith("win"):
+        ctx = _launch_aside(p, headless)          # 0.62: 게시판 작업은 Aside 로 (없거나 안 열리면 Edge)
         channel = "msedge"
-    kwargs = {"headless": headless}
-    if exe:
-        kwargs["executable_path"] = exe
-    elif channel:
-        kwargs["channel"] = channel
-    ctx = p.chromium.launch_persistent_context(str(profile_dir()), **kwargs)
+    if ctx is None:
+        kwargs = {"headless": headless}
+        if exe:
+            kwargs["executable_path"] = exe
+        elif channel:
+            kwargs["channel"] = channel
+        ctx = p.chromium.launch_persistent_context(str(profile_dir()), **kwargs)
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
     page.on("dialog", _accept_dialog)   # '등록하시겠습니까?' 같은 확인 창은 확인 (글은 결과 기록에 남김)
     return ctx, page
+
+
+def _launch_aside(p, headless: bool, connect=None):
+    """Aside 를 찾으면 도우미 전용 Aside 프로필로 연다. 못 찾거나 열리지 않으면 None (까닭은 설정에 적어 화면에 보임)."""
+    from . import aside
+
+    conn = (connect or db.connect)()
+    try:
+        path = aside.chosen(conn)
+        if not path:
+            return None
+        fresh = not (db.data_dir() / "browser_profile_aside").exists()
+        try:
+            ctx = p.chromium.launch_persistent_context(str(aside.profile_dir()), executable_path=path, headless=headless)
+        except Exception as e:
+            db.set_setting(conn, aside.ERROR_KEY, f"{db.now()[:16]} Aside 를 열지 못해 Edge 로 엶 — {type(e).__name__}: "
+                                                  f"{str(e).splitlines()[0][:160] if str(e) else ''}")
+            return None
+        if db.get_setting(conn, aside.ERROR_KEY):
+            db.set_setting(conn, aside.ERROR_KEY, "")
+        if fresh:     # 새 Aside 프로필: Edge 프로필의 로그인은 없으니 '로그인 필요/확인 안 함'부터 다시
+            db.set_setting(conn, aside.LOGINS_KEY, "")
+        return ctx
+    finally:
+        conn.close()
 
 
 def _accept_dialog(dialog) -> None:

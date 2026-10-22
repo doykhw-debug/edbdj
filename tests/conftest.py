@@ -22,6 +22,15 @@ def no_real_claude_code(monkeypatch):
     monkeypatch.setattr(claude_cli, "_limited_until", 0.0)
 
 
+@pytest.fixture(autouse=True)
+def no_broadcast_seed(monkeypatch, request):
+    """기본 편성표·코너 목록은 그것을 시험하는 곳(seed_data 표시)에서만 넣는다 (다른 시험의 코너 수가 바뀌지 않게)."""
+    if request.node.get_closest_marker("seed_data") is None:
+        from radio_helper import broadcast_seed
+
+        monkeypatch.setattr(broadcast_seed, "load", lambda path=None: {})
+
+
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("RADIO_HELPER_DATA_DIR", str(tmp_path))

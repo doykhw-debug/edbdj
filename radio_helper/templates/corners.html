@@ -18,6 +18,17 @@
   <p class="hint">대상 코너 {{ daily.eligible }}개 · 오늘 자동 입력·등록 {{ daily.today }}건. 공지를 매번 다시 읽고, 받지 않음·AI 글 제한·첨부 필요·마감·방송 요일이 아니면
     올리지 않습니다. 같은 게시판은 공지가 바뀌었을 때만 다시 올리고, 같은 경험은 같은 방송국에 한 번만 씁니다.
     게시판 글은 채팅용 한 줄이 아니라 확인한 사연 본문 전체(인사·맺음 포함)로 씁니다. 코너마다 따로 정한 '매일 자동'은 그 설정대로 합니다.</p>
+  <p style="margin:10px 0 4px"><b>브라우저</b> <span class="muted">게시판 공지 읽기·글 입력·등록·로그인·게시판 모으기에 쓰는 창</span>
+    {% if daily.aside.found %}<span class="badge ok">Aside</span> <span class="hint">{{ daily.aside.found }}</span>
+    {% elif daily.aside.choice == 'edge' %}<span class="badge">Edge</span>
+    {% else %}<span class="badge warn">Aside 못 찾음 → Edge</span>{% endif %}</p>
+  {% if daily.aside.error %}<div class="flash warn">{{ daily.aside.error }}</div>{% endif %}
+  <form method="post" action="{{ url_for('corners_browser') }}" class="actions" style="margin-top:0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <select name="browser">{% for k, label in aside_choices.items() %}<option value="{{ k }}" {{ 'selected' if daily.aside.choice == k }}>{{ label }}</option>{% endfor %}</select>
+    <input type="text" name="aside_path" value="{{ daily.aside.path }}" placeholder="Aside 실행 파일 경로 (못 찾을 때만, 예: C:\Users\…\aside.exe)" style="min-width:320px">
+    <button class="secondary">브라우저 저장</button>
+  </form>
   <p style="margin:10px 0 4px"><b>로그인</b> <span class="muted">정해진 시각의 자동 실행은 창을 띄우지 않으므로, 미리 로그인해 두어야 등록됩니다</span></p>
   <ul class="list">
     {% for t in daily.targets %}{% set st = daily.logins.get(t.station) %}
@@ -30,8 +41,13 @@
     <form method="post" action="{{ url_for('corners_login') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">미리 로그인 (도우미 브라우저 창 열기)</button></form>
     <form method="post" action="{{ url_for('corners_login_check') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">로그인 상태 확인</button></form>
   </div>
+  <h3 style="margin-top:14px">코너 게시판 모으기 <span class="hint">프로그램 홈페이지 {{ daily.collect_pages }}곳의 메뉴에서 사연·신청곡·코너 게시판 주소를 모아 아래 목록에 넣음 · 일주일마다 저절로</span></h3>
+  <p class="muted">{% if daily.collect_log %}{{ daily.collect_log.at[5:16] }} — {{ daily.collect_log.message }}{% elif daily.collect_last %}마지막: {{ daily.collect_last }}{% else %}아직 모으지 않음 (관리 화면이 켜져 있으면 곧 뒤에서 시작){% endif %}</p>
+  <div class="actions">
+    <form method="post" action="{{ url_for('corners_collect') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">코너 게시판 지금 모으기</button></form>
+  </div>
   <p class="hint">로그인은 도우미 전용 브라우저 창에서 직접 합니다 (아이디·비밀번호·보안 문자는 이 프로그램이 읽거나 저장하지 않음).
-    Aside·크롬 같은 다른 브라우저의 로그인은 가져올 수 없어 이 창에서 한 번 로그인해 두면, 다음부터 창 없이 매일 등록합니다.</p>
+    창은 Aside 로 뜨지만(위 '브라우저'), 평소 쓰는 Aside 의 로그인은 가져올 수 없어 이 창에서 한 번 로그인해 두면 다음부터 창 없이 매일 등록합니다.</p>
   {% if daily.recent %}<details class="muted"><summary>최근 게시판 작업</summary>
     {% for e in daily.recent %}<div>{{ e.at[5:16] }} · {{ e.message }}</div>{% endfor %}</details>{% endif %}
 </div>

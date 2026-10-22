@@ -1,0 +1,993 @@
+{
+ "_note": "2026-10-22 수집. 방송사 공식 페이지·백과사전 편성표가 검색 결과에 보인 그대로만 넣음 (이 개발 환경은 방송사 사이트를 직접 열 수 없어 검색 결과로 확인). 확인 못 한 시간대는 비움. 사용자 PC 에서 일주일마다 웹 검색 편성표 새로고침·코너 게시판 모으기로 다시 확인한다.",
+ "schedules": {
+  "MBC FM4U": {
+   "as_of": "2026-06-29 개편 기준 (MBC 공식 공지)",
+   "sources": [
+    "https://www.imbc.com/broad/radio/notice/3900708_2998.html",
+    "https://m.imbc.com/wiz/radio/2026spring/index.html"
+   ],
+   "programs": [
+    {
+     "title": "응답하라 20세기",
+     "host": "",
+     "start": "05:05",
+     "end": "06:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "세상을 여는 아침, 이영은입니다",
+     "host": "이영은",
+     "start": "06:00",
+     "end": "07:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "굿모닝FM 테이입니다",
+     "host": "테이",
+     "start": "07:00",
+     "end": "09:00",
+     "days": "매일",
+     "homepage": "https://www.imbc.com/broad/radio/fm4u/morningfm/index.html"
+    },
+    {
+     "title": "오늘 아침 윤상입니다",
+     "host": "윤상",
+     "start": "09:00",
+     "end": "11:00",
+     "days": "매일",
+     "homepage": "https://www.imbc.com/broad/radio/fm4u/todaym/index.html"
+    },
+    {
+     "title": "안녕하세요 이문세입니다",
+     "host": "이문세",
+     "start": "11:00",
+     "end": "12:00",
+     "days": "매일",
+     "homepage": "https://www.imbc.com/broad/radio/fm4u/hellom/"
+    },
+    {
+     "title": "정오의 희망곡 김신영입니다",
+     "host": "김신영",
+     "start": "12:00",
+     "end": "14:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "두시의 데이트 안영미입니다",
+     "host": "안영미",
+     "start": "14:00",
+     "end": "16:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "완벽한 하루 이상순입니다",
+     "host": "이상순",
+     "start": "16:00",
+     "end": "18:00",
+     "days": "매일",
+     "homepage": "https://www.imbc.com/broad/radio/fm4u/perfect/index.html"
+    },
+    {
+     "title": "배철수의 음악캠프",
+     "host": "배철수",
+     "start": "18:00",
+     "end": "20:00",
+     "days": "매일",
+     "homepage": "https://www.imbc.com/broad/radio/fm4u/musiccamp/index.html"
+    },
+    {
+     "title": "김이나의 별이 빛나는 밤에",
+     "host": "김이나",
+     "start": "20:00",
+     "end": "22:00",
+     "days": "매일",
+     "homepage": "https://www.imbc.com/broad/radio/fm4u/starnight/"
+    },
+    {
+     "title": "친한친구 방송반",
+     "host": "제로베이스원",
+     "start": "22:00",
+     "end": "24:00",
+     "days": "월~수",
+     "homepage": ""
+    },
+    {
+     "title": "IDOL RADIO 시즌4",
+     "host": "",
+     "start": "22:00",
+     "end": "24:00",
+     "days": "목~금",
+     "homepage": ""
+    },
+    {
+     "title": "스포왕 고영배",
+     "host": "고영배",
+     "start": "22:00",
+     "end": "24:00",
+     "days": "토~일",
+     "homepage": ""
+    },
+    {
+     "title": "FM영화음악 김세윤입니다",
+     "host": "김세윤",
+     "start": "00:00",
+     "end": "01:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "아이돌 라디오 핫트랙",
+     "host": "",
+     "start": "01:00",
+     "end": "03:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "음악의 발견",
+     "host": "",
+     "start": "03:00",
+     "end": "05:00",
+     "days": "매일",
+     "homepage": ""
+    }
+   ]
+  },
+  "MBC 표준FM": {
+   "as_of": "2026-06-29 개편 기준 (MBC 공식 공지, 일부 시간대 비움)",
+   "sources": [
+    "https://www.imbc.com/broad/radio/notice/3900708_2998.html",
+    "https://tjmbc.co.kr/StandardFM/FM/2026-09-01"
+   ],
+   "programs": [
+    {
+     "title": "김경일의 물음표",
+     "host": "김경일",
+     "start": "06:05",
+     "end": "07:00",
+     "days": "토",
+     "homepage": ""
+    },
+    {
+     "title": "김종배의 시선집중",
+     "host": "김종배",
+     "start": "07:05",
+     "end": "08:30",
+     "days": "월~금",
+     "homepage": "https://www.imbc.com/broad/radio/fm/look/"
+    },
+    {
+     "title": "김종배의 시선집중",
+     "host": "김종배",
+     "start": "07:05",
+     "end": "08:00",
+     "days": "토~일",
+     "homepage": "https://www.imbc.com/broad/radio/fm/look/"
+    },
+    {
+     "title": "여성시대 양희은, 김일중입니다",
+     "host": "양희은, 김일중",
+     "start": "09:05",
+     "end": "11:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "이과학 저과학",
+     "host": "오승훈",
+     "start": "11:05",
+     "end": "12:00",
+     "days": "월~금",
+     "homepage": ""
+    },
+    {
+     "title": "손석희의 12시",
+     "host": "손석희",
+     "start": "12:05",
+     "end": "14:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "손태진의 트로트라디오",
+     "host": "손태진",
+     "start": "14:20",
+     "end": "16:00",
+     "days": "월~금",
+     "homepage": ""
+    },
+    {
+     "title": "손태진의 트로트라디오",
+     "host": "손태진",
+     "start": "14:10",
+     "end": "16:00",
+     "days": "토~일",
+     "homepage": ""
+    },
+    {
+     "title": "조승원의 뉴스하이킥",
+     "host": "조승원",
+     "start": "18:05",
+     "end": "20:00",
+     "days": "월~금",
+     "homepage": ""
+    }
+   ]
+  },
+  "CBS 음악FM": {
+   "as_of": "2026-06-15 개편 기준 (CBS 프로그램 홈·편성표)",
+   "sources": [
+    "https://www.cbs.co.kr/schedule?type=musicFm",
+    "https://www.nocutnews.co.kr/news/6529599"
+   ],
+   "programs": [
+    {
+     "title": "최강희의 영화음악 (재)",
+     "host": "최강희",
+     "start": "01:00",
+     "end": "02:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "김정원의 아름다운 당신에게 (재)",
+     "host": "김정원",
+     "start": "02:00",
+     "end": "04:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "이명희의 내가 매일 기쁘게",
+     "host": "이명희",
+     "start": "04:00",
+     "end": "06:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000222"
+    },
+    {
+     "title": "정민아의 Amazing Grace",
+     "host": "정민아",
+     "start": "06:00",
+     "end": "07:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000010"
+    },
+    {
+     "title": "김윤주의 그대와 여는 아침",
+     "host": "김윤주",
+     "start": "07:00",
+     "end": "09:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000218"
+    },
+    {
+     "title": "김정원의 아름다운 당신에게",
+     "host": "김정원",
+     "start": "09:00",
+     "end": "11:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000216"
+    },
+    {
+     "title": "최강희의 영화음악",
+     "host": "최강희",
+     "start": "11:00",
+     "end": "12:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000217"
+    },
+    {
+     "title": "이수영의 12시에 만납시다",
+     "host": "이수영",
+     "start": "12:00",
+     "end": "14:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000004"
+    },
+    {
+     "title": "한동준의 FM POPS",
+     "host": "한동준",
+     "start": "14:00",
+     "end": "16:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000219"
+    },
+    {
+     "title": "박승화의 가요속으로",
+     "host": "박승화",
+     "start": "16:00",
+     "end": "18:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000223"
+    },
+    {
+     "title": "김용신의 저녁스케치",
+     "host": "김용신",
+     "start": "18:00",
+     "end": "20:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000220"
+    },
+    {
+     "title": "김현주의 행복한 동행",
+     "host": "김현주",
+     "start": "20:00",
+     "end": "22:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000011"
+    },
+    {
+     "title": "허윤희의 꿈과 음악사이에",
+     "host": "허윤희",
+     "start": "22:00",
+     "end": "24:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000221"
+    }
+   ]
+  },
+  "CBS 표준FM": {
+   "as_of": "CBS 프로그램 홈 기준 (2026-06-15 개편 반영, 일부 시간대 비움)",
+   "sources": [
+    "https://www.cbs.co.kr/program/home/cbs_P000246",
+    "https://www.nocutnews.co.kr/news/6529599"
+   ],
+   "programs": [
+    {
+     "title": "정민아의 Amazing Grace",
+     "host": "정민아",
+     "start": "06:00",
+     "end": "07:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000010"
+    },
+    {
+     "title": "박성태의 뉴스쇼",
+     "host": "박성태",
+     "start": "07:00",
+     "end": "09:00",
+     "days": "월~금",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000246"
+    },
+    {
+     "title": "주말 뉴스쇼",
+     "host": "손수호",
+     "start": "07:00",
+     "end": "09:00",
+     "days": "토",
+     "homepage": ""
+    },
+    {
+     "title": "그대 창가에 알렉스입니다",
+     "host": "알렉스",
+     "start": "09:00",
+     "end": "11:00",
+     "days": "월~토",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000267"
+    },
+    {
+     "title": "백원경의 랄랄라",
+     "host": "백원경",
+     "start": "11:05",
+     "end": "12:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000256"
+    },
+    {
+     "title": "유지수의 해피송",
+     "host": "유지수",
+     "start": "12:05",
+     "end": "14:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000257"
+    },
+    {
+     "title": "하효진의 라이키팝",
+     "host": "하효진",
+     "start": "16:05",
+     "end": "17:00",
+     "days": "월~금",
+     "homepage": ""
+    },
+    {
+     "title": "하효진의 라이키팝",
+     "host": "하효진",
+     "start": "16:05",
+     "end": "18:00",
+     "days": "주말",
+     "homepage": ""
+    },
+    {
+     "title": "CBS 경제연구실",
+     "host": "",
+     "start": "17:00",
+     "end": "17:30",
+     "days": "월~금",
+     "homepage": ""
+    },
+    {
+     "title": "CBS 뉴스룸",
+     "host": "",
+     "start": "17:30",
+     "end": "18:00",
+     "days": "월~금",
+     "homepage": ""
+    },
+    {
+     "title": "박재홍의 한판승부",
+     "host": "박재홍",
+     "start": "18:00",
+     "end": "19:30",
+     "days": "월~금",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000269"
+    },
+    {
+     "title": "이강민의 잡다한 지식사전",
+     "host": "이강민",
+     "start": "19:30",
+     "end": "20:00",
+     "days": "월~금",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000271"
+    },
+    {
+     "title": "라디오 세바시",
+     "host": "",
+     "start": "20:05",
+     "end": "21:00",
+     "days": "월~금",
+     "homepage": ""
+    },
+    {
+     "title": "새롭게 하소서",
+     "host": "",
+     "start": "21:05",
+     "end": "21:29",
+     "days": "월~금",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000248"
+    },
+    {
+     "title": "5분 메시지",
+     "host": "",
+     "start": "21:30",
+     "end": "21:35",
+     "days": "월~토",
+     "homepage": ""
+    },
+    {
+     "title": "김은영의 CCM CAMP",
+     "host": "",
+     "start": "22:00",
+     "end": "24:00",
+     "days": "매일",
+     "homepage": "https://www.cbs.co.kr/program/home/cbs_P000243"
+    }
+   ]
+  },
+  "KBS 쿨FM": {
+   "as_of": "2026-05-11 봄 개편 기준 (백과사전 편성표·개편 기사)",
+   "sources": [
+    "https://ko.wikipedia.org/wiki/KBS_%EC%A0%9C2FM",
+    "https://www.newsis.com/view/NISX20260430_0003612567"
+   ],
+   "programs": [
+    {
+     "title": "허유원의 상쾌한 아침",
+     "host": "허유원",
+     "start": "05:00",
+     "end": "07:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "조정식의 FM대행진",
+     "host": "조정식",
+     "start": "07:00",
+     "end": "09:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "이현우의 음악앨범",
+     "host": "이현우",
+     "start": "09:00",
+     "end": "11:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "박명수의 라디오쇼",
+     "host": "박명수",
+     "start": "11:00",
+     "end": "12:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "폴킴의 가요광장",
+     "host": "폴킴",
+     "start": "12:00",
+     "end": "14:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "가비의 슈퍼라디오",
+     "host": "가비",
+     "start": "14:00",
+     "end": "16:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "윤정수 남창희의 미스터 라디오",
+     "host": "윤정수, 남창희",
+     "start": "16:00",
+     "end": "18:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "사랑하기 좋은 날 이금희입니다",
+     "host": "이금희",
+     "start": "18:00",
+     "end": "20:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "오마이걸 효정의 볼륨을 높여요",
+     "host": "효정",
+     "start": "20:00",
+     "end": "22:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "한해의 키스 더 라디오",
+     "host": "한해",
+     "start": "22:00",
+     "end": "00:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "스테이션 제로",
+     "host": "",
+     "start": "00:00",
+     "end": "01:00",
+     "days": "화~토",
+     "homepage": ""
+    },
+    {
+     "title": "STATION X",
+     "host": "",
+     "start": "00:00",
+     "end": "01:00",
+     "days": "일,월",
+     "homepage": ""
+    }
+   ]
+  },
+  "KBS 해피FM": {
+   "as_of": "2026-08-17 기준 (백과사전 편성표, 일부 주말 미확인)",
+   "sources": [
+    "https://ko.wikipedia.org/wiki/KBS_%EC%A0%9C2%EB%9D%BC%EB%94%94%EC%98%A4",
+    "https://namu.wiki/w/KBS%20%EC%A0%9C2%EB%9D%BC%EB%94%94%EC%98%A4/%ED%8E%B8%EC%84%B1%ED%91%9C"
+   ],
+   "programs": [
+    {
+     "title": "허유원의 상쾌한 아침",
+     "host": "허유원",
+     "start": "05:00",
+     "end": "06:57",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "우리의 아침, 조경아입니다",
+     "host": "조경아",
+     "start": "07:00",
+     "end": "08:57",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "주현미의 러브레터",
+     "host": "주현미",
+     "start": "09:00",
+     "end": "11:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "박명수의 라디오쇼",
+     "host": "박명수",
+     "start": "11:00",
+     "end": "12:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "임백천의 백뮤직",
+     "host": "임백천",
+     "start": "12:00",
+     "end": "14:00",
+     "days": "평일",
+     "homepage": ""
+    },
+    {
+     "title": "은가은의 빛나는 트로트",
+     "host": "은가은",
+     "start": "14:00",
+     "end": "15:57",
+     "days": "평일",
+     "homepage": ""
+    },
+    {
+     "title": "이본의 라라랜드",
+     "host": "이본",
+     "start": "16:00",
+     "end": "18:00",
+     "days": "평일",
+     "homepage": ""
+    },
+    {
+     "title": "이슬기의 해피타임",
+     "host": "이슬기",
+     "start": "18:00",
+     "end": "20:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "이상호의 드림팝",
+     "host": "이상호",
+     "start": "20:00",
+     "end": "22:00",
+     "days": "매일",
+     "homepage": ""
+    },
+    {
+     "title": "밤을 잊은 그대에게",
+     "host": "유지원",
+     "start": "22:00",
+     "end": "00:00",
+     "days": "매일",
+     "homepage": ""
+    }
+   ]
+  }
+ },
+ "boards": [
+  {
+   "channel": "파워FM",
+   "program": "김영철의 파워FM",
+   "title": "사연과 신청곡 (부제:In your letter)",
+   "url": "https://programs.sbs.co.kr/radio/0chulpowerfm/cornerboards/57577?cornerid=3002"
+  },
+  {
+   "channel": "파워FM",
+   "program": "김영철의 파워FM",
+   "title": "영철이가 쏜다! 빵야빵야!!!",
+   "url": "https://programs.sbs.co.kr/radio/0chulpowerfm/cornerboards/57577?cornerid=3003"
+  },
+  {
+   "channel": "파워FM",
+   "program": "김영철의 파워FM",
+   "title": "영철본색",
+   "url": "https://programs.sbs.co.kr/radio/0chulpowerfm/cornerboards/57577?cornerid=3005"
+  },
+  {
+   "channel": "파워FM",
+   "program": "김영철의 파워FM",
+   "title": "피터의 진짜 영국식 영어",
+   "url": "https://programs.sbs.co.kr/radio/0chulpowerfm/cornerboards/57577?cornerid=3007"
+  },
+  {
+   "channel": "파워FM",
+   "program": "김영철의 파워FM",
+   "title": "피터, 궁금해요!",
+   "url": "https://programs.sbs.co.kr/radio/0chulpowerfm/cornerboards/57577?cornerid=40001"
+  },
+  {
+   "channel": "파워FM",
+   "program": "아름다운 이 아침, 봉태규입니다",
+   "title": "시대착오 퀴즈",
+   "url": "https://programs.sbs.co.kr/radio/morningbong/boards/81863"
+  },
+  {
+   "channel": "파워FM",
+   "program": "박하선의 씨네타운",
+   "title": "영화는 방울방울",
+   "url": "https://programs.sbs.co.kr/radio/cinetown11/boards/67077"
+  },
+  {
+   "channel": "파워FM",
+   "program": "12시엔 주현영",
+   "title": "사연과 신청곡",
+   "url": "https://programs.sbs.co.kr/radio/sbs12n/boards/83474"
+  },
+  {
+   "channel": "파워FM",
+   "program": "12시엔 주현영",
+   "title": "시크릿 주주",
+   "url": "https://programs.sbs.co.kr/radio/sbs12n/boards/83472"
+  },
+  {
+   "channel": "파워FM",
+   "program": "12시엔 주현영",
+   "title": "별다뉴",
+   "url": "https://programs.sbs.co.kr/radio/sbs12n/boards/83473"
+  },
+  {
+   "channel": "파워FM",
+   "program": "두시탈출 컬투쇼",
+   "title": "사연과 신청곡",
+   "url": "https://programs.sbs.co.kr/radio/cultwoshow/boards/58047"
+  },
+  {
+   "channel": "파워FM",
+   "program": "두시탈출 컬투쇼",
+   "title": "모시는 사연",
+   "url": "https://programs.sbs.co.kr/radio/cultwoshow/boards/58048"
+  },
+  {
+   "channel": "파워FM",
+   "program": "두시탈출 컬투쇼",
+   "title": "[월] 사연진품명품",
+   "url": "https://programs.sbs.co.kr/radio/cultwoshow/boards/58052"
+  },
+  {
+   "channel": "파워FM",
+   "program": "황제성의 황제파워",
+   "title": "드디어 신청곡 받습니다",
+   "url": "https://programs.sbs.co.kr/radio/kingcastlepower/boards/74230"
+  },
+  {
+   "channel": "파워FM",
+   "program": "박소현의 러브게임",
+   "title": "사연과 신청곡",
+   "url": "https://programs.sbs.co.kr/radio/lovegame/boards/57679"
+  },
+  {
+   "channel": "파워FM",
+   "program": "박소현의 러브게임",
+   "title": "[월] 나만 쓰레기야?",
+   "url": "https://programs.sbs.co.kr/radio/lovegame/boards/57680"
+  },
+  {
+   "channel": "파워FM",
+   "program": "박소현의 러브게임",
+   "title": "[금] 우리만의 자유로운 차트",
+   "url": "https://programs.sbs.co.kr/radio/lovegame/boards/57683"
+  },
+  {
+   "channel": "파워FM",
+   "program": "웬디의 영스트리트",
+   "title": "[금] 선곡, 플리's",
+   "url": "https://programs.sbs.co.kr/radio/wendy0s/boards/87387"
+  },
+  {
+   "channel": "파워FM",
+   "program": "웬디의 영스트리트",
+   "title": "[토] 영스 뮤직 페스티벌 'YMF'",
+   "url": "https://programs.sbs.co.kr/radio/wendy0s/boards/85460"
+  },
+  {
+   "channel": "파워FM",
+   "program": "배성재의 텐",
+   "title": "사연과 신청곡",
+   "url": "https://programs.sbs.co.kr/radio/ten/boards/57950"
+  },
+  {
+   "channel": "파워FM",
+   "program": "배성재의 텐",
+   "title": "프로듀스 1077",
+   "url": "https://programs.sbs.co.kr/radio/ten/boards/57963"
+  },
+  {
+   "channel": "파워FM",
+   "program": "딘딘의 뮤직하이",
+   "title": "사연과 신청곡",
+   "url": "https://programs.sbs.co.kr/radio/dindinmusichigh/boards/66355"
+  },
+  {
+   "channel": "러브FM",
+   "program": "이숙영의 러브FM",
+   "title": "내 안의 그대",
+   "url": "https://programs.sbs.co.kr/radio/lovefm/boards/57561"
+  },
+  {
+   "channel": "러브FM",
+   "program": "이숙영의 러브FM",
+   "title": "추억의 가요 열전 (월,화,목,금)",
+   "url": "https://programs.sbs.co.kr/radio/lovefm/boards/75360"
+  },
+  {
+   "channel": "러브FM",
+   "program": "김태현의 정치쇼",
+   "title": "청취자 참여",
+   "url": "https://programs.sbs.co.kr/radio/lchshow/boards/65212"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "세상을 여는 아침, 이영은입니다",
+   "title": "사연과 신청곡",
+   "url": "https://www.imbc.com/broad/radio/fm4u/worldmorning/requestsong/"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "세상을 여는 아침, 이영은입니다",
+   "title": "세상을 여는 아침 게시판",
+   "url": "https://m.imbc.com/imbbs/imbbslist/1000575100000100000?bid=worldm57&pos=radio&menu=mn-basic"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "굿모닝FM 테이입니다",
+   "title": "사연과 신청곡",
+   "url": "https://www.imbc.com/broad/radio/fm4u/morningfm/requestsong/index.html"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "굿모닝FM 테이입니다",
+   "title": "[화] 고민박살 허안나",
+   "url": "https://m.imbc.com/imbbs/imbbslist/1000587100000100000?bid=goodm99&pos=radio&menu=mn-week"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "오늘 아침 윤상입니다",
+   "title": "요일 코너",
+   "url": "https://m.imbc.com/imbbs/imbbslist/1000576100000100000?bid=todaymo56&pos=radio&menu=mn-week"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "정오의 희망곡 김신영입니다",
+   "title": "매일 코너 (사연과 신청곡)",
+   "url": "https://m.imbc.com/imbbs/imbbslist/1001919100000100000?bid=noonhope21&pos=radio&menu=mn-daily"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "두시의 데이트 안영미입니다",
+   "title": "요일 코너",
+   "url": "https://m.imbc.com/imbbs/imbbslist/1000586100000100000?bid=td254&pos=radio&menu=mn-week"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "배철수의 음악캠프",
+   "title": "사연과 신청곡",
+   "url": "https://www.imbc.com/broad/radio/fm4u/musiccamp/story/index.html"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "김이나의 별이 빛나는 밤에",
+   "title": "사연과 신청곡",
+   "url": "https://www.imbc.com/broad/radio/fm4u/starnight/storys/"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "김이나의 별이 빛나는 밤에",
+   "title": "요일 코너",
+   "url": "https://m.imbc.com/imbbs/imbbslist/1000672100000100000?bid=pstarnight225&pos=radio&menu=mn-week"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "친한친구 방송반",
+   "title": "사연과 신청곡",
+   "url": "https://m.imbc.com/imbbs/imbbslist/1006629100000100000?bid=bdfriend03&pos=radio&menu=mn-daily"
+  },
+  {
+   "channel": "MBC FM4U",
+   "program": "FM영화음악 김세윤입니다",
+   "title": "말로 하는 신청곡",
+   "url": "https://m.imbc.com/imbbs/imbbslist/1003725100000100000?bid=moviemusic05&pos=radio&menu=mn-daily"
+  },
+  {
+   "channel": "MBC 표준FM",
+   "program": "손태진의 트로트라디오",
+   "title": "매일 코너",
+   "url": "https://m.imbc.com/TalkBBS/TalkList/1006462100000100000?bid=3446&menu=mn-daily"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "이명희의 내가 매일 기쁘게",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000222_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "김윤주의 그대와 여는 아침",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000218_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "김정원의 아름다운 당신에게",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000216_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "김정원의 아름다운 당신에게",
+   "title": "나의 찬란한 그대에게",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000216_toYou"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "최강희의 영화음악",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000217_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "이수영의 12시에 만납시다",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000004_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "한동준의 FM POPS",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000219_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "한동준의 FM POPS",
+   "title": "코너 게시판 (jewelSong)",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000219_jewelSong"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "박승화의 가요속으로",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000223_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "김용신의 저녁스케치",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000220_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "김현주의 행복한 동행",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000011_request"
+  },
+  {
+   "channel": "CBS 음악FM",
+   "program": "허윤희의 꿈과 음악사이에",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000221_request"
+  },
+  {
+   "channel": "CBS 표준FM",
+   "program": "백원경의 랄랄라",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000256_request"
+  },
+  {
+   "channel": "CBS 표준FM",
+   "program": "유지수의 해피송",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000257_request"
+  },
+  {
+   "channel": "CBS 표준FM",
+   "program": "찬양하라 내 영혼아",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000282_request"
+  },
+  {
+   "channel": "CBS 표준FM",
+   "program": "최정원의 당신을 향한 노래",
+   "title": "사연과 신청곡",
+   "url": "https://www.cbs.co.kr/board/list/cbs_P000281_request"
+  }
+ ]
+}
