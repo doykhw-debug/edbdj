@@ -4,7 +4,8 @@
 
 - 사용자 PC 에서 도우미 브라우저(창 없이)로 실제 홈페이지를 열어, 메뉴에 있는 같은 프로그램의 게시판 주소만 넣는다
   (주소를 지어내지 않음). 공지·다시듣기·선곡표·포토·당첨자 같은 게시판은 뺀다.
-- 시작점: 프로그램 목록(편성표)의 공식 홈페이지 주소 + 이미 있는 코너 화면에서 찾아 둔 같은 프로그램 코너.
+- 시작점: 방송국 라디오 첫 화면(아래 HUBS)의 프로그램 목록 + 프로그램 목록(편성표)의 공식 홈페이지 주소 +
+  이미 있는 코너 화면에서 찾아 둔 같은 프로그램 코너.
 - 일주일마다 저절로 다시 모은다 (개편·새 코너 반영). 이미 있는 주소는 그대로 둔다.
 - 넣은 코너는 '매일 게시판 확인'이 하나씩 공지를 읽고, 받지 않는 곳은 건너뛴다.
 """
@@ -17,9 +18,9 @@ import re
 import sys
 from datetime import datetime, timedelta
 
-from . import db, stations
 from urllib.parse import urlparse
 
+from . import db, stations
 from .boards import BOARD_LOCK, board_busy
 
 SKIP_TEXT = re.compile(r"공지|다시\s*듣기|선곡|포토|사진|갤러리|당첨|VOD|보이는\s*라디오|FAQ|자주\s*묻는|제작진|출연자|"
@@ -28,9 +29,39 @@ MAX_PER_PAGE = 15
 REFRESH_DAYS = 7
 LAST_KEY = "collect.last_run"
 STARTED_KEY = "collect.started_at"
+# 방송국 라디오 첫 화면 → 프로그램 홈페이지 (사용자가 보내 준 CBS 화면, 2026-10-22):
+#   https://www.cbs.co.kr/radio 위쪽 '표준FM · 음악FM · JOY4U' 탭마다 프로그램 그림 줄 → 프로그램 홈
+#   (…/program/home/cbs_P000554 같은 주소). 프로그램 홈 메뉴: 홈 · 공지사항 · 선곡표 · 사연과 신청곡, 아래에 '요일별 코너'.
+#   '사연과 신청곡'은 비공개 게시판(작성자 본인과 관리자만 봄)이고 '게시판 운영지침' 단추와 '글쓰기' 단추가 있다.
+# SBS (2026-10-22 화면): https://www.sbs.co.kr/radio?div=gnb_pc '파워FM · 러브FM · 고릴라M' 탭마다 진행자 그림 줄 →
+#   프로그램 홈(programs.sbs.co.kr/radio/<코드>/main). 메뉴: 프로그램 소개 · 라디오 선곡표 · (프로그램마다 다른 참여 게시판,
+#   예: 황제파워 '황제의 전당 · 황제파워 AI 로고송 모집 · 참여해주세요') · 전화 연결 신청 · 다시듣기/팟캐스트.
+# MBC (2026-10-22 화면): https://www.imbc.com/broad/radio/ '표준FM 95.9 · FM4U 91.9' 지금 방송 칸(아래 펼침에 다음 순서) →
+#   프로그램 홈(www.imbc.com/broad/radio/fm4u/<이름>/). 메뉴: mini 메시지 · 선곡표 · 다시듣기 · 보이는 라디오 · 사연과 신청곡 ·
+#   인스타그램 · 상품문의, 아래에 '매일코너'·'요일코너' 목록.
+# KBS (2026-10-22 화면): https://radio.kbs.co.kr/ '1Radio · HappyFM · 3Radio · ClassicFM · CoolFM · 한민족방송' 탭마다 프로그램
+#   그림 목록(시간순) → 프로그램 홈(program.kbs.co.kr/2fm/radio/<이름>/…). 메뉴: 다시 듣기 ▾ · 청취자 참여 ▾ · 선물방 ▾ ·
+#   공지사항 ▾ (펼침 메뉴 안에 게시판 링크), 아래 '오늘의 코너 · 전체 코너 소개'.
+HUBS = {
+    "SBS": {"url": "https://www.sbs.co.kr/radio?div=gnb_pc", "tabs": ["파워FM", "러브FM", "고릴라M"],
+            "program": re.compile(r"^https://(?:m\.)?programs\.sbs\.co\.kr/radio/([A-Za-z0-9_]+)(?:[/?#]|$)", re.I),
+            "home": "https://programs.sbs.co.kr/radio/{}/main"},
+    "MBC": {"url": "https://www.imbc.com/broad/radio/", "tabs": [], "expand": True,
+            "program": re.compile(r"^https://(?:www\.)?imbc\.com/broad/radio/((?:fm4u|fm|chm)/[A-Za-z0-9_]+)(?:/|$)", re.I),
+            "home": "https://www.imbc.com/broad/radio/{}/"},
+    "KBS": {"url": "https://radio.kbs.co.kr/", "tabs": ["CoolFM", "HappyFM", "1Radio", "ClassicFM"],
+            "program": re.compile(r"^https://program\.kbs\.co\.kr/((?:1radio|2radio|3radio|1fm|2fm|cool|happy)/radio/"
+                                  r"[A-Za-z0-9_\-]+)(?:[/?#]|$)", re.I),
+            "home": "https://program.kbs.co.kr/{}/pc/index.html"},
+    "CBS": {"url": "https://www.cbs.co.kr/radio", "tabs": ["표준FM", "음악FM", "JOY4U"],
+            "program": re.compile(r"^https://(?:www\.)?cbs\.co\.kr/(?:radio/)?program/home/(cbs_P\d+)", re.I),
+            "home": "https://www.cbs.co.kr/program/home/{}"},
+}
+NOT_PROGRAM = {"main", "schedule", "notice", "index", "event", "events", "podcast", "onair", "mini"}
 
 
-BOARD_URL = re.compile(r"board|bbs|corner", re.I)
+BOARD_URL = re.compile(r"board|bbs|corner|requestsong|storys?(?:/|$)", re.I)
+STRONG_TEXT = re.compile(r"사연|신청곡|참여해|참여하기|모집|코너")       # 주소 모양이 달라도 게시판으로 보는 메뉴 글자
 BOARD_TEXT = re.compile(r"사연|신청|코너|게시판|참여|청취자|한마디|퀴즈|고민|이야기")
 GENERIC = {"program", "programs", "home", "main", "radio", "broad", "index", "index.html", "main.html", "pc", "m", "mobile",
            "fm", "fm4u", "2fm", "1radio", "2radio", "sfm", "lovefm", "powerfm", "v2", "wiz"}
@@ -56,7 +87,8 @@ def board_links(base_url: str, links: list[tuple[str, str]]) -> list[dict]:
             continue
         u = urlparse(href)
         where = (u.path + "?" + u.query).lower()
-        if not BOARD_URL.search(where) or SKIP_TEXT.search(text) or SKIP_TEXT.search(where.rsplit("/", 1)[-1]):
+        if not (BOARD_URL.search(where) or STRONG_TEXT.search(text)) or SKIP_TEXT.search(text) \
+                or SKIP_TEXT.search(where.rsplit("/", 1)[-1]):
             continue
         if not (any(t in where for t in tokens) or BOARD_TEXT.search(text)):
             continue
@@ -67,14 +99,82 @@ def board_links(base_url: str, links: list[tuple[str, str]]) -> list[dict]:
     return out
 
 
-def start_pages(conn) -> list[dict]:
-    """방문할 프로그램 홈페이지 [{channel, program, url}] (허용된 방송국 https 주소만, 같은 주소는 한 번)."""
+def hub_programs(station: str, links: list[tuple[str, str]]) -> list[dict]:
+    """라디오 첫 화면 링크 → 프로그램 홈페이지 [{program, url, code}] (순수 계산, 같은 프로그램은 한 번)."""
+    hub = HUBS[station]
     out, seen = [], set()
+    for href, text in links:
+        m = hub["program"].match((href or "").split("#")[0])
+        if not m or m.group(1) in seen or m.group(1).rsplit("/", 1)[-1].lower() in NOT_PROGRAM:
+            continue
+        seen.add(m.group(1))
+        name = " ".join((text or "").split())
+        name = re.sub(r"\s*(ON\s*AIR|보이는\s*라디오)\s*", " ", name, flags=re.I).strip()
+        out.append({"program": name[:60] or f"{station} 프로그램", "url": hub["home"].format(m.group(1)),
+                    "code": m.group(1)})
+    return out
+
+
+def read_hub(url: str, tabs: list[str], expand: bool = False) -> list[tuple[str, str]]:
+    """라디오 첫 화면: 채널 탭을 하나씩 눌러 가며 보이는 링크를 모두 모은다. expand: 접힌 목록(펼침 단추)도 연다 (MBC)."""
+    from playwright.sync_api import sync_playwright
+
+    from . import autofill
+
+    links: list = []
+    with sync_playwright() as p:
+        ctx, page = autofill.launch_profile(p, headless=True)
+        try:
+            page.goto(url)
+            for tab in [None, *tabs]:
+                if tab:
+                    try:
+                        page.get_by_text(tab, exact=True).first.click(timeout=5000)
+                    except Exception:
+                        try:                                  # 글자가 그림인 탭 (KBS 'CoolFM' 등)
+                            page.locator(f"img[alt*='{tab}'], [title*='{tab}'], [aria-label*='{tab}']").first.click(timeout=3000)
+                        except Exception:
+                            continue
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    pass
+                links += page.eval_on_selector_all("a[href]", "els => els.map(a => [a.href, a.innerText || ''])")
+            if expand:
+                folded = page.locator("[aria-expanded=false]")
+                for i in range(min(folded.count(), 8)):
+                    try:
+                        folded.nth(i).click(timeout=3000)
+                        page.wait_for_timeout(800)
+                    except Exception:
+                        continue
+                links += page.eval_on_selector_all("a[href]", "els => els.map(a => [a.href, a.innerText || ''])")
+        finally:
+            ctx.close()
+    return links
+
+
+def same_code(url: str) -> str:
+    """같은 프로그램 홈인지 견주는 열쇠 (끝의 main·index.html·/ 는 뗌)."""
+    m = re.search(r"cbs_P\d+", url or "")
+    if m:
+        return m.group(0)
+    return re.sub(r"(/main|/index\.html?)?/?$", "", (url or "").split("?")[0]).lower()
+
+
+def start_pages(conn, hub_found: list[dict] | None = None) -> list[dict]:
+    """방문할 프로그램 홈페이지 [{channel, program, url}] (허용된 방송국 https 주소만, 같은 프로그램은 한 번).
+    hub_found: 라디오 첫 화면에서 찾은 프로그램 [{station, program, url}]."""
+    out, seen = [], set()
+    for h in hub_found or []:
+        if same_code(h["url"]) not in seen:
+            seen.add(same_code(h["url"]))
+            out.append({"channel": h["station"], "program": h["program"], "url": h["url"]})
     for p in conn.execute("SELECT channel, title, main_url FROM programs WHERE on_air = 1 ORDER BY channel, start_time"):
         url = (p["main_url"] or "").strip()
-        if url in seen or stations.station_of(url) is None:
+        if same_code(url) in seen or stations.station_of(url) is None:
             continue
-        seen.add(url)
+        seen.add(same_code(url))
         out.append({"channel": p["channel"], "program": p["title"], "url": url})
     return out
 
@@ -109,25 +209,49 @@ def add(conn, url: str, title: str, program: str, note: str) -> bool:
     return cur.rowcount > 0
 
 
-def collect(conn, reader=read_links, say=print, now: datetime | None = None) -> dict:
-    """모으기 한 번. {pages, failed, added, programs}"""
+def collect_page(conn, start: dict, reader=read_links, stamp: str = "", say=print) -> int | None:
+    """프로그램 홈페이지 하나의 메뉴에서 게시판을 넣는다. 새로 넣은 수 (열지 못하면 None)."""
+    stamp = stamp or datetime.now().strftime("%Y-%m-%d")
+    try:
+        links = reader(start["url"])
+    except Exception as e:
+        say(f"{start['program']}: 홈페이지를 열지 못함 — {type(e).__name__}: {str(e)[:80]}")
+        return None
+    n = 0
+    for x in board_links(start["url"], links):
+        if add(conn, x["url"], x["text"], start["program"],
+               f"코너 게시판 모으기 ({start['channel']} {start['program']} 홈페이지 메뉴, {stamp})"):
+            n += 1
+    conn.commit()
+    return n
+
+
+def collect(conn, reader=read_links, say=print, now: datetime | None = None, hub_reader=read_hub) -> dict:
+    """모으기 한 번. {pages, failed, added, programs, hub}"""
     now = now or datetime.now()
     stamp = now.strftime("%Y-%m-%d")
-    result = {"pages": 0, "failed": 0, "added": 0, "programs": []}
-    for start in start_pages(conn):
+    result = {"pages": 0, "failed": 0, "added": 0, "programs": [], "hub": 0}
+    found = []
+    for station, hub in HUBS.items():
         try:
-            links = reader(start["url"])
+            progs = hub_programs(station, hub_reader(hub["url"], hub["tabs"], hub.get("expand", False)))
         except Exception as e:
+            say(f"{station} 라디오 첫 화면을 열지 못함 — {type(e).__name__}: {str(e)[:80]}")
+            continue
+        for x in progs:
+            found.append({**x, "station": station})
+            # 편성표에 같은 이름의 프로그램이 있으면 홈페이지 주소를 채워 둔다 (다음 모으기·공지 읽기에 씀)
+            conn.execute("UPDATE programs SET main_url = ? WHERE COALESCE(main_url, '') = '' AND title = ? "
+                         "AND channel LIKE ?", (x["url"], x["program"], f"{station}%"))
+        conn.commit()
+        result["hub"] += len(progs)
+        say(f"{station} 라디오 첫 화면: 프로그램 {len(progs)}개")
+    for start in start_pages(conn, found):
+        n = collect_page(conn, start, reader, stamp, say)
+        if n is None:
             result["failed"] += 1
-            say(f"{start['program']}: 홈페이지를 열지 못함 — {type(e).__name__}: {str(e)[:80]}")
             continue
         result["pages"] += 1
-        n = 0
-        for x in board_links(start["url"], links):
-            if add(conn, x["url"], x["text"], start["program"],
-                   f"코너 게시판 모으기 ({start['channel']} {start['program']} 홈페이지 메뉴, {stamp})"):
-                n += 1
-        conn.commit()
         if n:
             result["added"] += n
             result["programs"].append(f"{start['program']} {n}")
@@ -146,7 +270,9 @@ def collect(conn, reader=read_links, say=print, now: datetime | None = None) -> 
                 result["added"] += 1
     conn.commit()
     db.set_setting(conn, LAST_KEY, now.strftime("%Y-%m-%d %H:%M:%S"))
-    db.log(conn, "post", f"코너 게시판 모으기: 홈페이지 {result['pages']}곳 확인 · 새 게시판 {result['added']}개"
+    db.log(conn, "post", f"코너 게시판 모으기: 홈페이지 {result['pages']}곳 확인"
+                         + (f"(라디오 첫 화면에서 프로그램 {result['hub']}개)" if result["hub"] else "")
+                         + f" · 새 게시판 {result['added']}개"
                          + (f" ({', '.join(result['programs'][:8])})" if result["programs"] else "")
                          + (f" · 열지 못함 {result['failed']}곳" if result["failed"] else ""))
     return result
@@ -162,7 +288,7 @@ def _older(raw: str, now: datetime, delta: timedelta) -> bool:
 def tick(conn, now: datetime | None = None, launch=None) -> bool:
     """관리 화면 서버가 30초마다 부른다: 일주일이 지났으면 뒤에서 모으기를 띄운다 (게시판 작업이 없을 때)."""
     now = now or datetime.now()
-    if db.is_stopped(conn) or board_busy() or not start_pages(conn):
+    if db.is_stopped(conn) or board_busy() or not (HUBS or start_pages(conn)):
         return False
     if not _older(db.get_setting(conn, LAST_KEY), now, timedelta(days=REFRESH_DAYS)):
         return False

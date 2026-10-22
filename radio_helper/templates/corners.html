@@ -12,6 +12,7 @@
     <label class="inline"><input type="checkbox" name="on" value="1" {{ 'checked' if daily.on }}> 매일 확인</label>
     <input type="time" name="time" value="{{ daily.time }}" style="max-width:120px">
     <label class="inline"><input type="checkbox" name="test" value="1" {{ 'checked' if daily.test }}> 시험 (입력하고 증거 사진만, 등록 안 누름)</label>
+    <label class="inline"><input type="checkbox" name="onair" value="1" {{ 'checked' if daily.onair }}> 듣는 중이면 지금 방송 프로그램 게시판에 모두 쓰기 <small class="muted">(Aside 창을 띄움, 프로그램마다 하루 한 번)</small></label>
     <label class="inline">하루 최대 <input type="number" name="cap" value="{{ daily.cap }}" min="0" max="50" style="max-width:70px"> 건 <small class="muted">(0 = 제한 없음)</small></label>
     <button>저장</button>
   </form>

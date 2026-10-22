@@ -599,6 +599,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                                        if stations.corner_station(r)),
                        "recent": g.conn.execute("SELECT * FROM events WHERE kind = 'post' ORDER BY id DESC LIMIT 6").fetchall(),
                        "aside": aside.describe(g.conn),
+                       "onair": db.get_setting(g.conn, boards.ONAIR_KEY, "1") == "1",
                        "collect_last": (db.get_setting(g.conn, collect.LAST_KEY) or "")[:16],
                        "collect_pages": len(collect.start_pages(g.conn)),
                        "collect_log": g.conn.execute("SELECT * FROM events WHERE kind = 'post' AND message LIKE "
@@ -615,6 +616,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         db.set_setting(c, boards.DAILY_KEY, "1" if request.form.get("on") else "0")
         db.set_setting(c, boards.DAILY_TIME_KEY, at if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", at) else "10:30")
         db.set_setting(c, boards.DAILY_TEST_KEY, "1" if request.form.get("test") else "0")
+        db.set_setting(c, boards.ONAIR_KEY, "1" if request.form.get("onair") else "0")
         cap = form("cap")
         db.set_setting(c, boards.DAILY_CAP_KEY, str(max(0, min(50, int(cap)))) if cap.isdigit() else "5")
         d = boards.daily(c)

@@ -465,8 +465,13 @@ def profile_dir() -> Path:
     return path
 
 
+SHOW_ENV = "RADIO_HELPER_SHOW_BROWSER"
+
+
 def launch_profile(p, headless: bool):
     """도우미 전용 브라우저 프로필로 연다 (한 번 로그인하면 남아 다음부터는 창 없이 등록)."""
+    if os.environ.get(SHOW_ENV) == "1":
+        headless = False             # 지금 방송 프로그램 게시판 작성: Aside 창을 띄워 보이게 (0.63)
     headless = headless or no_window()
     exe = os.environ.get("RADIO_HELPER_CHROMIUM")
     channel = os.environ.get("RADIO_HELPER_BROWSER_CHANNEL")

@@ -116,6 +116,7 @@ def watch_runner(interval: float = WATCHDOG_SECONDS) -> None:
                 fixed = repair.auto(conn)   # 음성 인식 부품이 없으면 스스로 고침 (설치 / Python 3.12 로 다시 켬)
                 boards.tick(conn)           # 코너 게시판 매일 자동 등록 (정한 시각이 된 코너)
                 collect.tick(conn)          # 코너 게시판 모으기: 일주일마다 프로그램 홈페이지 메뉴에서 (0.62)
+                boards.onair_tick(conn)     # 듣는 중: 지금 방송 프로그램의 게시판에 모두 쓰기 (Aside 창, 0.63)
                 schedules.tick(conn)        # 전 채널 편성표: 일주일 지나면 MBC·KBS·CBS(웹 검색)·SBS(공식 페이지) 다시
             finally:
                 conn.close()

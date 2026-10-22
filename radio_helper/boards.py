@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -49,7 +50,7 @@ LAUNCH_GAP_SECONDS = 60          # 하나 띄운 뒤 잠금을 잡을 때까지 
 SAME_NOTICE = 0.8                # 공지 원문이 이만큼 비슷하면 같은 공지 (Claude 가 옮겨 적은 글이 조금씩 달라도)
 SAME_THEME = 0.6                 # 원문이 없을 때 주제 한 문장으로 견줌
 HOMES = {"SBS": "https://www.sbs.co.kr", "MBC": "https://www.imbc.com", "KBS": "https://www.kbs.co.kr",
-         "CBS": "https://www.cbs.co.kr"}
+         "CBS": "https://www.cbs.co.kr/radio"}
 LOGIN_WAIT_MINUTES = 20
 
 
@@ -122,6 +123,40 @@ def same_program_links(base_url: str, links: list[tuple[str, str]]) -> list[dict
     return out
 
 
+RULES_LINK = re.compile(r"^[^\w가-힣]*(게시판\s*)?(운영\s*지침|이용\s*(안내|규칙|수칙)|게시판\s*안내)\s*$")
+
+
+def read_rules(page, autofill) -> str:
+    """'게시판 운영지침' 같은 단추를 눌러 뜨는 안내(창 또는 다른 화면)의 글. CBS '사연과 신청곡' 게시판에 있음.
+    다른 화면으로 넘어가면 읽고 돌아온다. 없으면 빈 글."""
+    try:
+        buttons = page.locator("a, button")
+        for i in range(min(buttons.count(), 200)):
+            b = buttons.nth(i)
+            try:
+                if not (RULES_LINK.match(b.inner_text() or "") and b.is_visible()):
+                    continue
+                before_url, before = page.url, autofill.page_text(page)
+                b.click()
+                page.wait_for_timeout(1200)
+                after = autofill.page_text(page)
+                if page.url != before_url:
+                    page.go_back()
+                    page.wait_for_load_state("load", timeout=15000)
+                    return after[:3000]
+                added = after.replace(before, "").strip() if after.startswith(before[:200]) else after
+                try:
+                    page.keyboard.press("Escape")       # 안내 창 닫기
+                except Exception:
+                    pass
+                return added[:3000]
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
 def read_page(corner) -> dict:
     """코너 화면의 글(공지 포함)·같은 프로그램 코너 주소·글쓰기 화면 주소."""
     from playwright.sync_api import sync_playwright
@@ -142,6 +177,9 @@ def read_page(corner) -> dict:
                 links = page.eval_on_selector_all("a[href]", "els => els.map(a => [a.href, a.innerText || ''])")
             except Exception:
                 links = []
+            rules = read_rules(page, autofill)
+            if rules:
+                text = f"{text}\n\n[게시판 운영지침]\n{rules}"
             write_url = None
             found = autofill.guess_selectors(page)
             if found["title"] and found["body"]:
@@ -425,6 +463,110 @@ def tick(conn, now: datetime | None = None, launch=None) -> list[int]:
 
 
 # ── 매일 게시판 확인 설정 · 이미 올린 공지 ──────────────────────────────
+# ── 지금 방송 중인 프로그램의 게시판 (0.63) ─────────────────────────────
+ONAIR_KEY = "boards.onair"            # 1 = 듣는 중이면 지금 방송 프로그램의 게시판에 모두 쓴다 (Aside 창을 띄워)
+ONAIR_DONE = "boards.onair_done"      # 오늘 한 프로그램들 {"날짜": ["채널|프로그램", …]}
+
+
+def _flat(text: str) -> str:
+    return re.sub(r"[\s·,.:!?'\"()\[\]<>~-]+", "", text or "").lower()
+
+
+def onair_corners(conn, channel: str, program: str) -> list:
+    """그 프로그램의 게시판 (코너의 프로그램 이름이 같거나 한쪽이 다른 쪽을 품음 + 같은 방송국)."""
+    from .quizbot import config
+
+    want, station = _flat(program), config.broadcaster_of(channel)
+    if len(want) < 3:
+        return []
+    out = []
+    for c in conn.execute("SELECT * FROM corners WHERE board_exists = 1 ORDER BY is_target DESC, id").fetchall():
+        if stations.corner_station(c) != station:
+            continue
+        have = _flat(c["program"])
+        if have and (have == want or (len(have) >= 4 and (have in want or want in have))):
+            out.append(c)
+    return out
+
+
+def onair_now(conn, now: datetime) -> list[dict]:
+    """듣는 채널마다 지금 방송 중인 프로그램 [{channel, program}] (편성표에 있는 것만)."""
+    from .quizbot import lanes, live
+
+    out = []
+    for x in lanes.all_lanes(conn):
+        program = live.current_program(conn, x["channel"], now)
+        if program and not any(o["channel"] == x["channel"] for o in out):
+            out.append({"channel": x["channel"], "program": program})
+    return out
+
+
+def _done_today(conn, now: datetime) -> set[str]:
+    try:
+        data = json.loads(db.get_setting(conn, ONAIR_DONE) or "{}")
+    except ValueError:
+        data = {}
+    return set(data.get(now.strftime("%Y-%m-%d"), []))
+
+
+def onair_tick(conn, now: datetime | None = None, launch=None) -> list[str]:
+    """관리 화면 서버가 30초마다 부른다: 듣는 중이면 지금 방송 프로그램마다 하루 한 번, 그 게시판 쓰기를 띄운다.
+    게시판 작업은 같은 브라우저 프로필을 쓰므로 하나씩."""
+    from .quizbot import live
+
+    now = now or datetime.now()
+    if db.get_setting(conn, ONAIR_KEY, "1") != "1" or db.is_stopped(conn) or not live.is_active(conn) or board_busy():
+        return []
+    try:
+        last = float(db.get_setting(conn, LAUNCHED_KEY) or 0)
+    except ValueError:
+        last = 0.0
+    if 0 <= now.timestamp() - last < LAUNCH_GAP_SECONDS:
+        return []
+    done = _done_today(conn, now)
+    for x in onair_now(conn, now):
+        key = f"{x['channel']}|{x['program']}"
+        if key in done:
+            continue
+        db.set_setting(conn, ONAIR_DONE, json.dumps({now.strftime("%Y-%m-%d"): sorted(done | {key})}, ensure_ascii=False))
+        if launch is None:
+            from .app import launch_module
+
+            launch = lambda args: launch_module("radio_helper.boards", args, "boards")   # noqa: E731
+        log_name = launch(["onair", "--channel", x["channel"], "--program", x["program"]])
+        db.set_setting(conn, LAUNCHED_KEY, str(now.timestamp()))
+        db.log(conn, "post", f"지금 방송 '{x['program']}'({x['channel']}) 게시판 쓰기 시작 — Aside 창 (기록: {log_name})")
+        return [key]
+    return []
+
+
+def run_onair(conn, channel: str, program: str, runner=None, collector=None, say=print) -> list[str]:
+    """지금 방송 프로그램의 게시판에 하나씩 쓴다 (공지 읽기·판단·입력·등록은 run 과 같음, 시험 모드면 입력만).
+    게시판을 모르면 그 프로그램 홈페이지 메뉴에서 먼저 모은다."""
+    corners = onair_corners(conn, channel, program)
+    if not corners:
+        row = conn.execute("SELECT main_url FROM programs WHERE channel = ? AND title = ? AND on_air = 1",
+                           (channel, program)).fetchone()
+        if row and stations.station_of(row["main_url"] or ""):
+            from . import collect
+
+            (collector or collect.collect_page)(conn, {"channel": channel, "program": program, "url": row["main_url"]},
+                                                say=say)
+            corners = onair_corners(conn, channel, program)
+    if not corners:
+        msg = f"지금 방송 '{program}'({channel}): 아는 게시판이 없습니다 — 코너 화면 '코너 게시판 지금 모으기' 뒤 다시 합니다"
+        db.log(conn, "post", msg)
+        say(msg)
+        return []
+    results = []
+    for c in corners:
+        text = (runner or run)(conn, c["id"], allow_window=True)
+        results.append(f"{c['title']}: {text}")
+        say(results[-1])
+    db.log(conn, "post", f"지금 방송 '{program}'({channel}) 게시판 {len(corners)}곳: " + " / ".join(results)[:700])
+    return results
+
+
 def daily(conn) -> dict:
     get = lambda k: db.get_setting(conn, k, DAILY_DEFAULTS[k])   # noqa: E731
     try:
@@ -516,6 +658,9 @@ def login_targets(conn) -> list[dict]:
     return [out[s] for s in stations.STATIONS if s in out]
 
 
+NICK = re.compile(r"(?:^|\s)[^\s]{2,20}\s?님(?=\s|$)", re.M)
+
+
 def login_state(page) -> tuple[bool | None, str]:
     """(로그인됨?, 근거). 글쓰기 칸이 보이면 됨, 비밀번호 칸이 보이면 안 됨, 그 밖에는 '로그아웃'·'로그인' 글자로."""
     from . import autofill
@@ -535,6 +680,10 @@ def login_state(page) -> tuple[bool | None, str]:
     text = autofill.page_text(page)
     if "로그아웃" in text:
         return True, "'로그아웃'이 보임"
+    head = text[:300]
+    nick = NICK.search(head)
+    if nick and "로그인" not in head:            # CBS: 위쪽 메뉴에 '연서해피아빠 님' (로그아웃은 펼침 메뉴 안)
+        return True, f"'{nick.group(0).strip()}'이 보임"
     if "로그인" in text:
         return False, "'로그인'만 보임"
     return None, "확인 못 함"
@@ -659,8 +808,10 @@ def next_run(corner, now: datetime) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="코너 게시판 자동 등록 (SBS·MBC·KBS·CBS)")
-    ap.add_argument("action", choices=["run", "login", "login-check"])
+    ap.add_argument("action", choices=["run", "login", "login-check", "onair"])
     ap.add_argument("--corner", type=int)
+    ap.add_argument("--channel", help="onair: 듣는 채널")
+    ap.add_argument("--program", help="onair: 지금 방송 프로그램")
     ap.add_argument("--scheduled", action="store_true", help="정해진 시각의 자동 실행 (창 없이, 하루 상한)")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--test", action="store_true", help="입력만 하고 등록은 누르지 않음")
@@ -674,6 +825,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.action == "login-check":
             check_logins(conn)
+            return 0
+        if args.action == "onair":
+            from . import autofill
+
+            os.environ[autofill.SHOW_ENV] = "1"          # Aside 창을 띄워 보이게 (게시판마다 run 이 잠금을 잡음)
+            run_onair(conn, args.channel or "", args.program or "", say=lambda m: print(m, flush=True))
             return 0
         if args.corner is None:
             ap.error("run 에는 --corner 가 필요합니다.")
