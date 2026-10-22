@@ -59,11 +59,29 @@ def test_post_mode_replaces_approval_with_clean_checks(conn):
     ("write_url = NULL", "글쓰기 화면 주소"),
 ])
 def test_post_mode_still_blocks(conn, change, reason):
+    db.set_setting(conn, gates.AI_OK_KEY, "0")                  # 'AI 글 제한 공지도 올리기'를 끈 경우
     did = make_draft(conn, make_experience(conn))
     conn.execute(f"UPDATE corners SET {change} WHERE id = ?", (target_corner_id(conn),))
     conn.commit()
     r = gates.evaluate(conn, did, gates.MODE_POST)
     assert not r.ok and any(reason in b for b in r.blockers)
+
+
+def test_ai_restricted_notice_posts_when_user_needs_ai_help(conn):
+    # 0.65: 사용자가 AI 보조 도구가 꼭 필요하다고 정함 → 'AI 글 제한' 공지는 막지 않고 경고만 (기본 켬)
+    from datetime import datetime
+
+    from radio_helper import boards
+
+    did = make_draft(conn, make_experience(conn))
+    conn.execute("UPDATE corners SET ai_assist_policy = 'restricted' WHERE id = ?", (target_corner_id(conn),))
+    conn.commit()
+    r = gates.evaluate(conn, did, gates.MODE_POST)
+    assert r.ok and any("AI 보조 도구가 꼭 필요함" in w for w in r.warnings)
+    notice = {"accepting": "yes", "ai_restricted": True}
+    corner = boards.corner_row(conn, target_corner_id(conn))
+    assert boards.skip_reason(notice, corner, datetime(2026, 10, 22), ai_assist_ok=True) is None
+    assert "AI" in boards.skip_reason(notice, corner, datetime(2026, 10, 22), ai_assist_ok=False)
 
 
 def test_post_mode_unconfirmed_experience_and_stop_switch(conn):

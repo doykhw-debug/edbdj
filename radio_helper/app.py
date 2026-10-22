@@ -574,7 +574,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             "quizzes": c.execute("SELECT COUNT(*) FROM quizzes WHERE entry_status = 'pending'").fetchone()[0],
         }
         targets = c.execute("SELECT * FROM corners WHERE is_target = 1").fetchall()
-        target_status = [(t, gates.corner_blockers(t)) for t in targets]
+        target_status = [(t, gates.corner_blockers(t, ai_assist_ok=gates.ai_ok(g.conn))) for t in targets]
         events = c.execute("SELECT * FROM events ORDER BY id DESC LIMIT 8").fetchall()
         profile = db.get_profile(c)
         return render_template("dashboard.html", counts=counts, target_status=target_status,
@@ -619,6 +619,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                        "bridge": {"connected": tabbridge.connected(g.conn), "folder": str(tabbridge.extension_dir()),
                                   "tabs": tabbridge.use_tabs(g.conn)},
                        "onair": db.get_setting(g.conn, boards.ONAIR_KEY, "1") == "1",
+                       "ai_ok": gates.ai_ok(g.conn),
                        "collect_last": (db.get_setting(g.conn, collect.LAST_KEY) or "")[:16],
                        "collect_pages": len(collect.start_pages(g.conn)),
                        "collect_log": g.conn.execute("SELECT * FROM events WHERE kind = 'post' AND message LIKE "
@@ -636,6 +637,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         db.set_setting(c, boards.DAILY_TIME_KEY, at if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", at) else "10:30")
         db.set_setting(c, boards.DAILY_TEST_KEY, "1" if request.form.get("test") else "0")
         db.set_setting(c, boards.ONAIR_KEY, "1" if request.form.get("onair") else "0")
+        db.set_setting(c, gates.AI_OK_KEY, "1" if request.form.get("ai_ok") else "0")
         cap = form("cap")
         db.set_setting(c, boards.DAILY_CAP_KEY, str(max(0, min(50, int(cap)))) if cap.isdigit() else "5")
         d = boards.daily(c)
@@ -789,7 +791,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             else:
                 flash("코너 정보를 저장했습니다.")
             return redirect(url_for("corner_edit", cid=cid))
-        blockers, warnings = gates.corner_blockers(corner)
+        blockers, warnings = gates.corner_blockers(corner, ai_assist_ok=gates.ai_ok(g.conn))
         reports = sorted((db.data_dir() / "inspect").glob(f"corner{cid}_*.json"), reverse=True)[:3]
         try:
             found = json.loads(corner["found_links"] or "[]")

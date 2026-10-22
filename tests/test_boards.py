@@ -143,12 +143,22 @@ def test_story_corner_uses_approved_text_as_is(conn):
     ({"air_days": ["목"]}, "방송 전날"),
 ])
 def test_notice_says_no(conn, over, why):
+    db.set_setting(conn, "boards.ai_assist_ok", "0")       # 'AI 글 제한 공지도 올리기'를 끈 경우 (0.65 부터 기본 켬)
     cid = boards.add_corner(conn, MBC_URL)
     funny(conn)
     calls = []
     text = boards.run(conn, cid, test=False, answerer=FakeAnswerer(note=notice(**over)), reader=page_reader(),
                       poster=record_poster(calls), now=MONDAY)
     assert text.startswith("올리지 않음") and why in text and not calls
+
+
+def test_ai_restricted_notice_is_posted_by_default(conn):
+    cid = boards.add_corner(conn, MBC_URL)
+    funny(conn)
+    calls = []
+    text = boards.run(conn, cid, test=True, answerer=FakeAnswerer(note=notice(ai_restricted=True)), reader=page_reader(),
+                      poster=record_poster(calls), now=MONDAY)
+    assert not text.startswith("올리지 않음") and calls
 
 
 def test_weekday_corner_posts_the_day_before(conn):

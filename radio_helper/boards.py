@@ -226,11 +226,11 @@ def save_notice(conn, corner, notice: dict, page: dict) -> None:
     conn.commit()
 
 
-def skip_reason(notice: dict, corner, now: datetime) -> str | None:
-    """공지·요일로 보아 오늘 올리면 안 되는 이유 (없으면 None)."""
+def skip_reason(notice: dict, corner, now: datetime, ai_assist_ok: bool = False) -> str | None:
+    """공지·요일로 보아 오늘 올리면 안 되는 이유 (없으면 None). ai_assist_ok: 'AI 글 제한' 공지도 올림 (사용자 설정)."""
     if notice.get("accepting") == "no":
         return "공지상 지금은 글을 받지 않습니다 (마감·종료·쉼)."
-    if notice.get("ai_restricted"):
+    if notice.get("ai_restricted") and not ai_assist_ok:
         return "공지가 AI 작성·대필·창작 글을 제한합니다 — 직접 쓴 글만 받는 코너라 자동으로 올리지 않습니다."
     if notice.get("needs_attachment") or notice.get("kind") == "photo":
         return "사진·파일 첨부가 꼭 필요한 코너라 자동으로 올리지 않습니다."
@@ -367,7 +367,7 @@ def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, al
         notice = answerer.read_notice(stations.corner_station(corner) or "", corner["board_url"], page["text"][:12000])
         save_notice(conn, corner, notice, page)
         corner = corner_row(conn, cid)
-        why = skip_reason(notice, corner, now) or already_posted(conn, corner, notice, test)
+        why = skip_reason(notice, corner, now, gates.ai_ok(conn)) or already_posted(conn, corner, notice, test)
         if why:
             raise BoardSkip(why)
         eid, title, body, reason = choose(conn, corner, notice, answerer)

@@ -43,7 +43,15 @@ def _parse_deadline(text: str | None) -> datetime | None:
     return None
 
 
-def corner_blockers(corner: sqlite3.Row, on_air: bool = False) -> tuple[list[str], list[str]]:
+AI_OK_KEY = "boards.ai_assist_ok"     # 1 = 공지의 'AI 글·대필 제한'을 막지 않음 (사용자가 AI 보조 도구가 꼭 필요하다고 정함, 0.65)
+
+
+def ai_ok(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (AI_OK_KEY,)).fetchone()
+    return (row[0] if row else "1") == "1"
+
+
+def corner_blockers(corner: sqlite3.Row, on_air: bool = False, ai_assist_ok: bool = False) -> tuple[list[str], list[str]]:
     """on_air: 진행자가 방송에서 이 게시판에 사연을 남겨 달라고 함 → 제출 대상·모집 중·공지 확인으로 본다."""
     blockers, warnings = [], []
     if on_air:
@@ -66,7 +74,10 @@ def corner_blockers(corner: sqlite3.Row, on_air: bool = False) -> tuple[list[str
         blockers.append(f"코너 마감({corner['deadline']})이 지났습니다.")
     elif not corner["deadline"]:
         warnings.append("마감이 입력되지 않았습니다.")
-    if corner["ai_assist_policy"] == "restricted":
+    if corner["ai_assist_policy"] == "restricted" and ai_assist_ok:
+        warnings.append("이 코너 공지는 AI 보조 작성을 제한하지만, 설정(AI 보조 도구가 꼭 필요함)에 따라 올립니다 — "
+                        "방송국이 글을 지우거나 선물 대상에서 뺄 수 있습니다.")
+    elif corner["ai_assist_policy"] == "restricted":
         blockers.append("이 코너 공지는 창작물·AI 보조 작성에 제한을 둡니다. 직접 쓴 글만 보낼 수 있습니다.")
     elif corner["ai_assist_policy"] == "unknown":
         warnings.append("AI 보조 작성 허용 여부를 확인하지 못했습니다.")
@@ -143,7 +154,7 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
 
     exp = conn.execute("SELECT * FROM experiences WHERE id = ?", (draft["experience_id"],)).fetchone()
     auto = mode == MODE_POST
-    b, w = corner_blockers(corner, on_air=auto)
+    b, w = corner_blockers(corner, on_air=auto, ai_assist_ok=ai_ok(conn))
     result.blockers += b
     result.warnings += w
     selectors, borrowed = corner_selectors(conn, corner)
