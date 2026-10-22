@@ -41,7 +41,7 @@ LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story
 # 서버 모드에서 막는 화면 동작: 청취·퀴즈 실행기·받아쓰기·고릴라/문자 도구 (윈도우 PC 전용)
 PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start", "quizbot_tool",
                      "listen_lanes", "listen_lanes_test", "stt_gpu_recheck", "listen_vbcable",
-                     "corners_login", "corners_login_check", "corners_collect", "corners_browser",
+                     "corners_login", "corners_login_check", "corners_collect", "corners_browser", "quizbot_chatgpt_login",
                      "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
 INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
@@ -1362,6 +1362,14 @@ def create_app(data_dir: str | None = None) -> Flask:
         if answerer.billing(c) == "openai":
             return {"name": "AI 연결: GPT (OpenAI API 키, 충전 요금)", "ok": ok, "url": url_for("quizbot") + "#claude",
                     "detail": why or "퀴즈·사연 분석에 필요"}
+        if answerer.billing(c) == "chatgpt":
+            from .quizbot import codex_cli
+
+            check = codex_cli.saved_check(c) or {}
+            if ok and check.get("subscription") is False:
+                ok, why = False, check.get("detail") or ""
+            return {"name": "ChatGPT 구독 (Codex)", "ok": ok, "url": url_for("quizbot") + "#claude",
+                    "detail": why or check.get("detail") or "퀴즈·사연 분석에 필요 — 설정에서 'ChatGPT 연결 확인'"}
         return {"name": "Claude 연결: API 키 (충전 요금)", "ok": ok, "url": url_for("quizbot") + "#claude",
                 "detail": why or "퀴즈·사연 분석에 필요 — PC 에서는 'Claude 구독'을 권장"}
 
@@ -1381,7 +1389,7 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.get("/quizbot")
     def quizbot():
-        from .quizbot import answerer, claude_cli
+        from .quizbot import answerer, claude_cli, codex_cli
 
         c = g.conn
         schedules = schedule_rows()
@@ -1401,8 +1409,9 @@ def create_app(data_dir: str | None = None) -> Flask:
             heartbeat=db.get_setting(c, "quizbot.heartbeat"), check=check, has_key=bool(answerer.get_api_key()),
             billing=answerer.billing(c), billings=answerer.BILLINGS, claude_check=fresh_claude_check(c),
             claude_found=bool(claude_cli.find_claude()), billing_fallback=qconfig.get(c, "quizbot.billing_fallback") == "1",
-            has_openai=bool(answerer.get_openai_key()), gpt_fallback=qconfig.get(c, "quizbot.gpt_fallback") == "1",
-            gpt_model=qconfig.get(c, "quizbot.gpt_model"),
+            has_openai=bool(answerer.get_openai_key()), gpt_fallback=answerer.gpt_backup(c), gpt_backups=answerer.GPT_BACKUPS,
+            gpt_model=qconfig.get(c, "quizbot.gpt_model"), chatgpt_model=qconfig.get(c, "quizbot.chatgpt_model"),
+            codex_check=codex_cli.saved_check(c), codex_found=bool(codex_cli.find_codex()),
             can_open_login=not server.is_server() and not g.get("remote"),
             programs=programs_, days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
             autostart=qconfig.get(c, "quizbot.autostart") == "1",
@@ -1430,6 +1439,7 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.post("/quizbot/settings")
     def quizbot_settings():
+        from .quizbot import answerer as answerer_mod
         from .quizbot.answerer import BILLINGS
 
         db.set_setting(g.conn, "quizbot.autostart", "1" if request.form.get("autostart") else "0")
@@ -1439,10 +1449,15 @@ def create_app(data_dir: str | None = None) -> Flask:
             db.log(g.conn, "quizbot", f"AI 연결 방식: {BILLINGS[chosen]}")
         if chosen in BILLINGS:
             db.set_setting(g.conn, "quizbot.billing_fallback", "1" if request.form.get("billing_fallback") else "0")
-            db.set_setting(g.conn, "quizbot.gpt_fallback", "1" if request.form.get("gpt_fallback") else "0")
+            backup = "openai" if form("gpt_fallback") == "1" else form("gpt_fallback")   # 0.67 체크 상자 값
+            db.set_setting(g.conn, "quizbot.gpt_fallback", backup if backup in answerer_mod.GPT_BACKUPS else "0")
         gpt_model = form("gpt_model").strip()
         if gpt_model and re.fullmatch(r"[A-Za-z0-9._:-]{2,60}", gpt_model):
             db.set_setting(g.conn, "quizbot.gpt_model", gpt_model)
+        if "chatgpt_model" in request.form:
+            chatgpt_model = form("chatgpt_model").strip()
+            if not chatgpt_model or re.fullmatch(r"[A-Za-z0-9._:-]{2,60}", chatgpt_model):
+                db.set_setting(g.conn, "quizbot.chatgpt_model", chatgpt_model)
         openai_key = (request.form.get("openai_key") or "").strip()
         if openai_key and server.is_server():
             flash("서버의 OpenAI 키는 서버의 /opt/radio/.env 파일(OPENAI_API_KEY)에 둡니다. 화면에서는 저장하지 않습니다.", "warn")
@@ -1485,6 +1500,36 @@ def create_app(data_dir: str | None = None) -> Flask:
         claude_cli.save_check(g.conn, info)
         flash(info["detail"] + (f" · {info['version']}" if info.get("version") else ""),
               "message" if info["subscription"] else "error")
+        return redirect(url_for("quizbot") + "#claude")
+
+    @app.post("/quizbot/chatgpt-check")
+    def quizbot_chatgpt_check():
+        """Codex 설치·ChatGPT 로그인 확인 (모델은 부르지 않음, 몇 초)."""
+        from .quizbot import codex_cli
+
+        info = codex_cli.status()
+        codex_cli.save_check(g.conn, info)
+        flash(info["detail"] + (f" · {info['version']}" if info.get("version") else ""),
+              "message" if info["subscription"] else "error")
+        return redirect(url_for("quizbot") + "#claude")
+
+    @app.post("/quizbot/chatgpt-login")
+    def quizbot_chatgpt_login():
+        """이 PC 에 Codex 로그인 창을 연다 (ChatGPT 계정 로그인은 사용자가 브라우저에서 직접)."""
+        from .quizbot import codex_cli
+
+        if server.is_server():
+            flash("서버에서는 ssh 로 들어가 codex login --device-auth 로 로그인하세요.", "warn")
+        elif g.get("remote"):
+            flash("로그인 창은 PC 화면에 열리므로 PC 앞에서 누르세요.", "warn")
+        else:
+            try:
+                codex_cli.open_login()
+                db.log(g.conn, "quizbot", "Codex(ChatGPT) 로그인 창을 열었음")
+                flash("Codex 로그인 창(검은 창)을 열었습니다. 브라우저가 열리면 'ChatGPT 로 로그인'을 골라 구독 계정으로 로그인하고, "
+                      "검은 창에 로그인 성공이 보이면 그 창을 닫은 뒤 'ChatGPT 연결 확인'을 누르세요.")
+            except codex_cli.CodexCliError as e:
+                flash(str(e), "error")
         return redirect(url_for("quizbot") + "#claude")
 
     @app.post("/quizbot/claude-login")
@@ -2060,7 +2105,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         keys = [k for k in qconfig.DEFAULTS if k.startswith(f"{app_}.") and not k.endswith(("_x", "_y"))] + \
                [k for k in qconfig.DEFAULTS if k.startswith("quizbot.")
                 and k not in ("quizbot.autostart", "quizbot.billing", "quizbot.billing_fallback",
-                              "quizbot.gpt_fallback", "quizbot.gpt_model")]   # AI 연결은 설정 화면에서
+                              "quizbot.gpt_fallback", "quizbot.gpt_model", "quizbot.chatgpt_model")]   # AI 연결은 설정 화면에서
         if request.method == "POST":
             for k in keys:
                 if k in request.form:

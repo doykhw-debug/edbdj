@@ -5,6 +5,7 @@
 Claude 를 부르는 길은 둘 (설정 'quizbot.billing'):
 - api: API 키(충전 요금). 키는 환경 변수 ANTHROPIC_API_KEY 또는 윈도우 자격 증명 관리자(관리 화면에서 저장)에서 읽는다.
 - subscription: Claude 구독. 이 PC 에 로그인해 둔 공식 Claude Code 를 실행한다 (claude_cli.py, 로그인 정보는 다루지 않음).
+- chatgpt: ChatGPT 구독 (0.68). 이 PC 에 ChatGPT 계정으로 로그인해 둔 공식 Codex CLI 를 실행한다 (codex_cli.py, 충전 요금 없음).
 - openai: GPT (OpenAI API 키, 충전 요금, 0.67). 키는 환경 변수 OPENAI_API_KEY 또는 윈도우 자격 증명 관리자.
   Claude 로 쓰다가 구독 한도·오류로 막히면 GPT 로 이어서 할 수도 있다 (설정 'quizbot.gpt_fallback').
 """
@@ -641,7 +642,16 @@ def save_api_key(key: str) -> None:
 
 
 BILLINGS = {"subscription": "Claude 구독 (Claude Code 로그인) — PC 기본", "api": "Claude API 키 (충전 요금)",
-            "openai": "GPT (OpenAI API 키, 충전 요금)"}
+            "chatgpt": "ChatGPT 구독 (Codex 로그인, 충전 요금 없음)", "openai": "GPT (OpenAI API 키, 충전 요금)"}
+GPT_BACKUPS = {"0": "이어서 하지 않음", "chatgpt": "ChatGPT 구독으로 (Codex 로그인)", "openai": "OpenAI API 키로 (충전 요금)"}
+
+
+def gpt_backup(conn) -> str:
+    """Claude 로 안 될 때 이어서 쓸 GPT: 0 / chatgpt / openai ('1' 은 0.67 의 'OpenAI API 키로')."""
+    from . import config
+
+    value = config.get(conn, "quizbot.gpt_fallback")
+    return "openai" if value == "1" else value if value in GPT_BACKUPS else "0"
 OPENAI_KEYRING_USER = "openai_api_key"
 OPENAI_MODEL = "gpt-5"            # 설정 'quizbot.gpt_model' 로 바꿈
 
@@ -679,9 +689,14 @@ def ready(conn) -> tuple[bool, str]:
     """Claude 를 부를 수 있는지 (가볍게: 키가 있는지 / claude 프로그램이 있는지). (가능, 안 될 때 안내)"""
     from . import claude_cli, config
 
+    from . import codex_cli
+
     if billing(conn) == "openai":
         ok = bool(get_openai_key())
         return ok, "" if ok else "GPT 방식인데 OpenAI API 키가 없습니다 (설정 → AI 연결에서 키 저장)."
+    if billing(conn) == "chatgpt":
+        ok = bool(codex_cli.find_codex())
+        return ok, "" if ok else "ChatGPT 구독으로 쓰려면 이 컴퓨터에 Codex 를 설치하고 ChatGPT 계정으로 한 번 로그인하세요 (설정 화면 안내)."
     has_key = bool(get_api_key())
     if billing(conn) == "api":
         return has_key, "" if has_key else "API 키 방식인데 API 키가 없습니다 (설정 → Claude 연결에서 'Claude 구독'을 고르거나 키 저장)."
@@ -689,8 +704,10 @@ def ready(conn) -> tuple[bool, str]:
         return True, ""
     if has_key and config.get(conn, "quizbot.billing_fallback") == "1":
         return True, "Claude Code 가 없어 API 키로 대신합니다."
-    if get_openai_key() and config.get(conn, "quizbot.gpt_fallback") == "1":
+    if gpt_backup(conn) == "openai" and get_openai_key():
         return True, "Claude Code 가 없어 GPT(OpenAI API 키)로 대신합니다."
+    if gpt_backup(conn) == "chatgpt" and codex_cli.find_codex():
+        return True, "Claude Code 가 없어 ChatGPT 구독(Codex)으로 대신합니다."
     return False, "Claude 구독으로 쓰려면 이 컴퓨터에 Claude Code 를 설치하고 한 번 로그인하세요 (설정 화면 안내)."
 
 
@@ -719,11 +736,21 @@ def make(conn, **kwargs) -> "ClaudeAnswerer":
     """설정(모델·노력·결제 방식)대로 만든다."""
     from . import config
 
+    from . import codex_cli
+
     gpt = lambda: OpenAIAnswerer(config.get(conn, "quizbot.gpt_model") or OPENAI_MODEL,   # noqa: E731
                                  config.get(conn, "quizbot.effort"), note=_note)
+    chatgpt = lambda: CodexAnswerer(config.get(conn, "quizbot.chatgpt_model"),   # noqa: E731
+                                    config.get(conn, "quizbot.effort"), note=_note)
     if billing(conn) == "openai":
         return gpt()
-    backup = gpt() if config.get(conn, "quizbot.gpt_fallback") == "1" and get_openai_key() else None
+    if billing(conn) == "chatgpt":
+        return chatgpt()
+    backup = None
+    if gpt_backup(conn) == "openai" and get_openai_key():
+        backup = gpt()
+    elif gpt_backup(conn) == "chatgpt" and codex_cli.find_codex():
+        backup = chatgpt()
     return ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort"),
                           billing=billing(conn), fallback=config.get(conn, "quizbot.billing_fallback") == "1",
                           note=_note, backup=backup, **kwargs)
@@ -781,7 +808,7 @@ class ClaudeAnswerer:
                 self.note(f"Claude 구독으로 {what}하지 못해 API 키(충전 요금)로 대신함: {str(e)[:150]}")
                 return None
             if self.backup is not None:
-                self.note(f"Claude 구독으로 {what}하지 못해 GPT(OpenAI API 키)로 대신함: {str(e)[:150]}")
+                self.note(f"Claude 구독으로 {what}하지 못해 {self.backup.LABEL}(으)로 대신함: {str(e)[:150]}")
                 return GPT
             raise AnswererError(str(e))
 
@@ -1033,6 +1060,8 @@ def _http_post(url: str, body: dict, key: str, timeout: int = 240) -> tuple[int,
 class OpenAIAnswerer(ClaudeAnswerer):
     """ClaudeAnswerer 와 같은 일(퀴즈·사연·공지·편성표·신청곡)을 GPT 로. 프롬프트·JSON 모양은 그대로 쓴다."""
 
+    LABEL = "GPT(OpenAI API 키)"
+
     URL = "https://api.openai.com/v1/responses"
     SEARCH_TOOLS = ("web_search", "web_search_preview")
 
@@ -1128,3 +1157,42 @@ class OpenAIAnswerer(ClaudeAnswerer):
                 raise AnswererError(f"{what}지 못했습니다 (빈 응답).")
             return text
         raise AnswererError(f"GPT 웹 검색으로 {what}지 못했습니다: {last}")
+
+
+# ── ChatGPT 구독 (Codex CLI, 0.68) ─────────────────────────────────────
+class CodexAnswerer(ClaudeAnswerer):
+    """ClaudeAnswerer 와 같은 일을 ChatGPT 구독(공식 Codex CLI, ChatGPT 계정 로그인)으로. 충전 요금 없음."""
+
+    LABEL = "ChatGPT 구독(Codex)"
+
+    def __init__(self, model: str = "", effort: str = "low", cli=None, note=None):
+        self.model = model or ""                 # 비우면 Codex 기본 모델
+        self.effort = effort if effort in ("minimal", "low", "medium", "high") else "low"
+        self.billing = "chatgpt"
+        self.fallback, self.backup, self._client = False, None, None
+        self.note = note or (lambda _message: None)
+        if cli is None:
+            from . import codex_cli as cli
+        self.cli = cli
+
+    def paused(self) -> str:
+        if not self.cli.limited():
+            return ""
+        note = self.cli.pause_note()
+        return f"ChatGPT 구독 한도에 걸려 {note + ' ' if note else ''}분석을 쉽니다 (듣기·자막·기록은 계속)"
+
+    def _run(self, **kw) -> dict:
+        try:
+            return self.cli.run(model=self.model or None, effort=self.effort, **kw)
+        except self.cli.CodexCliError as e:
+            raise AnswererError(str(e))
+
+    def _call(self, system: str, user: str, schema: dict, images=()) -> str:
+        done = self._run(system=system, user=user, schema=schema, images=images)
+        return json.dumps(done["data"], ensure_ascii=False)
+
+    def _web_research(self, system: str, ask: str, max_searches: int, what: str) -> str:
+        done = self._run(system=system + f"\n- 웹 검색은 {max_searches}번 안에서 끝냅니다.", user=ask, search=True)
+        if not done["text"].strip():
+            raise AnswererError(f"{what}지 못했습니다 (빈 응답).")
+        return done["text"]

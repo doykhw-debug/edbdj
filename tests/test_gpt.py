@@ -109,7 +109,7 @@ def test_claude_subscription_failure_continues_with_gpt():
                                 note=notes.append, backup=gpt(post))
     assert a.read_dj_notice("프로그램", b"jpeg") == {"found": False, "text": ""}
     assert a.research_today("2026-10-22") == "조사 결과"
-    assert len(post.calls) == 2 and any("GPT(OpenAI API 키)로 대신함" in n for n in notes)
+    assert len(post.calls) == 2 and any("GPT(OpenAI API 키)(으)로 대신함" in n for n in notes)
 
 
 def test_paused_only_without_backup(monkeypatch):
@@ -134,5 +134,5 @@ def test_settings_screen_saves_gpt(client, conn, monkeypatch):
                     follow_redirects=True)
     assert "GPT(OpenAI) API 키를 저장했습니다" in r.get_data(as_text=True) and saved == ["sk-new"]
     assert (db.get_setting(conn, "quizbot.billing"), db.get_setting(conn, "quizbot.gpt_model"),
-            db.get_setting(conn, "quizbot.gpt_fallback")) == ("openai", "gpt-5-mini", "1")
+            db.get_setting(conn, "quizbot.gpt_fallback")) == ("openai", "gpt-5-mini", "openai")
     assert "sk-new" not in json.dumps([dict(r) for r in conn.execute("SELECT * FROM events")], ensure_ascii=False)

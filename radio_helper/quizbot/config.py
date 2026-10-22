@@ -61,7 +61,8 @@ DEFAULTS = {
     "quizbot.model": "claude-sonnet-5-5",
     "quizbot.effort": "low",
     "quizbot.gpt_model": "gpt-5",           # GPT(OpenAI API 키)로 쓸 때 모델 (0.67)
-    "quizbot.gpt_fallback": "0",            # Claude 로 안 될 때(구독 한도·오류) GPT 로 이어서 (충전 요금, 켜야 함)
+    "quizbot.gpt_fallback": "0",            # Claude 로 안 될 때 이어서 쓸 GPT: 0 / chatgpt(구독) / openai(API 키)
+    "quizbot.chatgpt_model": "",            # ChatGPT 구독(Codex)으로 쓸 때 모델 (비우면 Codex 기본, 0.68)
     "quizbot.billing": "",                # 비우면 PC 는 subscription(Claude 구독, Claude Code 로그인) · 서버는 api(API 키, 충전 요금)
     "quizbot.billing_fallback": "0",      # 구독으로 안 될 때(한도·로그인 풀림) API 키로 이어서 (충전 요금, 켜야 함)
     "quizbot.autostart": "0",

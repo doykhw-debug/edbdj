@@ -39,6 +39,10 @@
   <h2>AI 연결 <span class="muted">Claude · GPT</span>
     {% if billing == 'openai' %}
       {% if has_openai %}<span class="badge ok">GPT 키 설정됨</span>{% else %}<span class="badge bad">GPT 키 없음</span>{% endif %}
+    {% elif billing == 'chatgpt' %}
+      {% if codex_check and codex_check.subscription %}<span class="badge ok">ChatGPT 구독 연결됨</span>
+      {% elif codex_found %}<span class="badge warn">ChatGPT · 연결 확인 필요</span>
+      {% else %}<span class="badge bad">Codex 없음</span>{% endif %}
     {% elif billing == 'subscription' %}
       {% if claude_check and claude_check.subscription %}<span class="badge ok">구독 연결됨</span>
       {% elif claude_found %}<span class="badge warn">구독 · 연결 확인 필요</span>
@@ -77,6 +81,27 @@
   </div>
   <div class="row">
     <div>
+      <p><b>ChatGPT 구독</b> — 이 컴퓨터에 OpenAI 공식 <b>Codex</b>(명령 창 프로그램)를 설치하고 <b>ChatGPT 계정(Plus·Pro 등)으로 로그인</b>해 두면,
+      그 로그인으로 분석합니다. <b>API 충전 요금이 들지 않고</b> ChatGPT 구독 사용량에서 나갑니다.
+      이 프로그램은 로그인 정보를 읽거나 저장하지 않고 Codex 를 실행만 합니다.</p>
+      <ol class="muted" style="margin:4px 0 8px 18px;padding:0">
+        <li>Node.js 설치(없으면): 명령 창(PowerShell)에서 <code>winget install OpenJS.NodeJS.LTS</code></li>
+        <li>Codex 설치: <code>npm install -g @openai/codex</code></li>
+        <li>로그인: 아래 <b>ChatGPT 로그인</b> (또는 명령 창에서 <code>codex login</code>) → 브라우저에서 <b>Sign in with ChatGPT</b> → 구독 계정으로 로그인 → 창 닫기.
+          <span class="hint">ChatGPT 웹·앱에 로그인돼 있어도 Codex 는 따로 한 번 로그인해야 합니다.</span></li>
+        <li>아래 <b>ChatGPT 연결 확인</b> → 'ChatGPT 구독으로 연결됨'</li>
+      </ol>
+      {% if codex_check %}<p class="muted">마지막 확인 {{ codex_check.at }} · {{ codex_check.detail }}{% if codex_check.version %} · {{ codex_check.version }}{% endif %}</p>{% endif %}
+    </div>
+    <div>
+      <label>ChatGPT 구독 모델 <span class="hint">비우면 Codex 기본 모델</span></label>
+      <input type="text" name="chatgpt_model" value="{{ chatgpt_model }}" placeholder="(Codex 기본)">
+      <label style="margin-top:10px">Claude 로 안 될 때(구독 한도·로그인 풀림·Claude Code 없음) 이어서 쓸 GPT</label>
+      <select name="gpt_fallback">{% for k, label in gpt_backups.items() %}<option value="{{ k }}" {{ 'selected' if gpt_fallback == k }}>{{ label }}</option>{% endfor %}</select>
+    </div>
+  </div>
+  <div class="row">
+    <div>
       <p><b>GPT (OpenAI API 키)</b> — platform.openai.com 의 API 키로 분석합니다 (충전한 크레딧에서 나감, ChatGPT 구독과는 별도).
       프롬프트·검사·'지어내지 않기' 규칙은 Claude 와 같고, 편성표·신청곡 확인은 GPT 웹 검색으로 합니다.
       키는 이 PC의 윈도우 자격 증명 관리자에만 저장됩니다. {% if has_openai %}<span class="badge ok">GPT 키 설정됨</span>{% endif %}</p>
@@ -86,8 +111,6 @@
     <div>
       <label>GPT 모델 <span class="hint">예: gpt-5 · gpt-5-mini (OpenAI 계정에서 쓸 수 있는 이름)</span></label>
       <input type="text" name="gpt_model" value="{{ gpt_model }}">
-      <label class="inline" style="margin-top:10px"><input type="checkbox" name="gpt_fallback" value="1" {{ 'checked' if gpt_fallback }}>
-        Claude 로 안 될 때(구독 한도·로그인 풀림·Claude Code 없음) GPT 로 이어서 (충전 요금)</label>
     </div>
   </div>
   <div class="row">
@@ -99,6 +122,8 @@
     <button class="secondary">저장</button>
     <button class="secondary" formaction="{{ url_for('quizbot_claude_check') }}">연결 확인 (Claude Code 설치·로그인)</button>
     {% if can_open_login and claude_found %}<button class="secondary" formaction="{{ url_for('quizbot_claude_login') }}">Claude Code 로그인</button>{% endif %}
+    <button class="secondary" formaction="{{ url_for('quizbot_chatgpt_check') }}">ChatGPT 연결 확인 (Codex 설치·로그인)</button>
+    {% if can_open_login and codex_found %}<button class="secondary" formaction="{{ url_for('quizbot_chatgpt_login') }}">ChatGPT 로그인</button>{% endif %}
   </div>
 </form>
 

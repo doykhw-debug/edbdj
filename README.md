@@ -624,6 +624,18 @@ MBC·KBS·SBS 어느 코너든 **코너 화면 주소**만 넣으면, 정한 시
 - 쓰는 방법은 '매일 게시판 확인'과 같습니다: 공지(와 게시판 운영지침)를 읽고 받지 않음·AI 글 제한·첨부 필요·마감이면 건너뛰고,
   지금 공지로 이미 올린 게시판은 다시 올리지 않으며, 확인한 사연 전체를 씁니다. **'시험'이 켜져 있으면 입력과 증거 사진만** 하고 등록은 누르지 않습니다.
 
+### ChatGPT 구독으로 분석 (0.68, 설정 → AI 연결 · API 키·충전 요금 없음)
+Claude 구독이 Claude Code 로그인을 쓰는 것처럼, ChatGPT 구독은 OpenAI 공식 **Codex** 프로그램의 **'ChatGPT 로 로그인'** 을 씁니다.
+1. Node.js 가 없으면 PowerShell 에서 `winget install OpenJS.NodeJS.LTS`, 그다음 `npm install -g @openai/codex`
+2. 설정 → AI 연결 → **ChatGPT 로그인** (또는 명령 창에서 `codex login`) → 브라우저에서 *Sign in with ChatGPT* → 구독 계정(Plus·Pro 등)으로 로그인 → 검은 창 닫기
+3. **ChatGPT 연결 확인** → 'ChatGPT 구독으로 연결됨'. 연결 방식에서 **ChatGPT 구독 (Codex 로그인)** 을 고르거나,
+   Claude 를 그대로 쓰면서 *Claude 로 안 될 때 이어서 쓸 GPT* 를 **ChatGPT 구독으로** 고릅니다.
+- 분석·채팅창 사진·공지 읽기·편성표/신청곡 웹 검색까지 모두 Codex 로 하고, ChatGPT 구독 사용량에서 나갑니다 (한도에 걸리면 풀릴 때까지 쉼, 작업 기록에 남음).
+- 이 프로그램은 ChatGPT 로그인 정보(토큰·비밀번호)를 읽거나 저장하지 않고 codex 프로그램만 실행합니다. 실행할 때 OPENAI_API_KEY 같은 키는
+  빼고 넘겨 API 요금으로 새지 않게 하고, Codex 가 API 키로 로그인돼 있으면 연결 확인에서 '구독이 아님'으로 알려 줍니다.
+- 빈 임시 폴더에서 읽기 전용(`--sandbox read-only`)·기록 없음(`--ephemeral`)으로 돌리고, 웹 검색은 편성표·날씨·신청곡 확인 때만 켭니다.
+- 모델은 비워 두면 Codex 기본 모델, 노력 수준은 Claude 와 같은 'low'.
+
 ### GPT(OpenAI API 키)로도 분석 (0.67, 설정 → AI 연결)
 - 연결 방식에 **GPT (OpenAI API 키, 충전 요금)** 를 더했습니다. 고르면 퀴즈·사연·선물·공지 분석, 경험 풀어 쓰기, 채팅창 사진 읽기,
   편성표·오늘 날씨·신청곡 확인(웹 검색)까지 모두 GPT 로 합니다. 프롬프트·JSON 모양·검사·'지어내지 않기' 규칙은 Claude 와 같습니다.
