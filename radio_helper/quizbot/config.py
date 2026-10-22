@@ -60,6 +60,8 @@ DEFAULTS = {
     # 분석 (Claude) — 구독 한도·요금을 아끼려고 Sonnet·low (Opus·medium 일 때 몇 시간 만에 구독 한도에 걸렸음)
     "quizbot.model": "claude-sonnet-5-5",
     "quizbot.effort": "low",
+    "quizbot.gpt_model": "gpt-5",           # GPT(OpenAI API 키)로 쓸 때 모델 (0.67)
+    "quizbot.gpt_fallback": "0",            # Claude 로 안 될 때(구독 한도·오류) GPT 로 이어서 (충전 요금, 켜야 함)
     "quizbot.billing": "",                # 비우면 PC 는 subscription(Claude 구독, Claude Code 로그인) · 서버는 api(API 키, 충전 요금)
     "quizbot.billing_fallback": "0",      # 구독으로 안 될 때(한도·로그인 풀림) API 키로 이어서 (충전 요금, 켜야 함)
     "quizbot.autostart": "0",
@@ -126,6 +128,7 @@ LABELS = {
     "quizbot.chat_shots": "분석 때 함께 보는 채팅창 사진 수 (0=녹취만)",
     "quizbot.model": "Claude 모델 (claude-sonnet-5-5 권장 · 더 정확하게: claude-opus-5-5, 구독 한도를 빨리 씀)",
     "quizbot.effort": "분석 노력 수준 (low 권장 / medium / high — 높을수록 한도를 빨리 씀)",
+    "quizbot.gpt_model": "GPT 모델 (OpenAI API 키로 쓸 때, 예: gpt-5 · gpt-5-mini)",
     "gorilla.process_name": "고릴라 프로그램 이름 (자동 찾기로 채워짐)",
     "gorilla.window_title": "고릴라 창 제목(정규식, 프로그램 이름이 없을 때)",
     "gorilla.input_mode": "입력칸 찾기 (screen=모니터 위치 / uia / coords)",

@@ -5,6 +5,8 @@
 Claude 를 부르는 길은 둘 (설정 'quizbot.billing'):
 - api: API 키(충전 요금). 키는 환경 변수 ANTHROPIC_API_KEY 또는 윈도우 자격 증명 관리자(관리 화면에서 저장)에서 읽는다.
 - subscription: Claude 구독. 이 PC 에 로그인해 둔 공식 Claude Code 를 실행한다 (claude_cli.py, 로그인 정보는 다루지 않음).
+- openai: GPT (OpenAI API 키, 충전 요금, 0.67). 키는 환경 변수 OPENAI_API_KEY 또는 윈도우 자격 증명 관리자.
+  Claude 로 쓰다가 구독 한도·오류로 막히면 GPT 로 이어서 할 수도 있다 (설정 'quizbot.gpt_fallback').
 """
 
 from __future__ import annotations
@@ -638,7 +640,28 @@ def save_api_key(key: str) -> None:
     keyring.set_password(KEYRING_SERVICE, KEYRING_USER, key)
 
 
-BILLINGS = {"subscription": "Claude 구독 (Claude Code 로그인) — PC 기본", "api": "API 키 (충전 요금)"}
+BILLINGS = {"subscription": "Claude 구독 (Claude Code 로그인) — PC 기본", "api": "Claude API 키 (충전 요금)",
+            "openai": "GPT (OpenAI API 키, 충전 요금)"}
+OPENAI_KEYRING_USER = "openai_api_key"
+OPENAI_MODEL = "gpt-5"            # 설정 'quizbot.gpt_model' 로 바꿈
+
+
+def get_openai_key() -> str | None:
+    key = os.environ.get("OPENAI_API_KEY")
+    if key:
+        return key
+    try:
+        import keyring
+
+        return keyring.get_password(KEYRING_SERVICE, OPENAI_KEYRING_USER)
+    except Exception:
+        return None
+
+
+def save_openai_key(key: str) -> None:
+    import keyring
+
+    keyring.set_password(KEYRING_SERVICE, OPENAI_KEYRING_USER, key)
 
 
 def billing(conn) -> str:
@@ -656,6 +679,9 @@ def ready(conn) -> tuple[bool, str]:
     """Claude 를 부를 수 있는지 (가볍게: 키가 있는지 / claude 프로그램이 있는지). (가능, 안 될 때 안내)"""
     from . import claude_cli, config
 
+    if billing(conn) == "openai":
+        ok = bool(get_openai_key())
+        return ok, "" if ok else "GPT 방식인데 OpenAI API 키가 없습니다 (설정 → AI 연결에서 키 저장)."
     has_key = bool(get_api_key())
     if billing(conn) == "api":
         return has_key, "" if has_key else "API 키 방식인데 API 키가 없습니다 (설정 → Claude 연결에서 'Claude 구독'을 고르거나 키 저장)."
@@ -663,6 +689,8 @@ def ready(conn) -> tuple[bool, str]:
         return True, ""
     if has_key and config.get(conn, "quizbot.billing_fallback") == "1":
         return True, "Claude Code 가 없어 API 키로 대신합니다."
+    if get_openai_key() and config.get(conn, "quizbot.gpt_fallback") == "1":
+        return True, "Claude Code 가 없어 GPT(OpenAI API 키)로 대신합니다."
     return False, "Claude 구독으로 쓰려면 이 컴퓨터에 Claude Code 를 설치하고 한 번 로그인하세요 (설정 화면 안내)."
 
 
@@ -691,18 +719,27 @@ def make(conn, **kwargs) -> "ClaudeAnswerer":
     """설정(모델·노력·결제 방식)대로 만든다."""
     from . import config
 
+    gpt = lambda: OpenAIAnswerer(config.get(conn, "quizbot.gpt_model") or OPENAI_MODEL,   # noqa: E731
+                                 config.get(conn, "quizbot.effort"), note=_note)
+    if billing(conn) == "openai":
+        return gpt()
+    backup = gpt() if config.get(conn, "quizbot.gpt_fallback") == "1" and get_openai_key() else None
     return ClaudeAnswerer(config.get(conn, "quizbot.model"), config.get(conn, "quizbot.effort"),
                           billing=billing(conn), fallback=config.get(conn, "quizbot.billing_fallback") == "1",
-                          note=_note, **kwargs)
+                          note=_note, backup=backup, **kwargs)
+
+
+GPT = object()          # _subscription 이 'GPT 로 이어서'를 알리는 표시
 
 
 class ClaudeAnswerer:
     def __init__(self, model: str = "claude-sonnet-5-5", effort: str = "low", client=None, billing: str = "api",
-                 fallback: bool = False, cli=None, note=None):
+                 fallback: bool = False, cli=None, note=None, backup=None):
         self.model = model
         self.effort = effort
-        self.billing = billing if billing in BILLINGS else "api"
+        self.billing = billing if billing in ("subscription", "api") else "api"
         self.fallback = fallback          # 구독으로 안 될 때 API 키(충전 요금)로 이어서
+        self.backup = backup              # Claude 로 안 될 때 GPT(OpenAIAnswerer)로 이어서 (0.67)
         self.note = note or (lambda _message: None)
         self._client = client
         if cli is None:
@@ -730,7 +767,7 @@ class ClaudeAnswerer:
         """구독 한도로 쉬는 중이면 그 안내 (API 키로 이어 갈 수 있게 켜 두었으면 빈 글 — 그때는 API 키로 분석)."""
         if self.billing != "subscription" or not getattr(self.cli, "limited", lambda: False)():
             return ""
-        if self.fallback and get_api_key():
+        if (self.fallback and get_api_key()) or self.backup is not None:
             return ""
         note = getattr(self.cli, "pause_note", lambda: "")()
         return f"Claude 구독 한도에 걸려 {note + ' ' if note else ''}분석을 쉽니다 (듣기·자막·기록은 계속)"
@@ -743,6 +780,9 @@ class ClaudeAnswerer:
             if self.fallback and get_api_key():
                 self.note(f"Claude 구독으로 {what}하지 못해 API 키(충전 요금)로 대신함: {str(e)[:150]}")
                 return None
+            if self.backup is not None:
+                self.note(f"Claude 구독으로 {what}하지 못해 GPT(OpenAI API 키)로 대신함: {str(e)[:150]}")
+                return GPT
             raise AnswererError(str(e))
 
     @staticmethod
@@ -764,8 +804,12 @@ class ClaudeAnswerer:
         if self.billing == "subscription":
             done = self._subscription(lambda: self.cli.run(system, self._content(user, images), schema=schema,
                                                            model=self.model, effort=self.effort), "분석")
+            if done is GPT:
+                return self.backup._call(system, user, schema, images)
             if done is not None:
                 return json.dumps(done["data"], ensure_ascii=False)
+        elif self.billing == "api" and self.backup is not None and not get_api_key():
+            return self.backup._call(system, user, schema, images)
         a = self._anthropic
         try:
             response = self.client.beta.messages.create(
@@ -868,6 +912,8 @@ class ClaudeAnswerer:
             done = self._subscription(lambda: self.cli.run(
                 system + f"\n- 웹 검색은 {max_searches}번 안에서 끝냅니다.",
                 ask, tools=("WebSearch",), model=self.model, effort=self.effort), what)
+            if done is GPT:
+                return self.backup._web_research(system, ask, max_searches, what)
             if done is not None:
                 text = done["text"] if done["text"].strip() else "\n".join(done["texts"])
                 if not text.strip():
@@ -962,3 +1008,123 @@ class ClaudeAnswerer:
             return StoryAnalysis.from_json(text)
         except (ValueError, TypeError, AttributeError) as e:
             raise AnswererError(f"분석 결과를 읽지 못했습니다: {e}")
+
+
+# ── GPT (OpenAI Responses API, 0.67) ───────────────────────────────────
+def _http_post(url: str, body: dict, key: str, timeout: int = 240) -> tuple[int, dict]:
+    """JSON POST → (상태 코드, 응답 JSON). 표준 라이브러리만 씀 (따로 설치할 것 없음)."""
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode("utf-8") or "{}")
+        except ValueError:
+            return e.code, {}
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise AnswererError(f"인터넷 연결 오류로 GPT 를 부르지 못했습니다: {str(e)[:80]}")
+
+
+class OpenAIAnswerer(ClaudeAnswerer):
+    """ClaudeAnswerer 와 같은 일(퀴즈·사연·공지·편성표·신청곡)을 GPT 로. 프롬프트·JSON 모양은 그대로 쓴다."""
+
+    URL = "https://api.openai.com/v1/responses"
+    SEARCH_TOOLS = ("web_search", "web_search_preview")
+
+    def __init__(self, model: str = OPENAI_MODEL, effort: str = "low", post=None, note=None, key=None):
+        self.model = model or OPENAI_MODEL
+        self.effort = effort if effort in ("minimal", "low", "medium", "high") else "low"
+        self.billing = "openai"
+        self.fallback, self.backup, self.cli, self._client = False, None, None, None
+        self.note = note or (lambda _message: None)
+        self._post = post or _http_post
+        self._key = key
+
+    def paused(self) -> str:
+        return ""
+
+    def _request(self, body: dict) -> dict:
+        key = self._key or get_openai_key()
+        if not key:
+            raise AnswererError("OpenAI API 키가 없습니다 (설정 → AI 연결에서 GPT 키 저장).")
+        status, data = self._post(self.URL, body, key)
+        message = str(((data or {}).get("error") or {}).get("message") or "")
+        if status == 400 and "reasoning" in body and "reasoning" in message.lower():
+            body = {k: v for k, v in body.items() if k != "reasoning"}       # 추론 설정을 받지 않는 모델
+            status, data = self._post(self.URL, body, key)
+            message = str(((data or {}).get("error") or {}).get("message") or "")
+        if status == 200:
+            return data
+        code = str(((data or {}).get("error") or {}).get("code") or "")
+        if status == 401:
+            raise AnswererError("OpenAI API 키가 없거나 올바르지 않습니다.")
+        if status == 403:
+            raise AnswererError(f"OpenAI API 키에 이 모델('{self.model}')을 쓸 권한이 없습니다.")
+        if status == 404:
+            raise AnswererError(f"GPT 모델 '{self.model}'을(를) 찾을 수 없습니다 (설정의 GPT 모델 이름 확인).")
+        if status == 429:
+            raise AnswererError("OpenAI 크레딧이 없거나 사용량 한도에 걸렸습니다." if "quota" in code + message
+                                else "OpenAI 사용량 한도에 걸렸습니다. 잠시 뒤 다시 시도합니다.")
+        raise AnswererError(f"OpenAI API 오류 {status}: {message[:120]}")
+
+    @staticmethod
+    def _parts(user: str, images=()) -> list:
+        import base64
+
+        parts = []
+        for at, data in images or ():
+            parts.append({"type": "input_text", "text": f"[채팅창 화면 {at}]"})
+            parts.append({"type": "input_image",
+                          "image_url": "data:image/jpeg;base64," + base64.standard_b64encode(data).decode("ascii")})
+        parts.append({"type": "input_text", "text": user})
+        return parts
+
+    @staticmethod
+    def _text(data: dict) -> str:
+        if data.get("status") == "incomplete":
+            reason = (data.get("incomplete_details") or {}).get("reason") or ""
+            if reason == "max_output_tokens":
+                raise AnswererError("응답이 잘렸습니다.")
+            if reason == "content_filter":
+                raise AnswererError("GPT 가 이 요청을 거절했습니다.")
+        texts = []
+        for item in data.get("output") or []:
+            if item.get("type") != "message":
+                continue
+            for c in item.get("content") or []:
+                if c.get("type") == "refusal":
+                    raise AnswererError("GPT 가 이 요청을 거절했습니다.")
+                if c.get("type") == "output_text":
+                    texts.append(c.get("text") or "")
+        return "\n".join(t for t in texts if t)
+
+    def _body(self, system: str, content) -> dict:
+        return {"model": self.model, "instructions": system, "max_output_tokens": 16000,
+                "reasoning": {"effort": self.effort}, "input": content}
+
+    def _call(self, system: str, user: str, schema: dict, images=()) -> str:
+        body = self._body(system + "\n응답은 정해진 JSON 하나만.", [{"role": "user", "content": self._parts(user, images)}])
+        body["text"] = {"format": {"type": "json_schema", "name": "result", "schema": schema, "strict": False}}
+        return self._text(self._request(body))
+
+    def _web_research(self, system: str, ask: str, max_searches: int, what: str) -> str:
+        last = None
+        for tool in self.SEARCH_TOOLS:      # 웹 검색 도구 이름이 다른 계정·판도 있어 하나씩
+            body = self._body(system + f"\n- 웹 검색은 {max_searches}번 안에서 끝냅니다.", ask)
+            body["tools"] = [{"type": tool}]
+            try:
+                text = self._text(self._request(body))
+            except AnswererError as e:
+                last = e
+                if "400" in str(e):
+                    continue
+                raise
+            if not text.strip():
+                raise AnswererError(f"{what}지 못했습니다 (빈 응답).")
+            return text
+        raise AnswererError(f"GPT 웹 검색으로 {what}지 못했습니다: {last}")

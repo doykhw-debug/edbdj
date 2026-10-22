@@ -1359,6 +1359,9 @@ def create_app(data_dir: str | None = None) -> Flask:
                 ok, why = False, check.get("detail") or ""
             return {"name": "Claude 구독 (Claude Code)", "ok": ok, "url": url_for("quizbot") + "#claude",
                     "detail": why or check.get("detail") or "퀴즈·사연 분석에 필요 — 설정에서 '연결 확인'"}
+        if answerer.billing(c) == "openai":
+            return {"name": "AI 연결: GPT (OpenAI API 키, 충전 요금)", "ok": ok, "url": url_for("quizbot") + "#claude",
+                    "detail": why or "퀴즈·사연 분석에 필요"}
         return {"name": "Claude 연결: API 키 (충전 요금)", "ok": ok, "url": url_for("quizbot") + "#claude",
                 "detail": why or "퀴즈·사연 분석에 필요 — PC 에서는 'Claude 구독'을 권장"}
 
@@ -1398,6 +1401,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             heartbeat=db.get_setting(c, "quizbot.heartbeat"), check=check, has_key=bool(answerer.get_api_key()),
             billing=answerer.billing(c), billings=answerer.BILLINGS, claude_check=fresh_claude_check(c),
             claude_found=bool(claude_cli.find_claude()), billing_fallback=qconfig.get(c, "quizbot.billing_fallback") == "1",
+            has_openai=bool(answerer.get_openai_key()), gpt_fallback=qconfig.get(c, "quizbot.gpt_fallback") == "1",
+            gpt_model=qconfig.get(c, "quizbot.gpt_model"),
             can_open_login=not server.is_server() and not g.get("remote"),
             programs=programs_, days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
             autostart=qconfig.get(c, "quizbot.autostart") == "1",
@@ -1431,9 +1436,26 @@ def create_app(data_dir: str | None = None) -> Flask:
         chosen = form("billing")
         if chosen in BILLINGS and chosen != qconfig.get(g.conn, "quizbot.billing"):
             db.set_setting(g.conn, "quizbot.billing", chosen)
-            db.log(g.conn, "quizbot", f"Claude 연결 방식: {BILLINGS[chosen]}")
+            db.log(g.conn, "quizbot", f"AI 연결 방식: {BILLINGS[chosen]}")
         if chosen in BILLINGS:
             db.set_setting(g.conn, "quizbot.billing_fallback", "1" if request.form.get("billing_fallback") else "0")
+            db.set_setting(g.conn, "quizbot.gpt_fallback", "1" if request.form.get("gpt_fallback") else "0")
+        gpt_model = form("gpt_model").strip()
+        if gpt_model and re.fullmatch(r"[A-Za-z0-9._:-]{2,60}", gpt_model):
+            db.set_setting(g.conn, "quizbot.gpt_model", gpt_model)
+        openai_key = (request.form.get("openai_key") or "").strip()
+        if openai_key and server.is_server():
+            flash("서버의 OpenAI 키는 서버의 /opt/radio/.env 파일(OPENAI_API_KEY)에 둡니다. 화면에서는 저장하지 않습니다.", "warn")
+        elif openai_key:
+            from .quizbot.answerer import save_openai_key
+
+            try:
+                save_openai_key(openai_key)
+                db.log(g.conn, "quizbot", "OpenAI(GPT) API 키를 윈도우 자격 증명 관리자에 저장함")
+                flash("GPT(OpenAI) API 키를 저장했습니다. (이 PC의 자격 증명 관리자에만 저장되며 화면·기록에 남지 않습니다)")
+            except Exception as e:
+                flash(f"OpenAI API 키를 저장하지 못했습니다: {type(e).__name__}. 환경 변수 OPENAI_API_KEY 로 설정할 수도 있습니다.",
+                      "error")
         if form("live_min_confidence"):
             db.set_setting(g.conn, "live.min_confidence", str(_confidence(form("live_min_confidence"))))
         key = (request.form.get("api_key") or "").strip()
@@ -2037,7 +2059,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             abort(404)
         keys = [k for k in qconfig.DEFAULTS if k.startswith(f"{app_}.") and not k.endswith(("_x", "_y"))] + \
                [k for k in qconfig.DEFAULTS if k.startswith("quizbot.")
-                and k not in ("quizbot.autostart", "quizbot.billing", "quizbot.billing_fallback")]   # Claude 연결은 설정 화면에서
+                and k not in ("quizbot.autostart", "quizbot.billing", "quizbot.billing_fallback",
+                              "quizbot.gpt_fallback", "quizbot.gpt_model")]   # AI 연결은 설정 화면에서
         if request.method == "POST":
             for k in keys:
                 if k in request.form:
