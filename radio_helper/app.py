@@ -16,7 +16,7 @@ from pathlib import Path
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
 from . import (__version__, aside, boards, broadcast_seed, collect, db, evidence, gates, generator, notices, quiz, remote,
-               repair, schedules, server, stations, updater)
+               repair, schedules, server, stations, tabbridge, updater)
 from .errors import error_page
 from .gates import STATUS_LABELS
 from .quizbot import config as qconfig
@@ -65,8 +65,19 @@ def create_app(data_dir: str | None = None) -> Flask:
     qconfig.migrate_defaults(conn)
     qconfig.migrate_channels(conn)
     qconfig.migrate_billing(conn, server.is_server())
+    if not server.is_server():
+        try:
+            tabbridge.ensure(conn)
+            tabbridge.write_extension(conn)              # 내 Aside 확장 다리 폴더 (0.64)
+        except OSError:
+            pass
     broadcast_seed.seed_schedules(conn)                  # 비어 있는 채널 편성표 · 기본 코너 게시판 (0.62)
     broadcast_seed.seed_boards(conn)
+    if db.get_setting(conn, "meta.cleanup_posts_064") != "1":   # 0.63 모으기가 넣은 '글 보기' 주소 정리
+        gone = collect.cleanup_posts(conn)
+        db.set_setting(conn, "meta.cleanup_posts_064", "1")
+        if gone:
+            db.log(conn, "post", f"코너 목록 정리: 게시판이 아닌 '글 하나' 주소 {gone}개를 지웠습니다 (0.63 코너 게시판 모으기가 잘못 넣은 것)")
     if not server.is_server():
         boards.enable_daily_once(conn)
     conn.close()
@@ -87,6 +98,12 @@ def create_app(data_dir: str | None = None) -> Flask:
         g.conn = db.connect()
         if not remote.allowed_host(g.conn, host):
             abort(403)
+        if request.path.startswith("/bridge/"):
+            # 내 Aside 확장 다리 (0.64): 이 PC(127.0.0.1)에서, 확장에 넣어 둔 열쇠가 맞을 때만. 화면 로그인·CSRF 와 따로.
+            if server.is_server() or remote.is_remote(host, request.headers) or \
+                    request.headers.get("X-Radio-Helper-Token") != tabbridge.token(g.conn):
+                abort(403)
+            return None
         # 서버 모드: 같은 서버의 다른 프로그램도 127.0.0.1 로 들어올 수 있으므로 모든 요청을 원격으로 보고 로그인을 받는다
         g.remote = server.is_server() or remote.is_remote(host, request.headers)
         if g.remote and request.endpoint not in remote.REMOTE_ENDPOINTS:
@@ -599,6 +616,8 @@ def create_app(data_dir: str | None = None) -> Flask:
                                        if stations.corner_station(r)),
                        "recent": g.conn.execute("SELECT * FROM events WHERE kind = 'post' ORDER BY id DESC LIMIT 6").fetchall(),
                        "aside": aside.describe(g.conn),
+                       "bridge": {"connected": tabbridge.connected(g.conn), "folder": str(tabbridge.extension_dir()),
+                                  "tabs": tabbridge.use_tabs(g.conn)},
                        "onair": db.get_setting(g.conn, boards.ONAIR_KEY, "1") == "1",
                        "collect_last": (db.get_setting(g.conn, collect.LAST_KEY) or "")[:16],
                        "collect_pages": len(collect.start_pages(g.conn)),
@@ -633,6 +652,28 @@ def create_app(data_dir: str | None = None) -> Flask:
               f"(로그인 정보는 이 프로그램이 읽지 않고 도우미 브라우저에만 남습니다). (기록: {log_name})")
         return redirect(url_for("corners") + "#daily")
 
+    @app.post("/bridge/ping")
+    def bridge_ping():
+        data = request.get_json(silent=True) or {}
+        db.set_setting(g.conn, tabbridge.PING_KEY, str(time.time()))
+        db.set_setting(g.conn, tabbridge.VERSION_KEY, str(data.get("version") or "")[:20])
+        return {"ok": True}
+
+    @app.post("/bridge/task")
+    def bridge_task():
+        data = request.get_json(silent=True) or {}
+        db.set_setting(g.conn, tabbridge.PING_KEY, str(time.time()))
+        return tabbridge.task_for(g.conn, str(data.get("url") or "")) or {}
+
+    @app.post("/bridge/report")
+    def bridge_report():
+        data = request.get_json(silent=True) or {}
+        try:
+            tid = int(data.get("id") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False}, 400
+        return tabbridge.report(g.conn, tid, data)
+
     @app.post("/corners/browser")
     def corners_browser():
         """게시판 작업 브라우저: Aside(있으면) / Edge, Aside 경로를 직접 적기."""
@@ -642,8 +683,17 @@ def create_app(data_dir: str | None = None) -> Flask:
         db.set_setting(g.conn, aside.PATH_KEY, path)
         db.set_setting(g.conn, aside.ERROR_KEY, "")
         found = aside.describe(g.conn)["found"]
-        flash(f"게시판 작업은 Aside({found})로 엽니다. 처음 한 번은 '미리 로그인'으로 뜨는 Aside 창에서 방송국마다 로그인하세요."
-              if found else "게시판 작업은 Edge 로 엽니다." + (" (적은 경로에 Aside 가 없습니다)" if path else ""))
+        if choice == "edge":
+            msg = "게시판 작업은 Edge(도우미 전용 창)로 합니다."
+        elif not found:
+            msg = "Aside 를 찾지 못했습니다" + (" (적은 경로에 Aside 가 없습니다)" if path else "") + " — 게시판 작업은 Edge 로 합니다."
+        elif choice == "aside":
+            msg = f"게시판 작업은 도우미 전용 Aside 창({found})으로 합니다. 처음 한 번은 '미리 로그인'으로 뜨는 창에서 로그인하세요."
+        else:
+            msg = (f"Aside({found})를 찾았습니다. " + ("확장이 연결돼 있어 내 Aside 새 탭으로 합니다."
+                                                     if tabbridge.connected(g.conn) else
+                                                     "아래 안내대로 확장을 한 번 넣으면 내 Aside 새 탭으로 합니다 (그 전에는 Edge)."))
+        flash(msg)
         return redirect(url_for("corners") + "#daily")
 
     @app.post("/corners/collect")

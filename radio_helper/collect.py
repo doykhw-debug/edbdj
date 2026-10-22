@@ -61,6 +61,10 @@ NOT_PROGRAM = {"main", "schedule", "notice", "index", "event", "events", "podcas
 
 
 BOARD_URL = re.compile(r"board|bbs|corner|requestsong|storys?(?:/|$)", re.I)
+# 게시판 안의 글 하나(글 보기)·쪽 넘김 주소 — 게시판이 아니다 (0.63 은 이것까지 넣어 '새 게시판 2332개'가 됨)
+POST_VIEW = re.compile(r"/view(?:/|\b)|/read(?:/|\b)|/detail|imbbsview|talkview|[?&](?:cmd=view|mode=view|"
+                       r"(?:board_)?no|seq|idx|article_?(?:id|no)|bbs_?seq|num|uid|wr_id|list_id|post_?id|page)=|,read,",
+                       re.I)
 STRONG_TEXT = re.compile(r"사연|신청곡|참여해|참여하기|모집|코너")       # 주소 모양이 달라도 게시판으로 보는 메뉴 글자
 BOARD_TEXT = re.compile(r"사연|신청|코너|게시판|참여|청취자|한마디|퀴즈|고민|이야기")
 GENERIC = {"program", "programs", "home", "main", "radio", "broad", "index", "index.html", "main.html", "pc", "m", "mobile",
@@ -87,6 +91,8 @@ def board_links(base_url: str, links: list[tuple[str, str]]) -> list[dict]:
             continue
         u = urlparse(href)
         where = (u.path + "?" + u.query).lower()
+        if POST_VIEW.search(where):
+            continue
         if not (BOARD_URL.search(where) or STRONG_TEXT.search(text)) or SKIP_TEXT.search(text) \
                 or SKIP_TEXT.search(where.rsplit("/", 1)[-1]):
             continue
@@ -207,6 +213,21 @@ def add(conn, url: str, title: str, program: str, note: str) -> bool:
         "VALUES (?, 'board', ?, ?, ?, ?, ?, ?)",
         (program or station, (title or "코너 게시판")[:60], url, db.corner_write_url(url) or url, note, station, db.now()))
     return cur.rowcount > 0
+
+
+def cleanup_posts(conn) -> int:
+    """예전 모으기가 게시판으로 넣은 '글 하나' 주소를 지운다 (그 코너로 보낸 적·매일 자동이 없는 것만). 지운 수."""
+    gone = 0
+    for c in conn.execute("SELECT id, board_url FROM corners WHERE COALESCE(auto_on, 0) = 0").fetchall():
+        u = urlparse(c["board_url"] or "")
+        if not POST_VIEW.search((u.path + "?" + u.query).lower()):
+            continue
+        if conn.execute("SELECT 1 FROM submissions WHERE corner_id = ? LIMIT 1", (c["id"],)).fetchone():
+            continue
+        conn.execute("DELETE FROM corners WHERE id = ?", (c["id"],))
+        gone += 1
+    conn.commit()
+    return gone
 
 
 def collect_page(conn, start: dict, reader=read_links, stamp: str = "", say=print) -> int | None:

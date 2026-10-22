@@ -337,6 +337,10 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
     if scheduled:
         allow_window = False
     try:
+        if reader is read_page and poster is None and tabs_on(conn):   # 0.64: 내 Aside 새 탭 (로그인 그대로)
+            from . import tabbridge
+
+            reader, poster = tabbridge.read_page, tabbridge.post
         with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
             return _run(conn, cid, test, answerer, now, reader, poster, allow_window, scheduled)
     except autofill.AutofillError as e:     # 다른 게시판 작업이 오래 끝나지 않음
@@ -721,6 +725,44 @@ def _check(conn, ctx, targets, say) -> dict:
     return logins(conn)
 
 
+def tabs_on(conn) -> bool:
+    try:
+        from . import tabbridge
+
+        return tabbridge.use_tabs(conn)
+    except Exception:
+        return False
+
+
+def check_logins_tabs(conn, targets: list[dict], say=print, reader=None) -> dict:
+    """내 Aside 새 탭으로 방송국마다 글쓰기(없으면 게시판) 화면을 열어 로그인 여부를 본다."""
+    from . import tabbridge
+
+    for t in targets:
+        try:
+            got = (reader or _tab_read)(conn, t["url"])
+            ok = tabbridge.login_from_text(got.get("text") or "", bool(got.get("password")))
+            why = {True: "내 Aside 에서 로그인됨", False: "내 Aside 에서 로그인 화면", None: "판단 못 함"}[ok]
+            if got.get("write_url"):
+                ok, why = True, "내 Aside 에서 글쓰기 화면이 열림"
+        except Exception as e:
+            ok, why = None, f"확인 못 함 — {str(e)[:80]}"
+        mark_login(conn, t["station"], ok, why)
+        say(f"{t['station']}: {why}")
+    return logins(conn)
+
+
+def _tab_read(conn, url: str) -> dict:
+    from . import tabbridge
+
+    tid = tabbridge.add_task(conn, "read", url)
+    tabbridge.open_tab(url)
+    got = tabbridge.wait(conn, tid, tabbridge.READ_WAIT)
+    if got.get("status") != "done":
+        raise RuntimeError(tabbridge._why(got, "화면을 읽지 못함"))
+    return got
+
+
 def check_logins(conn, say=print) -> dict:
     """방송국마다 창 없이 열어 로그인이 살아 있는지 확인해 적어 둔다."""
     from playwright.sync_api import sync_playwright
@@ -731,6 +773,9 @@ def check_logins(conn, say=print) -> dict:
     if not targets:
         say("확인할 코너가 없습니다.")
         return logins(conn)
+    if tabs_on(conn):
+        with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
+            return check_logins_tabs(conn, targets, say)
     with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
         with sync_playwright() as p:
             ctx, _page = autofill.launch_profile(p, headless=True)
@@ -750,6 +795,13 @@ def open_login(conn, say=print, minutes: int = LOGIN_WAIT_MINUTES) -> dict:
     targets = login_targets(conn)
     if not targets:
         say("코너가 없어 열 곳이 없습니다. 먼저 코너를 추가하세요.")
+        return logins(conn)
+    if tabs_on(conn):                       # 내 Aside 에 방송국마다 새 탭 (이미 로그인돼 있으면 그대로)
+        from . import tabbridge
+
+        for t in targets:
+            tabbridge.open_tab(t["home"] or t["url"])
+        say(f"내 Aside 에 새 탭({', '.join(t['station'] for t in targets)})을 열었습니다. 로그인돼 있지 않은 곳만 로그인하세요.")
         return logins(conn)
     with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
         with sync_playwright() as p:

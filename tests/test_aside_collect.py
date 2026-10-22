@@ -32,10 +32,13 @@ def test_chosen_respects_edge_and_caches(conn):
     def finder(saved):
         calls.append(saved)
         return saved or ASIDE
-    assert aside.chosen(conn, finder) == ASIDE and db.get_setting(conn, aside.FOUND_KEY) == ASIDE
-    assert aside.chosen(conn, finder) == ASIDE and calls[-1] == ASIDE           # 다음부터는 찾아 둔 경로부터
+    assert aside.exe_path(conn, finder) == ASIDE and db.get_setting(conn, aside.FOUND_KEY) == ASIDE
+    assert aside.exe_path(conn, finder) == ASIDE and calls[-1] == ASIDE         # 다음부터는 찾아 둔 경로부터
+    assert aside.chosen(conn, finder) is None                                    # 0.64: '자동'은 도우미 Aside 창을 쓰지 않음
+    db.set_setting(conn, aside.BROWSER_KEY, "aside")
+    assert aside.chosen(conn, finder) == ASIDE
     db.set_setting(conn, aside.BROWSER_KEY, "edge")
-    assert aside.chosen(conn, finder) is None
+    assert aside.chosen(conn, finder) is None and aside.exe_path(conn, finder) is None
 
 
 class FakeChromium:
@@ -57,6 +60,10 @@ def test_board_browser_opens_aside_profile_then_falls_back_to_edge(data_dir, mon
     monkeypatch.delenv("RADIO_HELPER_BROWSER_CHANNEL", raising=False)
     monkeypatch.setattr(autofill, "no_window", lambda: False)
     monkeypatch.setattr(aside, "find", lambda saved="", **kw: ASIDE)
+    p = SimpleNamespace(chromium=FakeChromium())
+    autofill.launch_profile(p, headless=True)
+    assert p.chromium.calls[0][1] == {"headless": True, "channel": "msedge"}    # '자동'이고 확장 연결 전: Edge
+    db.set_setting(conn, aside.BROWSER_KEY, "aside")
     db.set_setting(conn, "boards.logins", '{"SBS": {"ok": true}}')                   # Edge 프로필에서 로그인했던 기록
     p = SimpleNamespace(chromium=FakeChromium())
     autofill.launch_profile(p, headless=True)
@@ -85,7 +92,7 @@ def test_corners_page_browser_setting(client, conn, monkeypatch):
     assert "Aside 못 찾음 → Edge" in html and "코너 게시판 지금 모으기" in html
     r = client.post("/corners/browser", data={"csrf_token": csrf(client, "/corners"), "browser": "auto",
                                               "aside_path": f'"{ASIDE}"'}, follow_redirects=True)
-    assert f"Aside({ASIDE})로 엽니다" in r.get_data(as_text=True)
+    assert f"Aside({ASIDE})를 찾았습니다" in r.get_data(as_text=True) and "확장을 한 번 넣으면" in r.get_data(as_text=True)
     assert db.get_setting(conn, aside.PATH_KEY) == ASIDE
 
 

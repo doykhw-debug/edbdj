@@ -21,7 +21,8 @@ PATH_KEY = "boards.aside_path"        # 직접 적은 Aside 실행 파일 경로
 ERROR_KEY = "boards.aside_error"      # 마지막으로 Aside 를 열지 못한 까닭 (그때는 Edge 로 엶)
 LOGINS_KEY = "boards.logins"          # boards.LOGIN_KEY (방송국별 로그인 상태)
 FOUND_KEY = "boards.aside_found"      # 찾아 둔 경로 (화면을 열 때마다 다시 찾지 않게)
-CHOICES = {"auto": "Aside 있으면 Aside (기본)", "aside": "Aside", "edge": "Edge"}
+CHOICES = {"auto": "자동 (확장이 연결되면 내 Aside 새 탭, 아니면 Edge)", "tab": "내 Aside 새 탭 (확장 연결 — 로그인 그대로)",
+           "aside": "도우미 전용 Aside 창 (따로 로그인)", "edge": "Edge"}
 EXE_NAMES = ("aside.exe", "Aside.exe")
 
 
@@ -99,7 +100,13 @@ def settings(conn) -> dict:
 
 
 def chosen(conn, finder=None) -> str | None:
-    """게시판 작업에 쓸 Aside 경로 (Edge 를 고른 경우·못 찾은 경우 None)."""
+    """도우미 전용 창(Playwright)을 Aside 로 열 경로: '도우미 전용 Aside 창'을 고른 경우만 (0.64 — 그 창이 뜨지 않는 PC 가
+    있어 '자동'은 확장이 연결되면 내 Aside 새 탭, 아니면 예전처럼 Edge)."""
+    return exe_path(conn, finder) if settings(conn)["choice"] == "aside" else None
+
+
+def exe_path(conn, finder=None) -> str | None:
+    """이 PC 의 Aside 실행 파일 (Edge 를 고른 경우·못 찾은 경우 None). 새 탭 열기에 쓴다."""
     from . import db
 
     s = settings(conn)
@@ -114,7 +121,7 @@ def chosen(conn, finder=None) -> str | None:
 
 def describe(conn, finder=None) -> dict:
     """화면용: {choice, path, found, error}"""
-    return {**settings(conn), "found": chosen(conn, finder)}
+    return {**settings(conn), "found": exe_path(conn, finder)}
 
 
 def profile_dir():

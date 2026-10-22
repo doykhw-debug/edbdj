@@ -12,7 +12,7 @@
     <label class="inline"><input type="checkbox" name="on" value="1" {{ 'checked' if daily.on }}> 매일 확인</label>
     <input type="time" name="time" value="{{ daily.time }}" style="max-width:120px">
     <label class="inline"><input type="checkbox" name="test" value="1" {{ 'checked' if daily.test }}> 시험 (입력하고 증거 사진만, 등록 안 누름)</label>
-    <label class="inline"><input type="checkbox" name="onair" value="1" {{ 'checked' if daily.onair }}> 듣는 중이면 지금 방송 프로그램 게시판에 모두 쓰기 <small class="muted">(Aside 창을 띄움, 프로그램마다 하루 한 번)</small></label>
+    <label class="inline"><input type="checkbox" name="onair" value="1" {{ 'checked' if daily.onair }}> 듣는 중이면 지금 방송 프로그램 게시판에 모두 쓰기 <small class="muted">(내 Aside 새 탭, 프로그램마다 하루 한 번)</small></label>
     <label class="inline">하루 최대 <input type="number" name="cap" value="{{ daily.cap }}" min="0" max="50" style="max-width:70px"> 건 <small class="muted">(0 = 제한 없음)</small></label>
     <button>저장</button>
   </form>
@@ -24,6 +24,16 @@
     {% elif daily.aside.choice == 'edge' %}<span class="badge">Edge</span>
     {% else %}<span class="badge warn">Aside 못 찾음 → Edge</span>{% endif %}</p>
   {% if daily.aside.error %}<div class="flash warn">{{ daily.aside.error }}</div>{% endif %}
+  <div class="flash {{ '' if daily.bridge.connected else 'warn' }}" id="bridge">
+    <b>내 Aside 새 탭으로 하기</b>
+    {% if daily.bridge.connected %}<span class="badge ok">확장 연결됨</span>
+      {% if daily.bridge.tabs %}게시판 공지 읽기·글 입력·등록·로그인 확인을 평소 쓰는(로그인한) Aside 에 <b>새 탭</b>으로 엽니다.{% else %}지금은 위 선택 때문에 새 탭을 쓰지 않습니다.{% endif %}
+    {% else %}<span class="badge warn">확장 아직 연결 안 됨</span>
+      처음 한 번만: Aside 주소창에 <code>aside://extensions</code> (안 되면 <code>chrome://extensions</code>) → 오른쪽 위 <b>개발자 모드</b> 켜기 →
+      <b>압축해제된 확장 프로그램을 로드합니다</b> → 이 폴더 선택: <code>{{ daily.bridge.folder }}</code> → 1분 안에 '확장 연결됨'으로 바뀝니다.
+    {% endif %}
+    <br><span class="hint">확장은 도우미가 연 탭에서만 공지 글을 읽고 글쓰기 칸에 입력합니다. 로그인·비밀번호·쿠키는 읽지 않으며, 이 PC 의 도우미와만 통신합니다.</span>
+  </div>
   <form method="post" action="{{ url_for('corners_browser') }}" class="actions" style="margin-top:0">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <select name="browser">{% for k, label in aside_choices.items() %}<option value="{{ k }}" {{ 'selected' if daily.aside.choice == k }}>{{ label }}</option>{% endfor %}</select>
@@ -39,7 +49,7 @@
     {% else %}<li class="muted">코너를 추가하면 방송국별 로그인 상태가 나옵니다.</li>{% endfor %}
   </ul>
   <div class="actions">
-    <form method="post" action="{{ url_for('corners_login') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">미리 로그인 (도우미 브라우저 창 열기)</button></form>
+    <form method="post" action="{{ url_for('corners_login') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">{{ '미리 로그인 (내 Aside 에 방송국 탭 열기)' if daily.bridge.tabs else '미리 로그인 (도우미 브라우저 창 열기)' }}</button></form>
     <form method="post" action="{{ url_for('corners_login_check') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">로그인 상태 확인</button></form>
   </div>
   <h3 style="margin-top:14px">코너 게시판 모으기 <span class="hint">프로그램 홈페이지 {{ daily.collect_pages }}곳의 메뉴에서 사연·신청곡·코너 게시판 주소를 모아 아래 목록에 넣음 · 일주일마다 저절로</span></h3>
@@ -47,8 +57,9 @@
   <div class="actions">
     <form method="post" action="{{ url_for('corners_collect') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">코너 게시판 지금 모으기</button></form>
   </div>
-  <p class="hint">로그인은 도우미 전용 브라우저 창에서 직접 합니다 (아이디·비밀번호·보안 문자는 이 프로그램이 읽거나 저장하지 않음).
-    창은 Aside 로 뜨지만(위 '브라우저'), 평소 쓰는 Aside 의 로그인은 가져올 수 없어 이 창에서 한 번 로그인해 두면 다음부터 창 없이 매일 등록합니다.</p>
+  <p class="hint">{% if daily.bridge.tabs %}게시판 작업은 평소 쓰는 Aside 의 새 탭에서 하므로, 그 Aside 에 로그인돼 있으면 그대로 등록됩니다
+    (아이디·비밀번호·쿠키는 이 프로그램이 읽거나 저장하지 않음, 보안 문자는 직접).{% else %}로그인은 도우미 전용 브라우저 창에서 직접 합니다
+    (아이디·비밀번호·보안 문자는 이 프로그램이 읽거나 저장하지 않음). 위 안내대로 Aside 확장을 넣으면 평소 쓰는 Aside 의 로그인 그대로 새 탭에서 합니다.{% endif %}</p>
   {% if daily.recent %}<details class="muted"><summary>최근 게시판 작업</summary>
     {% for e in daily.recent %}<div>{{ e.at[5:16] }} · {{ e.message }}</div>{% endfor %}</details>{% endif %}
 </div>
