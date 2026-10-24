@@ -304,11 +304,11 @@ def test_onair_tick_launches_current_program_once_a_day(conn, monkeypatch):
     assert launched == [["onair", "--channel", "KBS 쿨FM", "--program", "윤정수 남창희의 미스터 라디오"]]
     assert boards.onair_tick(conn, datetime(2026, 10, 22, 16, 40), launch=launched.append) == []   # 오늘 했음
     assert boards.onair_tick(conn, datetime(2026, 10, 22, 19, 0), launch=launched.append) == []    # 편성 없음
-    db.set_setting(conn, "live.active", "0")
-    assert boards.onair_tick(conn, datetime(2026, 10, 23, 16, 30), launch=launched.append) == []   # 듣지 않을 때는 안 함
-    db.set_setting(conn, "live.active", "1")
+    db.set_setting(conn, "live.active", "0")                                                       # 0.71: 듣지 않아도 함
+    assert boards.onair_tick(conn, datetime(2026, 10, 23, 16, 30), launch=launched.append) == ["KBS 쿨FM|윤정수 남창희의 미스터 라디오"]
     db.set_setting(conn, boards.ONAIR_KEY, "0")
-    assert boards.onair_tick(conn, datetime(2026, 10, 23, 16, 30), launch=launched.append) == []   # 끔
+    assert boards.onair_tick(conn, datetime(2026, 10, 24, 16, 30), launch=launched.append) == []   # 끔
+    assert "꺼져 있음" in db.get_setting(conn, boards.ONAIR_STATUS)
 
 
 def test_run_onair_collects_then_writes_every_board(conn):

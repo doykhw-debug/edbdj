@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-24, 0.70 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-24, 0.71 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -21,14 +21,19 @@
 | 0.69 | 레인보우: 확인 창 닫기(Esc) → 입력칸 두 번 클릭 → 붙여넣기 → 전송 → 확인 창 닫기. 다른 사용자 글 주소는 열지 않고, 권한 없는 화면이면 그 코너를 닫음 |
 | 0.70 | **Aside 기록 가져오기·Aside 규칙** (aside_records.py): 등록 118·결과 불명 9 → 제출 이력, 실시간은 방송 게시판 멘트 때만, 상시·이벤트 정기 자동 제외, 같은 경험은 모든 방송국·채널에서 한 번, 조건 보류. GPT 기본 모델 gpt-4.1-mini |
 
+| 0.71 | 확장이 연결돼 있을 때만 새 탭(아니면 도우미 Edge 창) — 로그인 확인 '응답 없음' 해결. 지금 방송 게시판 쓰기 켬·기본 '방송 중이면 바로'(듣기 안 켜도, 상시·올린 게시판도 다른 날은 씀), 상태 줄(boards.onair_status) |
+
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).
   **사용자 사연 본문이 들어 있으므로 저장소에 넣지 않는다.** 앱이 켜질 때 기본 폴더에서 저절로 가져옴(정본이 바뀌었을 때만).
 - 코너 칼럼 `run_class`(mention/standing/alias) · `hold_state`(posted/unknown/hold) · `hold_reason`. `aside_records.block_reason(conn, corner, trigger)` 가 판단.
-- 실시간: `boards.onair_tick` 이 transcripts(최근 10분)에서 `aside_records.board_mention` 을 찾아야 띄움 → `run(trigger="onair")` 는 공지에 accepting=yes 가 있어야 올림.
+- 지금 방송: `boards.onair_mode` 기본 live(0.71, 사용자가 '지금 방송 프로그램에 사연을 쓰지 않음'을 문제로 봄) — 편성표의 지금 프로그램에 하루 한 번.
+  mention 을 고르면 0.70 처럼 transcripts(최근 10분)의 `aside_records.board_mention` 이 있어야 하고 공지에 accepting=yes 가 있어야 올림.
 - 공지 정리(NOTICE_SCHEMA)에 `entry`(write/comment/external)·`limit_unit`(chars/bytes) 추가.
 
 ## 사용자 PC 에서 아직 확인 못 한 것 (다음에 확인받을 것)
+0. **0.71**: 확장 연결(마지막 신호 시각), 연결 전 Edge 창 로그인 확인, '지금 방송 게시판 쓰기' 상태 줄이 실제로 쓰기까지 가는지.
+   코너 프로그램 이름이 'KBS 프로그램 3' 처럼 모으기에서 이름을 못 찾은 게시판은 편성표 이름과 맞지 않아 지금 방송 게시판으로 못 찾음 (화면 사진 기준).
 0. **0.70 Aside 기록 가져오기**: 관리 화면을 켠 뒤 코너 화면 'Aside 기록·규칙'의 '마지막 가져오기' 숫자 (등록함 118 · 결과 불명 9 · 보류 89 근처,
    '앱에 없는 경험 번호'가 0 인지). 방송 중 게시판 멘트로 실제로 게시판 쓰기가 뜨는지 (받아쓰기 품질에 달림).
    GPT 기본 모델 gpt-4.1-mini 는 API 키 연결일 때만 쓰임 — 실제 호출 미확인.

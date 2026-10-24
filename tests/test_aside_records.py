@@ -3,6 +3,7 @@
 
 import io
 import json
+import time
 import zipfile
 from datetime import datetime
 
@@ -126,10 +127,13 @@ def test_block_reason_by_trigger(conn):
 
     assert why("mention", "", "onair") is None and "멘트" in why("mention", "", "scheduled")
     assert why("mention", "", "manual") is None
-    assert "상시" in why("standing", "", "onair") and "상시" in why("standing", "", "scheduled", auto=1)
+    assert why("standing", "", "onair") is None and "상시" in why("standing", "", "scheduled", auto=1)   # 방송 중이면 바로
     assert why("standing", "", "manual") is None                       # 사용자가 누른 한 번은 됨
-    assert "다시 올리지 않음" in why("", "posted", "manual") and "결과 불명" in why("mention", "unknown", "onair")
+    assert "다시 올리지 않음" in why("", "posted", "manual") and why("mention", "unknown", "onair") is None
     assert "보류" in why("", "hold", "onair") and why("", "hold", "manual") is None
+    db.set_setting(conn, aside_records.ONAIR_MODE_KEY, "mention")     # 게시판 멘트 때만: 0.70 규칙 그대로
+    assert "상시" in why("standing", "", "onair") and "결과 불명" in why("mention", "unknown", "onair")
+    db.set_setting(conn, aside_records.ONAIR_MODE_KEY, "live")
     assert "중복" in why("alias", "", "manual")
     assert "매일" in why("", "", "scheduled") and why("", "", "scheduled", auto=1) is None
     db.set_setting(conn, aside_records.RULES_KEY, "0")
@@ -162,12 +166,14 @@ def say_on_air(conn, at, text):
 
 def test_onair_waits_for_board_mention(conn, monkeypatch):
     _onair(conn)
+    db.set_setting(conn, aside_records.ONAIR_MODE_KEY, "mention")
     monkeypatch.setattr(boards, "board_busy", lambda: False)
     launched = []
     assert boards.onair_tick(conn, datetime(2026, 10, 22, 16, 30), launch=launched.append) == []   # 멘트 없음
     say_on_air(conn, "2026-10-22 16:20:00", "홈페이지 게시판에 사연 남겨 주세요")                    # 10분 넘게 지난 멘트
     say_on_air(conn, "2026-10-22 16:29:00", "선곡표는 게시판에서 보세요")
     assert boards.onair_tick(conn, datetime(2026, 10, 22, 16, 31), launch=launched.append) == []
+    assert "멘트를 기다리는 중" in db.get_setting(conn, boards.ONAIR_STATUS)
     say_on_air(conn, "2026-10-22 16:35:00", "오늘 주제 '가을 소풍', 사연은 홈페이지 게시판에 올려 주세요.")
     assert boards.onair_tick(conn, datetime(2026, 10, 22, 16, 36), launch=launched.append) == ["KBS 쿨FM|미스터 라디오"]
     assert launched[0][:5] == ["onair", "--channel", "KBS 쿨FM", "--program", "미스터 라디오"]
@@ -184,11 +190,19 @@ def test_run_onair_skips_standing_posted_and_does_not_collect(conn):
     conn.execute("UPDATE corners SET run_class = 'mention', hold_state = 'posted' WHERE id = ?", (ids[1],))
     conn.execute("UPDATE corners SET run_class = 'mention' WHERE id = ?", (ids[2],))
     conn.commit()
+    conn.execute("INSERT INTO corners (program, kind, title, board_url, station, run_class, hold_state, updated_at) "
+                 "VALUES ('미스터 라디오', 'board', '보류', ?, 'KBS', 'standing', 'hold', ?)",
+                 ("https://program.kbs.co.kr/2fm/radio/mrradio/pc/board.html?bbs_loc=R9,list", db.now()))
+    conn.commit()
     ran = []
-    out = boards.run_onair(conn, "KBS 쿨FM", "미스터 라디오",
-                           runner=lambda c, cid, allow_window=None, trigger=None: ran.append((cid, trigger)) or "ok",
+    runner = lambda c, cid, allow_window=None, trigger=None: ran.append((cid, trigger)) or "ok"   # noqa: E731
+    out = boards.run_onair(conn, "KBS 쿨FM", "미스터 라디오", runner=runner,
                            collector=lambda *a, **k: (_ for _ in ()).throw(AssertionError("모으지 않음")), say=lambda m: None)
-    assert ran == [(ids[2], "onair")] and len(out) == 1
+    assert ran == [(i, "onair") for i in ids] and len(out) == 3       # 방송 중이면 바로: 상시·올린 곳도 (보류는 뺌)
+    db.set_setting(conn, aside_records.ONAIR_MODE_KEY, "mention")
+    ran.clear()
+    boards.run_onair(conn, "KBS 쿨FM", "미스터 라디오", runner=runner, say=lambda m: None)
+    assert ran == [(ids[2], "onair")]
     assert boards.run_onair(conn, "KBS 쿨FM", "없는 프로그램", runner=None,
                             collector=lambda *a, **k: (_ for _ in ()).throw(AssertionError("모으지 않음")),
                             say=lambda m: None) == []
@@ -230,6 +244,7 @@ def test_strict_run_needs_explicit_recruitment_and_holds_blocked_boards(conn):
     cid = boards.add_corner(conn, SBS_B)
     conn.execute("UPDATE corners SET run_class = 'mention' WHERE id = ?", (cid,))
     conn.commit()
+    db.set_setting(conn, aside_records.ONAIR_MODE_KEY, "mention")
     go = lambda ans, trig: boards.run(conn, cid, test=True, answerer=ans, reader=Reader(), poster=lambda *a, **k: 0,  # noqa: E731
                                       trigger=trig)
     assert "모집한다는 말" in go(Ans(accepting="unknown"), "onair")
@@ -291,3 +306,31 @@ def test_corner_screens_show_rules_and_import(client, conn, tmp_path):
                     content_type="multipart/form-data")
     assert r.status_code == 302
     assert (aside_records.last(conn)["source"], aside_records.last(conn)["sub_exists"]) == ("a.zip", 1)
+
+
+def test_live_onair_writes_without_listening_and_again_next_day(conn, monkeypatch):
+    """0.71: 듣기를 켜지 않아도 지금 방송 프로그램 게시판에 쓰고, 공지가 그대로여도 다른 날 방송엔 다시 쓴다 (같은 날은 한 번)."""
+    _onair(conn)
+    db.set_setting(conn, "live.active", "0")
+    monkeypatch.setattr(boards, "board_busy", lambda: False)
+    launched = []
+    assert boards.onair_tick(conn, datetime(2026, 10, 22, 16, 30), launch=launched.append) == ["KBS 쿨FM|미스터 라디오"]
+    assert "게시판 쓰기 시작" in db.get_setting(conn, boards.ONAIR_STATUS)
+    assert boards.onair_tick(conn, datetime(2026, 10, 22, 19, 30), launch=launched.append) == []
+    assert "지금 방송 중인 프로그램이 없음" in db.get_setting(conn, boards.ONAIR_STATUS)
+    cid = boards.add_corner(conn, SBS_B)
+    boards.record_posted(conn, cid, {"notice": "늘 같은 공지", "theme": ""}, test=False, at="2026-10-22 16:40:00")
+    same = {"notice": "늘 같은 공지", "theme": ""}
+    assert "한 번만" in boards.already_posted(conn, row(conn, cid), same, False, now=datetime(2026, 10, 22, 17), daily_only=True)
+    assert boards.already_posted(conn, row(conn, cid), same, False, now=datetime(2026, 10, 23, 17), daily_only=True) is None
+    assert boards.already_posted(conn, row(conn, cid), same, False) is not None      # 매일 확인은 예전처럼 새 공지 때만
+
+
+def test_tabs_only_when_extension_connected(conn):
+    """0.71: 'Aside 새 탭'을 골라도 확장이 연결돼 있지 않으면 새 탭을 기다리지 않고 도우미 창으로."""
+    from radio_helper import aside, tabbridge
+
+    db.set_setting(conn, aside.BROWSER_KEY, "tab")
+    assert not tabbridge.use_tabs(conn) and tabbridge.last_ping(conn) == 0
+    db.set_setting(conn, tabbridge.PING_KEY, str(time.time()))
+    assert tabbridge.use_tabs(conn)

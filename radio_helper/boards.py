@@ -378,7 +378,10 @@ def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, al
     from . import autofill
 
     corner = corner_row(conn, cid)
-    strict = aside_records.rules_on(conn) and trigger != "manual"
+    rules = aside_records.rules_on(conn)
+    # 모집한다는 말이 있어야 올림: 매일 자동, '게시판 멘트 때만' 방송 중 (방송 중이면 바로는 '안 받음'만 거름)
+    strict = rules and (trigger == "scheduled" or (trigger == "onair" and aside_records.onair_mode(conn) == "mention"))
+    one_a_day = rules and trigger in ("scheduled", "onair")
     try:
         blocked = aside_records.block_reason(conn, corner, trigger)
         if blocked:
@@ -405,7 +408,8 @@ def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, al
         save_notice(conn, corner, notice, page)
         corner = corner_row(conn, cid)
         why = skip_reason(notice, corner, now, gates.ai_ok(conn), strict=strict) or \
-            already_posted(conn, corner, notice, test, now=now if strict else None)
+            already_posted(conn, corner, notice, test, now=now if one_a_day else None,
+                           daily_only=trigger == "onair")
         if why:
             if why.startswith(HOLD_PREFIX) and aside_records.rules_on(conn):   # 막힌 후보는 반복 시도하지 않음
                 conn.execute("UPDATE corners SET hold_state = 'hold', hold_reason = ? WHERE id = ?",
@@ -511,7 +515,9 @@ def tick(conn, now: datetime | None = None, launch=None) -> list[int]:
 
 # ── 매일 게시판 확인 설정 · 이미 올린 공지 ──────────────────────────────
 # ── 지금 방송 중인 프로그램의 게시판 (0.63) ─────────────────────────────
-ONAIR_KEY = "boards.onair"            # 1 = 듣는 중이면 지금 방송 프로그램의 게시판에 모두 쓴다 (Aside 창을 띄워)
+ONAIR_KEY = "boards.onair"            # 1 = 지금 방송 프로그램의 게시판에 쓴다 (Aside 창을 띄워)
+ONAIR_STATUS = "boards.onair_status"  # 지금 방송 게시판 쓰기가 지금 무엇을 하는지 (화면 표시)
+ONAIR_ON_071 = "meta.onair_on_071"    # 0.71: 사용자 요청으로 한 번 켬
 MENTION_MINUTES = 10                  # Aside 규칙: 최근 이만큼의 방송 녹취에서 게시판 참여 멘트를 찾는다
 ONAIR_DONE = "boards.onair_done"      # 오늘 한 프로그램들 {"날짜": ["채널|프로그램", …]}
 
@@ -569,12 +575,26 @@ def recent_mention(conn, channel: str, now: datetime) -> str | None:
 
 
 def onair_tick(conn, now: datetime | None = None, launch=None) -> list[str]:
-    """관리 화면 서버가 30초마다 부른다: 듣는 중이면 지금 방송 프로그램마다 하루 한 번, 그 게시판 쓰기를 띄운다.
-    Aside 규칙(기본)이면 방송에서 게시판 참여 멘트가 나왔을 때만. 게시판 작업은 같은 브라우저 프로필을 쓰므로 하나씩."""
-    from .quizbot import live
+    """관리 화면 서버가 30초마다 부른다: 편성표로 지금 방송 중인 프로그램마다 하루 한 번, 그 게시판 쓰기를 띄운다
+    (0.71: 듣기를 켜지 않아도 듣는 채널 설정으로). '게시판 멘트 때만'을 고르면 듣는 중 방송에서 참여 멘트가 나왔을 때만.
+    무엇을 하는지·왜 안 하는지는 ONAIR_STATUS 에 적어 화면에 보인다. 게시판 작업은 같은 브라우저 프로필을 쓰므로 하나씩."""
+    from .quizbot import lanes, live
 
     now = now or datetime.now()
-    if db.get_setting(conn, ONAIR_KEY, "1") != "1" or db.is_stopped(conn) or not live.is_active(conn) or board_busy():
+
+    def status(text: str) -> list:
+        if db.get_setting(conn, ONAIR_STATUS) != text:
+            db.set_setting(conn, ONAIR_STATUS, text)
+        return []
+
+    if db.get_setting(conn, ONAIR_KEY, "1") != "1":
+        return status("꺼져 있음 — 위 '지금 방송 프로그램 게시판에 쓰기'를 켜세요")
+    if db.is_stopped(conn):
+        return status("일괄 중지가 켜져 있음")
+    mode = aside_records.onair_mode(conn) if aside_records.rules_on(conn) else "live"
+    if mode == "mention" and not live.is_active(conn):
+        return status("'게시판 멘트 때만'이라 듣는 중일 때만 합니다 — 지금은 듣지 않음")
+    if board_busy():
         return []
     try:
         last = float(db.get_setting(conn, LAUNCHED_KEY) or 0)
@@ -583,13 +603,18 @@ def onair_tick(conn, now: datetime | None = None, launch=None) -> list[str]:
     if 0 <= now.timestamp() - last < LAUNCH_GAP_SECONDS:
         return []
     done = _done_today(conn, now)
-    rules = aside_records.rules_on(conn)
-    for x in onair_now(conn, now):
+    current = onair_now(conn, now)
+    if not current:
+        return status("편성표에 지금 방송 중인 프로그램이 없음 (채널: "
+                      + ", ".join(x["channel"] for x in lanes.all_lanes(conn) if x["channel"]) + ")")
+    waiting = []
+    for x in current:
         key = f"{x['channel']}|{x['program']}"
         if key in done:
             continue
-        mention = recent_mention(conn, x["channel"], now) if rules else None
-        if rules and not mention:
+        mention = recent_mention(conn, x["channel"], now) if mode == "mention" else None
+        if mode == "mention" and not mention:
+            waiting.append(x["program"])
             continue
         db.set_setting(conn, ONAIR_DONE, json.dumps({now.strftime("%Y-%m-%d"): sorted(done | {key})}, ensure_ascii=False))
         if launch is None:
@@ -599,10 +624,13 @@ def onair_tick(conn, now: datetime | None = None, launch=None) -> list[str]:
         log_name = launch(["onair", "--channel", x["channel"], "--program", x["program"]]
                           + (["--mention", mention] if mention else []))
         db.set_setting(conn, LAUNCHED_KEY, str(now.timestamp()))
-        db.log(conn, "post", f"지금 방송 '{x['program']}'({x['channel']}) 게시판 쓰기 시작 — Aside 창"
+        db.log(conn, "post", f"지금 방송 '{x['program']}'({x['channel']}) 게시판 쓰기 시작"
                              + (f" · 들은 멘트: “{mention[:80]}”" if mention else "") + f" (기록: {log_name})")
+        status(f"{now:%H:%M} '{x['program']}' 게시판 쓰기 시작 (결과는 아래 '최근 게시판 작업')")
         return [key]
-    return []
+    if waiting:
+        return status(f"'{', '.join(waiting)}' — 방송에서 게시판 참여 멘트를 기다리는 중")
+    return status("지금 방송 프로그램은 오늘 이미 했음: " + ", ".join(x["program"] for x in current))
 
 
 def run_onair(conn, channel: str, program: str, runner=None, collector=None, say=print) -> list[str]:
@@ -627,6 +655,7 @@ def run_onair(conn, channel: str, program: str, runner=None, collector=None, say
                (f"게시판 {len(skipped)}곳 모두 Aside 규칙으로 열지 않습니다 (상시·이벤트·중복·이미 올림·결과 불명·보류)"
                 if skipped else "아는 게시판이 없습니다 — 코너 화면 '코너 게시판 지금 모으기' 뒤 다시 합니다"))
         db.log(conn, "post", msg)
+        db.set_setting(conn, ONAIR_STATUS, f"{datetime.now():%H:%M} {msg}")
         say(msg)
         return []
     results = []
@@ -635,6 +664,7 @@ def run_onair(conn, channel: str, program: str, runner=None, collector=None, say
         results.append(f"{c['title']}: {text}")
         say(results[-1])
     db.log(conn, "post", f"지금 방송 '{program}'({channel}) 게시판 {len(corners)}곳: " + " / ".join(results)[:700])
+    db.set_setting(conn, ONAIR_STATUS, f"{datetime.now():%H:%M} '{program}' 게시판 {len(corners)}곳 끝 — " + " / ".join(results)[:300])
     return results
 
 
@@ -691,10 +721,12 @@ def record_posted(conn, cid: int, notice: dict, test: bool, at: str | None = Non
     conn.commit()
 
 
-def already_posted(conn, corner, notice: dict, test: bool, now: datetime | None = None) -> str | None:
+def already_posted(conn, corner, notice: dict, test: bool, now: datetime | None = None,
+                   daily_only: bool = False) -> str | None:
     """이 게시판에 이미 올렸고 공지가 그때와 같으면 그 이유 (올리지 않음). 올린 적 없거나 새 공지면 None.
     시험 입력만 한 공지는 '등록까지' 모드에서 다시 (실제로) 올린다.
-    now: Aside 규칙의 자동 실행 — 공지가 바뀌어도 같은 날(같은 방송)에는 한 게시판에 한 번만."""
+    now: Aside 규칙의 자동 실행 — 공지가 바뀌어도 같은 날(같은 방송)에는 한 게시판에 한 번만.
+    daily_only: 지금 방송 중 (0.71) — 공지가 그대로여도 다른 날 방송이면 (다른 경험으로) 다시 쓴다."""
     try:
         saved = json.loads(corner["posted_notice"] or "null") if "posted_notice" in corner.keys() else None
     except ValueError:
@@ -704,6 +736,9 @@ def already_posted(conn, corner, notice: dict, test: bool, now: datetime | None 
                            "ORDER BY id DESC LIMIT 1", (corner["id"],)).fetchone()
         if row is None:
             return None
+        if daily_only and now is not None:
+            return "오늘 이미 이 게시판에 올렸습니다 — 같은 방송에는 한 번만" \
+                if row["created_at"][:10] == now.strftime("%Y-%m-%d") else None
         # 예전 버전에서 올린 게시판: 그때 공지를 몰라 지금 공지를 그때 것으로 보고, 공지가 바뀌면 올린다
         record_posted(conn, corner["id"], notice, test=False, at=row["created_at"])
         return f"이미 {row['created_at'][:10]}에 올린 게시판입니다 — 새 공지가 올라오면 다시 올립니다"
@@ -711,6 +746,8 @@ def already_posted(conn, corner, notice: dict, test: bool, now: datetime | None 
         return None
     if now is not None and not saved.get("test") and (saved.get("at") or "")[:10] == now.strftime("%Y-%m-%d"):
         return "오늘 이미 이 게시판에 올렸습니다 — 같은 방송에는 한 번만 (Aside 규칙)"
+    if daily_only and now is not None:
+        return None
     if same_notice(saved, notice):
         done = "시험 입력했습니다" if saved.get("test") else "올렸습니다"
         return f"{(saved.get('at') or '')[:10]}에 지금 공지로 이미 {done} — 새 공지가 올라오면 다시 올립니다"

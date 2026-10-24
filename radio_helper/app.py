@@ -80,6 +80,11 @@ def create_app(data_dir: str | None = None) -> Flask:
             db.log(conn, "post", f"코너 목록 정리: 게시판이 아닌 '글 하나' 주소 {gone}개를 지웠습니다 (0.63 코너 게시판 모으기가 잘못 넣은 것)")
     if not server.is_server():
         boards.enable_daily_once(conn)
+        if db.get_setting(conn, boards.ONAIR_ON_071) != "1":   # 0.71 사용자 요청: 지금 방송 프로그램 게시판 쓰기 켬
+            db.set_setting(conn, boards.ONAIR_ON_071, "1")
+            if db.get_setting(conn, boards.ONAIR_KEY, "1") != "1":
+                db.set_setting(conn, boards.ONAIR_KEY, "1")
+                db.log(conn, "post", "지금 방송 프로그램 게시판 쓰기를 켰습니다 (방송 중이면 프로그램마다 하루 한 번)")
         try:                                              # 이 PC 의 Aside 기록 폴더 (0.70, 바뀌었을 때만)
             aside_records.auto_import(conn)
         except Exception as e:                            # 가져오기가 실패해도 관리 화면은 켠다
@@ -621,8 +626,12 @@ def create_app(data_dir: str | None = None) -> Flask:
                        "recent": g.conn.execute("SELECT * FROM events WHERE kind = 'post' ORDER BY id DESC LIMIT 6").fetchall(),
                        "aside": aside.describe(g.conn),
                        "bridge": {"connected": tabbridge.connected(g.conn), "folder": str(tabbridge.extension_dir()),
-                                  "tabs": tabbridge.use_tabs(g.conn)},
+                                  "tabs": tabbridge.use_tabs(g.conn),
+                                  "last_ping": (datetime.fromtimestamp(tabbridge.last_ping(g.conn)).strftime("%m-%d %H:%M")
+                                                if tabbridge.last_ping(g.conn) else "")},
                        "onair": db.get_setting(g.conn, boards.ONAIR_KEY, "1") == "1",
+                       "onair_mode": aside_records.onair_mode(g.conn), "onair_modes": aside_records.ONAIR_MODES,
+                       "onair_status": db.get_setting(g.conn, boards.ONAIR_STATUS) or "",
                        "ai_ok": gates.ai_ok(g.conn),
                        "rules": aside_records.rules_on(g.conn), "aside_import": aside_records.last(g.conn),
                        "aside_folder": aside_records.DEFAULT_FOLDER,
@@ -643,6 +652,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         db.set_setting(c, boards.DAILY_TIME_KEY, at if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", at) else "10:30")
         db.set_setting(c, boards.DAILY_TEST_KEY, "1" if request.form.get("test") else "0")
         db.set_setting(c, boards.ONAIR_KEY, "1" if request.form.get("onair") else "0")
+        if form("onair_mode") in aside_records.ONAIR_MODES:
+            db.set_setting(c, aside_records.ONAIR_MODE_KEY, form("onair_mode"))
         db.set_setting(c, gates.AI_OK_KEY, "1" if request.form.get("ai_ok") else "0")
         cap = form("cap")
         db.set_setting(c, boards.DAILY_CAP_KEY, str(max(0, min(50, int(cap)))) if cap.isdigit() else "5")
@@ -669,6 +680,17 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("corners") + "#aside")
         flash("Aside 기록을 가져왔습니다: " + aside_records.describe(summary))
         return redirect(url_for("corners") + "#aside")
+
+    @app.post("/corners/bridge-folder")
+    def corners_bridge_folder():
+        """Aside 확장 폴더를 탐색기로 연다 (확장 로드할 때 고르기 쉽게)."""
+        folder = tabbridge.write_extension(g.conn)
+        try:
+            os.startfile(str(folder))                     # type: ignore[attr-defined]  (윈도우)
+            flash(f"확장 폴더를 열었습니다: {folder} — Aside 의 '압축해제된 확장 프로그램을 로드합니다'에서 이 폴더를 고르세요.")
+        except (AttributeError, OSError):
+            flash(f"확장 폴더: {folder}")
+        return redirect(url_for("corners") + "#bridge")
 
     @app.post("/corners/aside-rules")
     def corners_aside_rules():

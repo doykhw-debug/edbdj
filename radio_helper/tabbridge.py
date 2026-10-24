@@ -201,11 +201,19 @@ def open_tab(url: str, exe: str | None = None, popen=subprocess.Popen) -> None:
 
 
 def use_tabs(conn) -> bool:
-    """게시판 작업을 내 Aside 새 탭으로 할지: 브라우저가 'Aside 새 탭'이거나, 'Aside 있으면'인데 확장이 연결돼 있을 때."""
+    """게시판 작업을 내 Aside 새 탭으로 할지: 브라우저가 'Aside 새 탭' 또는 '자동'이고 확장이 연결돼 있을 때.
+    0.71: 'Aside 새 탭'을 골랐어도 확장이 연결돼 있지 않으면 새 탭을 열어 응답을 기다리지 않고(매번 '응답하지 않았습니다'로
+    끝났음) 도우미 창으로 한다."""
     from . import aside
 
-    choice = aside.settings(conn)["choice"]
-    return choice == "tab" or (choice == "auto" and connected(conn))
+    return aside.settings(conn)["choice"] in ("tab", "auto") and connected(conn)
+
+
+def last_ping(conn) -> float:
+    try:
+        return float(db.get_setting(conn, PING_KEY) or 0)
+    except ValueError:
+        return 0.0
 
 
 # ── boards.run 에 끼우는 읽기·쓰기 ──────────────────────────────────────

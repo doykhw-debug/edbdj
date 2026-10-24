@@ -30,6 +30,8 @@ from pathlib import Path
 from . import db, stations
 
 RULES_KEY = "boards.aside_rules"          # 1 = Aside 규칙 사용 (기본)
+ONAIR_MODE_KEY = "boards.onair_mode"      # live 방송 중이면 하루 한 번 (기본, 0.71) / mention 게시판 멘트가 나왔을 때만
+ONAIR_MODES = {"live": "방송 중이면 바로 (프로그램마다 하루 한 번)", "mention": "방송에서 게시판 참여 멘트가 나왔을 때만"}
 IMPORT_KEY = "boards.aside_import"        # 마지막 가져오기 요약 (JSON)
 AUTO_KEY = "meta.aside_import_auto"       # 기본 폴더를 자동으로 가져온 파일 표시 (크기·시각)
 DEFAULT_FOLDER = r"C:\Users\USER\.aside\u\0\sessions\2026-10-22_lG75L0zryyfBAZAE\artifacts"
@@ -59,6 +61,11 @@ def rules_on(conn) -> bool:
     return db.get_setting(conn, RULES_KEY, "1") != "0"
 
 
+def onair_mode(conn) -> str:
+    mode = db.get_setting(conn, ONAIR_MODE_KEY, "live")
+    return mode if mode in ONAIR_MODES else "live"
+
+
 # ── 자동 실행 판단 ─────────────────────────────────────────────────────
 def _get(corner, key: str) -> str:
     return (corner[key] or "") if key in corner.keys() else ""
@@ -66,12 +73,15 @@ def _get(corner, key: str) -> str:
 
 def block_reason(conn, corner, trigger: str) -> str | None:
     """Aside 규칙으로 보아 이번 실행에서 이 게시판을 열지 않는 이유 (없으면 None).
-    trigger: scheduled 매일·코너별 자동 / onair 방송 중 게시판 멘트 / manual 사용자가 '지금 실행'."""
+    trigger: scheduled 매일·코너별 자동 / onair 지금 방송 중인 프로그램 / manual 사용자가 '지금 실행'.
+    0.71: 지금 방송 중(방송 중이면 바로)에는 상시 게시판도 쓰고, Aside 로 올린 게시판도 다른 날 방송에는 다른 경험으로 쓴다
+    (같은 날 한 번·같은 경험 한 번은 그대로). 조건 보류·중복 주소는 열지 않는다."""
     if not rules_on(conn):
         return None
     hold, cls = _get(corner, "hold_state"), _get(corner, "run_class")
     why = _get(corner, "hold_reason")
-    if hold in ("posted", "unknown"):
+    live = trigger == "onair" and onair_mode(conn) == "live"
+    if hold in ("posted", "unknown") and not live:
         return f"Aside 규칙: {HOLDS[hold]}" + (f" ({why[:80]})" if why else "") + \
             " — 다시 보내려면 코너 화면에서 '보류 풀기'"
     if cls == "alias":
@@ -80,7 +90,7 @@ def block_reason(conn, corner, trigger: str) -> str | None:
         return None
     if hold == "hold":
         return "Aside 규칙: " + HOLDS["hold"] + (f" ({why[:80]})" if why else "")
-    if cls == "standing":
+    if cls == "standing" and not live:
         return "Aside 규칙: 상시·이벤트 게시판은 매일·방송 중 자동에서 뺍니다 (필요하면 '지금 실행'으로 한 번)"
     if trigger == "scheduled":
         if cls == "mention":
