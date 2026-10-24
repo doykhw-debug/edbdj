@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from radio_helper import boards, collect, db, tabbridge
 
 BOARD = "https://programs.sbs.co.kr/radio/testshow/boards/1"
@@ -161,8 +163,12 @@ def test_post_view_links_are_not_boards():
 
 def test_cleanup_removes_collected_posts(conn):
     keep = collect.add(conn, "https://www.cbs.co.kr/board/list/cbs_P000221_request", "사연과 신청곡", "꿈음", "모으기")
-    collect.add(conn, "https://www.cbs.co.kr/board/view/cbs_P000221_request?no=1", "어떤 글", "꿈음", "모으기")
-    collect.add(conn, "https://www.cbs.co.kr/board/view/cbs_P000221_request?no=2", "보낸 글", "꿈음", "모으기")
+    assert not collect.add(conn, "https://www.cbs.co.kr/board/view/cbs_P000221_request?no=9", "남의 글", "꿈음", "모으기")
+    for no, title in ((1, "어떤 글"), (2, "보낸 글")):          # 0.63 이 넣어 둔 것 (지금은 add 가 거부)
+        conn.execute("INSERT INTO corners (program, kind, title, board_url, write_url, station, updated_at) "
+                     "VALUES ('꿈음', 'board', ?, ?, ?, 'CBS', ?)",
+                     (title, f"https://www.cbs.co.kr/board/view/cbs_P000221_request?no={no}",
+                      f"https://www.cbs.co.kr/board/view/cbs_P000221_request?no={no}", db.now()))
     sent = conn.execute("SELECT id FROM corners WHERE board_url LIKE '%no=2'").fetchone()[0]
     eid = conn.execute("INSERT INTO experiences (story, created_at, updated_at) VALUES ('x', ?, ?)",
                        (db.now(), db.now())).lastrowid
@@ -172,3 +178,62 @@ def test_cleanup_removes_collected_posts(conn):
     assert keep and collect.cleanup_posts(conn) == 1                                        # 보낸 적 있는 것은 둠
     urls = [r[0] for r in conn.execute("SELECT board_url FROM corners WHERE board_url LIKE '%cbs_P000221%'")]
     assert "https://www.cbs.co.kr/board/view/cbs_P000221_request?no=1" not in urls and len(urls) == 2
+    assert conn.execute("SELECT board_exists FROM corners WHERE id = ?", (sent,)).fetchone()[0] == 0   # 남겨도 다시 안 엶
+
+
+
+# ── 0.69: 다른 사용자가 쓴 글·권한 없는 화면은 열지 않음 ─────────────────
+@pytest.mark.parametrize("url, post", [
+    ("https://www.cbs.co.kr/board/list/cbs_P000221_request", False),
+    ("https://programs.sbs.co.kr/radio/0chulpowerfm/cornerboards/57577?cornerid=3002", False),
+    ("https://program.kbs.co.kr/2fm/radio/mrradio/pc/board.html?bbs_loc=R1,list,none,1,0", False),
+    ("https://m.imbc.com/TalkBBS/TalkList/1006462100000100000?bid=3446&menu=mn-daily", False),
+    ("https://www.cbs.co.kr/board/view/cbs_P000221_request?no=123", True),
+    ("https://programs.sbs.co.kr/radio/cultwoshow/boards/58047?cmd=view&board_no=99", True),
+    ("https://m.imbc.com/imbbs/imbbsview?bid=x&list_id=1", True),
+    ("https://program.kbs.co.kr/2fm/radio/mrradio/pc/board.html?bbs_loc=R1,read,none,123", True),
+    ("https://www.imbc.com/broad/radio/fm4u/x/article/12345", True),
+    ("https://www.cbs.co.kr/board/list/x?bno=77", True),
+])
+def test_post_urls(url, post):
+    from radio_helper import stations
+
+    assert stations.is_post_url(url) is post
+
+
+def test_denied_page_but_not_login_or_private_board():
+    from radio_helper import stations
+
+    assert stations.denied_page("해당 게시물에 대한 열람 권한이 없습니다.")
+    assert stations.denied_page("비밀글입니다. 작성자와 관리자만 볼 수 있습니다.")
+    assert not stations.denied_page("권한이 없습니다. 로그인 후 이용해 주세요.")             # 로그인 문제 → 닫지 않음
+    assert not stations.denied_page("사연과 신청곡 비공개 게시판 작성자 본인과 관리자만 볼 수 있는 공간입니다. 글쓰기")
+
+
+def test_run_never_opens_others_posts_and_closes_denied_boards(conn):
+    from test_boards import FakeAnswerer, notice
+
+    read = []
+    conn.execute("INSERT INTO corners (program, kind, title, board_url, write_url, station, updated_at) "
+                 "VALUES ('꿈음', 'board', '남의 글', 'https://www.cbs.co.kr/board/view/cbs_P1_request?no=5', NULL, 'CBS', ?)",
+                 (db.now(),))
+    post_id = conn.execute("SELECT id FROM corners WHERE board_url LIKE '%no=5'").fetchone()[0]
+    text = boards.run(conn, post_id, test=True, answerer=FakeAnswerer(note=notice()),
+                      reader=lambda c: read.append(c["board_url"]) or {"text": "", "links": [], "write_url": None})
+    assert read == [] and "다시 열지 않습니다" in text
+    assert conn.execute("SELECT board_exists FROM corners WHERE id = ?", (post_id,)).fetchone()[0] == 0
+
+    cid = boards.add_corner(conn, "https://www.cbs.co.kr/board/list/cbs_P2_request")
+    text = boards.run(conn, cid, test=True, answerer=FakeAnswerer(note=notice()),
+                      reader=lambda c: {"text": "열람 권한이 없습니다.", "links": [], "write_url": None})
+    assert "권한이 없는 화면" in text
+    assert conn.execute("SELECT board_exists FROM corners WHERE id = ?", (cid,)).fetchone()[0] == 0
+    with pytest.raises(ValueError, match="글 하나"):
+        boards.add_corner(conn, "https://www.cbs.co.kr/board/view/cbs_P2_request?no=1")
+
+
+def test_same_program_links_skip_posts():
+    got = boards.same_program_links("https://www.cbs.co.kr/board/list/cbs_P3_request", [
+        ("https://www.cbs.co.kr/board/list/cbs_P3_corner", "코너"),
+        ("https://www.cbs.co.kr/board/view/cbs_P3_request?no=1", "남의 사연")])
+    assert [x["url"] for x in got] == ["https://www.cbs.co.kr/board/list/cbs_P3_corner"]

@@ -254,7 +254,14 @@ def _dpi_aware() -> None:
 MOUSE_DOWN_UP = {False: (0x0002, 0x0004), True: (0x0008, 0x0010)}   # 왼쪽 누름·뗌 (단추를 바꿔 쓰면 오른쪽)
 
 
-def click_at(x: int, y: int, user32=None, sleep=time.sleep) -> None:
+# 앱마다 입력 방식 (0.69). CBS 레인보우(Flutter)는 입력칸을 한 번 누르면 커서가 들어가지 않아 붙여넣기가 안 되고,
+# 빈 입력칸에 커서가 머물거나 빈 글을 보내면 '채팅을 입력하세요' 확인 창이 떠 [확인]을 누르기 전까지 다음 전송이 모두 막혔다
+# (사용자 확인: 매번 전송 실패). → 남은 확인 창 닫기(Esc) → 입력칸 두 번 클릭 → 바로 붙여넣기 → 전송 → 확인 창이 뜨면 닫기.
+DOUBLE_CLICK_INPUT = {"rainbow"}
+DISMISS_DIALOG = {"rainbow"}
+
+
+def click_at(x: int, y: int, user32=None, sleep=time.sleep, clicks: int = 1) -> None:
     """화면 한 곳을 클릭한다. 좌표는 모니터 여럿을 합친 가상 화면 기준 (왼쪽·위 모니터는 음수일 수 있음).
     pywinauto 0.6.9 의 클릭은 커서를 옮긴 뒤 '주 모니터 크기'로 환산한 절대 이동을 한 번 더 보내, 다른 모니터의 자리는
     주 모니터 가장자리로 끌려가 눌렸다 (0.60 — 모니터가 둘 이상이면 주 모니터에 있는 앱에만 입력됨).
@@ -274,9 +281,12 @@ def click_at(x: int, y: int, user32=None, sleep=time.sleep) -> None:
     else:
         raise GorillaError(f"마우스를 ({x}, {y}) 자리로 옮기지 못해 누르지 않았습니다 (모니터 밖이거나 다른 프로그램이 막음)")
     down, up = MOUSE_DOWN_UP[bool(user32.GetSystemMetrics(23))]          # SM_SWAPBUTTON
-    user32.mouse_event(down, 0, 0, 0, 0)
-    sleep(0.03)
-    user32.mouse_event(up, 0, 0, 0, 0)
+    for n in range(max(1, clicks)):                                      # 두 번이면 두 번 누르기(더블클릭 간격 안)
+        if n:
+            sleep(0.08)
+        user32.mouse_event(down, 0, 0, 0, 0)
+        sleep(0.03)
+        user32.mouse_event(up, 0, 0, 0, 0)
 
 
 def _user32():
@@ -1207,9 +1217,22 @@ class Gorilla:
                                    "다른 프로그램에 글자·지우기 키가 들어가는 것을 막았습니다. 다른 창을 잠시 내려 두세요.")
             time.sleep(0.1)
 
-    def _click(self, w, point: tuple[int, int], label: str) -> None:
+    def _click(self, w, point: tuple[int, int], label: str, clicks: int = 1) -> None:
         self._check_point(w, point, label)
-        click_at(*point)
+        click_at(*point, clicks=clicks)
+
+    def _input_clicks(self) -> int:
+        return 2 if self.cfg.app in DOUBLE_CLICK_INPUT else 1
+
+    def _dismiss_dialog(self, w) -> None:
+        """레인보우: '채팅을 입력하세요' 같은 확인 창이 떠 있으면 닫는다 (Esc — 떠 있지 않으면 아무 일 없음)."""
+        if self.cfg.app not in DISMISS_DIALOG:
+            return
+        from pywinauto.keyboard import send_keys
+
+        self._check_front(w)
+        send_keys("{ESC}")
+        time.sleep(0.3)
 
     @staticmethod
     def _center(control) -> tuple[int, int]:
@@ -1230,13 +1253,15 @@ class Gorilla:
             if not self._has_point("input"):
                 raise GorillaError("입력칸 위치가 지정되지 않았습니다. '① 입력칸 영역 지정'을 하세요.")
             self._check_layout(w)
-            self._click(w, self._target_point(w, "input"), "입력칸")
+            self._dismiss_dialog(w)
+            self._click(w, self._target_point(w, "input"), "입력칸", clicks=self._input_clicks())
             time.sleep(0.2)
             self._paste(w, text)
             return None
         edit = self._find_input(w)
         self._check_point(w, self._center(edit), "입력칸")
-        click_at(*self._center(edit))   # (pywinauto click_input 은 다른 모니터에서 주 모니터 가장자리를 누름)
+        self._dismiss_dialog(w)
+        click_at(*self._center(edit), clicks=self._input_clicks())   # (pywinauto click_input 은 다른 모니터에서 주 모니터 가장자리를 누름)
         time.sleep(0.2)
         self._paste(w, text)
         time.sleep(0.2)
@@ -1417,6 +1442,7 @@ class Gorilla:
                 after = self._value(edit) if edit is not None else None
                 result = judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
                 snap("test_sent", "보낸 뒤")
+                self._dismiss_dialog(w)
             except GorillaError:
                 snap("test", "보내지 못했을 때 (빨간 원 = 입력칸 자리, 초록 원 = 전송 버튼 자리)", self.click_points(w))
                 raise
@@ -1454,6 +1480,7 @@ class Gorilla:
                 edit = self._put_text(w, text)
                 self._press_send(w)
                 time.sleep(1.5)
+                self._dismiss_dialog(w)          # 레인보우: 전송 뒤 확인 창이 남아 다음 전송을 막지 않게
                 after = self._value(edit) if edit is not None else None
                 label = f"보낸 뒤 {self.cfg.label} 창"
                 return judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))

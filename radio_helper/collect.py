@@ -62,9 +62,7 @@ NOT_PROGRAM = {"main", "schedule", "notice", "index", "event", "events", "podcas
 
 BOARD_URL = re.compile(r"board|bbs|corner|requestsong|storys?(?:/|$)", re.I)
 # 게시판 안의 글 하나(글 보기)·쪽 넘김 주소 — 게시판이 아니다 (0.63 은 이것까지 넣어 '새 게시판 2332개'가 됨)
-POST_VIEW = re.compile(r"/view(?:/|\b)|/read(?:/|\b)|/detail|imbbsview|talkview|[?&](?:cmd=view|mode=view|"
-                       r"(?:board_)?no|seq|idx|article_?(?:id|no)|bbs_?seq|num|uid|wr_id|list_id|post_?id|page)=|,read,",
-                       re.I)
+POST_VIEW = stations.POST_URL          # 0.69: 판별은 stations 한곳에서
 STRONG_TEXT = re.compile(r"사연|신청곡|참여해|참여하기|모집|코너")       # 주소 모양이 달라도 게시판으로 보는 메뉴 글자
 BOARD_TEXT = re.compile(r"사연|신청|코너|게시판|참여|청취자|한마디|퀴즈|고민|이야기")
 GENERIC = {"program", "programs", "home", "main", "radio", "broad", "index", "index.html", "main.html", "pc", "m", "mobile",
@@ -206,7 +204,7 @@ def read_links(url: str) -> list[tuple[str, str]]:
 
 def add(conn, url: str, title: str, program: str, note: str) -> bool:
     station = stations.station_of(url)
-    if station is None:
+    if station is None or stations.is_post_url(url):     # 다른 사용자가 쓴 글 하나는 코너가 아님 (0.69)
         return False
     cur = conn.execute(
         "INSERT OR IGNORE INTO corners (program, kind, title, board_url, write_url, dev_note, station, updated_at) "
@@ -216,13 +214,14 @@ def add(conn, url: str, title: str, program: str, note: str) -> bool:
 
 
 def cleanup_posts(conn) -> int:
-    """예전 모으기가 게시판으로 넣은 '글 하나' 주소를 지운다 (그 코너로 보낸 적·매일 자동이 없는 것만). 지운 수."""
+    """예전 모으기가 게시판으로 넣은 '글 하나'(다른 사용자가 쓴 글) 주소를 지운다. 그 코너로 보낸 적이 있거나 '매일 자동'을
+    켠 것은 기록을 위해 남기되 다시 열지 않게 한다(board_exists = 0). 지운 수."""
     gone = 0
-    for c in conn.execute("SELECT id, board_url FROM corners WHERE COALESCE(auto_on, 0) = 0").fetchall():
-        u = urlparse(c["board_url"] or "")
-        if not POST_VIEW.search((u.path + "?" + u.query).lower()):
+    for c in conn.execute("SELECT id, board_url, COALESCE(auto_on, 0) AS auto_on FROM corners").fetchall():
+        if not stations.is_post_url(c["board_url"]):
             continue
-        if conn.execute("SELECT 1 FROM submissions WHERE corner_id = ? LIMIT 1", (c["id"],)).fetchone():
+        if c["auto_on"] or conn.execute("SELECT 1 FROM submissions WHERE corner_id = ? LIMIT 1", (c["id"],)).fetchone():
+            conn.execute("UPDATE corners SET board_exists = 0, auto_on = 0 WHERE id = ?", (c["id"],))
             continue
         conn.execute("DELETE FROM corners WHERE id = ?", (c["id"],))
         gone += 1

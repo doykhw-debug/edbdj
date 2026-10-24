@@ -73,9 +73,9 @@ def create_app(data_dir: str | None = None) -> Flask:
             pass
     broadcast_seed.seed_schedules(conn)                  # 비어 있는 채널 편성표 · 기본 코너 게시판 (0.62)
     broadcast_seed.seed_boards(conn)
-    if db.get_setting(conn, "meta.cleanup_posts_064") != "1":   # 0.63 모으기가 넣은 '글 보기' 주소 정리
+    if db.get_setting(conn, "meta.cleanup_posts_069") != "1":   # 0.63 모으기가 넣은 '글 보기' 주소 정리 (0.69 판별 넓힘)
         gone = collect.cleanup_posts(conn)
-        db.set_setting(conn, "meta.cleanup_posts_064", "1")
+        db.set_setting(conn, "meta.cleanup_posts_069", "1")
         if gone:
             db.log(conn, "post", f"코너 목록 정리: 게시판이 아닌 '글 하나' 주소 {gone}개를 지웠습니다 (0.63 코너 게시판 모으기가 잘못 넣은 것)")
     if not server.is_server():

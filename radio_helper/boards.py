@@ -78,6 +78,8 @@ def add_corner(conn, url: str, title: str = "") -> int:
     station = stations.station_of(url)
     if station is None:
         raise ValueError("SBS·MBC·KBS·CBS 홈페이지의 https 코너 주소만 추가할 수 있습니다.")
+    if stations.is_post_url(url):
+        raise ValueError("게시판 안의 글 하나(다른 사용자가 쓴 글) 주소입니다 — 게시판 목록 주소를 넣어 주세요.")
     row = conn.execute("SELECT id FROM corners WHERE board_url = ?", (url,)).fetchone()
     if row:
         return row["id"]
@@ -112,7 +114,7 @@ def same_program_links(base_url: str, links: list[tuple[str, str]]) -> list[dict
         href = (href or "").split("#")[0]
         u = urlparse(href)
         parts = [p for p in u.path.split("/") if p]
-        if href in seen or stations.station_of(href) is None or u.hostname != base.hostname:
+        if href in seen or stations.station_of(href) is None or u.hostname != base.hostname or stations.is_post_url(href):
             continue
         if parts[:len(head)] != head or not re.search(r"corner|board", u.path + "?" + u.query, re.I):
             continue
@@ -347,6 +349,14 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
         return finish(conn, cid, f"입력 중단 — {e}")
 
 
+def close_corner(conn, cid: int, why: str) -> None:
+    """다시 열지 않게 '게시판 없음'으로 돌린다 (매일 확인·지금 방송·로그인 확인 모두 board_exists = 1 만 엶)."""
+    conn.execute("UPDATE corners SET board_exists = 0, dev_note = TRIM(COALESCE(dev_note, '') || ' · ' || ?), "
+                 "updated_at = ? WHERE id = ?", (f"{db.now()[:10]} {why} — 다시 열지 않음", db.now(), cid))
+    conn.commit()
+    db.log(conn, "post", f"코너 #{cid}: {why} — 다시 열지 않습니다")
+
+
 def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, allow_window, scheduled: bool) -> str:
     from . import autofill
 
@@ -363,7 +373,13 @@ def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, al
             if not ok:
                 raise BoardSkip(f"공지를 읽지 못했습니다 — {why}")
             answerer = make(conn)
+        if stations.is_post_url(corner["board_url"]):
+            close_corner(conn, cid, "게시판이 아닌 글 하나(다른 사용자가 쓴 글) 주소")
+            raise BoardSkip("게시판이 아닌 글 하나(다른 사용자가 쓴 글) 주소라 열지 않습니다 — 이 코너는 다시 열지 않습니다")
         page = reader(corner)
+        if stations.denied_page(page.get("text") or "") and not page.get("write_url"):
+            close_corner(conn, cid, "권한이 없는 화면")
+            raise BoardSkip("권한이 없는 화면(다른 사람의 글·비밀글·삭제된 글)이라 올리지 않습니다 — 이 코너는 다시 열지 않습니다")
         notice = answerer.read_notice(stations.corner_station(corner) or "", corner["board_url"], page["text"][:12000])
         save_notice(conn, corner, notice, page)
         corner = corner_row(conn, cid)

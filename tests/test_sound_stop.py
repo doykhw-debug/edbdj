@@ -61,7 +61,8 @@ def desk(monkeypatch):
     keyboard.send_keys = lambda keys, pause=None: state.keys.append(keys)
     monkeypatch.setitem(sys.modules, "pywinauto", pw)
     monkeypatch.setitem(sys.modules, "pywinauto.keyboard", keyboard)
-    monkeypatch.setattr(gorilla, "click_at", lambda x, y: state.clicks.append((x, y)))   # 0.60: 여러 모니터용 클릭
+    monkeypatch.setattr(gorilla, "click_at", lambda x, y, clicks=1: state.clicks.append((x, y) if clicks == 1
+                                                                       else (x, y, clicks)))   # 0.60: 여러 모니터용 클릭
     monkeypatch.setattr(gorilla, "window_at_point", lambda x, y: dict(state.at_point, point=(x, y)))
     monkeypatch.setattr(gorilla, "foreground_root", lambda: state.front)
     monkeypatch.setattr(gorilla.Gorilla, "_clipboard", staticmethod(lambda text=None: text))
@@ -75,6 +76,31 @@ def coords_gorilla(**over):
              input_x=0.5, input_y=0.95, send_x=0.9, send_y=0.95)
     v.update(over)
     return gorilla.Gorilla(config.GorillaConfig(**v))
+
+
+def test_rainbow_double_clicks_input_and_closes_dialog(desk, monkeypatch):
+    # 0.69 실제 사례: 레인보우는 한 번 클릭으로 커서가 안 들어가 매번 전송 실패, '채팅을 입력하세요' 확인 창이 다음 전송까지 막음
+    g = coords_gorilla(app="rainbow", process_name="flutter_rainbow.exe")
+    w = Win()
+    g._put_text(w, "정답은 사과")
+    g._press_send(w)
+    g._dismiss_dialog(w)
+    assert desk.keys == ["{ESC}", "^a{BACKSPACE}^v", "{ESC}"]                   # 창 닫기 → 붙여넣기 → (전송 뒤) 창 닫기
+    assert desk.clicks[0][2] == 2 and len(desk.clicks[1]) == 2                   # 입력칸은 두 번, 전송 버튼은 한 번
+    desk.keys.clear()
+    desk.clicks.clear()
+    g = coords_gorilla()                                                         # 고릴라는 예전 그대로
+    g._put_text(Win(), "정답")
+    g._dismiss_dialog(Win())
+    assert desk.keys == ["^a{BACKSPACE}^v"] and len(desk.clicks[0]) == 2
+
+
+def test_click_at_double_click():
+    from test_screen_points import FakeUser32
+
+    u = FakeUser32()
+    gorilla.click_at(10, 20, user32=u, sleep=lambda s: None, clicks=2)
+    assert [e[0] for e in u.events] == [0x0002, 0x0004, 0x0002, 0x0004]
 
 
 def test_coords_send_clicks_only_when_safe(desk):
