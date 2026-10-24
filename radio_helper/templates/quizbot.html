@@ -94,8 +94,9 @@
       {% if codex_check %}<p class="muted">마지막 확인 {{ codex_check.at }} · {{ codex_check.detail }}{% if codex_check.version %} · {{ codex_check.version }}{% endif %}</p>{% endif %}
     </div>
     <div>
-      <label>ChatGPT 구독 모델 <span class="hint">비우면 Codex 기본 모델 — ChatGPT 로그인은 Codex 용 모델만 써서 gpt-4.1-mini 는 API 키(위 GPT 모델)로만 됩니다</span></label>
-      <input type="text" name="chatgpt_model" value="{{ chatgpt_model }}" placeholder="(Codex 기본)">
+      <label>ChatGPT 구독 모델 <span class="hint">기본 gpt-6-luna (Codex 에서 가장 가볍고 사용량이 적음). 비우면 Codex 기본 gpt-6.1-sol (무거움).
+        ChatGPT 로그인은 Codex 용 모델만 써서 gpt-4.1-mini 는 아래 API 키로만 됩니다. '빠른 모드'(사용량이 더 듦)는 끄고 씁니다</span></label>
+      <input type="text" name="chatgpt_model" value="{{ chatgpt_model }}" placeholder="(Codex 기본 gpt-6.1-sol)">
       <label style="margin-top:10px">Claude 로 안 될 때(구독 한도·로그인 풀림·Claude Code 없음) 이어서 쓸 GPT</label>
       <select name="gpt_fallback">{% for k, label in gpt_backups.items() %}<option value="{{ k }}" {{ 'selected' if gpt_fallback == k }}>{{ label }}</option>{% endfor %}</select>
     </div>
@@ -113,6 +114,10 @@
       <input type="text" name="gpt_model" value="{{ gpt_model }}">
     </div>
   </div>
+  <p class="muted" id="gpt-usage"><b>오늘 GPT 사용량</b>
+    {% if gpt_usage.calls %}{{ gpt_usage.calls }}번 · 입력 {{ '{:,}'.format(gpt_usage.input) }} 토큰 (그중 캐시 {{ '{:,}'.format(gpt_usage.cached) }}) · 출력 {{ '{:,}'.format(gpt_usage.output) }} 토큰
+      <br>실제로 쓴 모델: {% for name, n in gpt_usage.models.items() %}{{ name }} {{ n }}번{{ ' · ' if not loop.last }}{% endfor %}
+    {% else %}아직 없음 (GPT 를 부르면 호출 수·토큰·실제 모델이 여기에 쌓입니다){% endif %}</p>
   <div class="row">
     <div><label>청취 중 퀴즈 자동 전송 확신도 기준 <span class="hint">0~1, 높을수록 확실할 때만 보냄</span></label>
       <input type="number" name="live_min_confidence" value="{{ live_min_confidence }}" min="0" max="1" step="0.05"></div>

@@ -1483,6 +1483,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             has_openai=bool(answerer.get_openai_key()), gpt_fallback=answerer.gpt_backup(c), gpt_backups=answerer.GPT_BACKUPS,
             gpt_model=qconfig.get(c, "quizbot.gpt_model"), chatgpt_model=qconfig.get(c, "quizbot.chatgpt_model"),
             codex_check=codex_cli.saved_check(c), codex_found=bool(codex_cli.find_codex()),
+            gpt_usage=answerer.usage_today(c),
             can_open_login=not server.is_server() and not g.get("remote"),
             programs=programs_, days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
             autostart=qconfig.get(c, "quizbot.autostart") == "1",

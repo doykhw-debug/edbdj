@@ -184,3 +184,54 @@ def test_settings_screen_chatgpt(client, conn, monkeypatch):
     monkeypatch.setattr(codex_cli, "open_login", lambda: opened.append(1))
     client.post("/quizbot/chatgpt-login", data={"csrf_token": token})
     assert opened == [1]
+
+
+# ── 0.72: 사용량 줄이기 — 가벼운 모델(gpt-6-luna)·빠른 모드 끄기·쓴 모델과 토큰 기록 ─────────────────
+def test_lean_flags_usage_and_model_fallback():
+    usage = {"input_tokens": 1200, "cached_input_tokens": 1000, "output_tokens": 40}
+    run = FakeRun('{"a": 1}', events=[{"type": "turn.completed", "usage": usage}])
+    out = codex_cli.run("s", "u", schema={"type": "object", "properties": {"a": {"type": "integer"}}}, model="gpt-6-luna",
+                        exe=["codex"], runner=run)
+    cmd = run.calls[0]["cmd"]
+    assert "features.fast_mode=false" in cmd and "include_environment_context=false" in cmd
+    assert any(c.startswith("model_instructions_file=") for c in cmd)                  # 긴 기본 지시 대신 짧은 지시
+    assert cmd[cmd.index("-m") + 1] == "gpt-6-luna" and out["usage"] == usage and out["model"] == "gpt-6-luna"
+
+    class Picky(FakeRun):                        # 이 계정에서 못 쓰는 모델이면 Codex 기본으로 한 번 더
+        def __call__(self, cmd, stdin, timeout, cwd):
+            if "-m" in cmd:
+                self.calls.append({"cmd": list(cmd)})
+                return subprocess.CompletedProcess(cmd, 1, json.dumps(
+                    {"type": "turn.failed", "error": {"message": "The 'gpt-6-luna' model is not supported"}}), "")
+            return super().__call__(cmd, stdin, timeout, cwd)
+
+    picky = Picky("답")
+    out = codex_cli.run("s", "u", model="gpt-6-luna", exe=["codex"], runner=picky)
+    assert out["text"] == "답" and "Codex 기본" in out["model"] and len(picky.calls) == 2 and "-m" not in picky.calls[1]["cmd"]
+    with pytest.raises(codex_cli.CodexCliError):                                       # 모델 문제가 아니면 다시 하지 않음
+        codex_cli.run("s", "u", model="gpt-6-luna", exe=["codex"],
+                      runner=FakeRun(events=[{"type": "turn.failed", "error": {"message": "boom"}}], returncode=1))
+
+
+def test_usage_is_recorded_and_shown(conn, client, data_dir):
+    a = answerer.CodexAnswerer("gpt-6-luna", cli=type("Cli", (), {
+        "CodexCliError": codex_cli.CodexCliError, "limited": staticmethod(lambda: False),
+        "run": staticmethod(lambda **kw: {"text": "x", "data": {"ok": 1}, "model": "gpt-6-luna",
+                                          "usage": {"input_tokens": 500, "cached_input_tokens": 100, "output_tokens": 20}})})())
+    a._call("s", "u", {"type": "object"})
+    a._call("s", "u", {"type": "object"})
+    day = answerer.usage_today(conn)
+    assert (day["calls"], day["input"], day["cached"], day["output"]) == (2, 1000, 200, 40)
+    assert day["models"] == {"ChatGPT 구독 · gpt-6-luna": 2}
+    page = client.get("/quizbot").get_data(as_text=True)
+    assert "오늘 GPT 사용량" in page and "ChatGPT 구독 · gpt-6-luna 2번" in page
+
+
+def test_072_sets_lightest_codex_model_once(conn):
+    from radio_helper.quizbot import config
+
+    assert config.get(conn, "quizbot.chatgpt_model") == "gpt-6-luna"                    # 새 기본값
+    db.set_setting(conn, "quizbot.chatgpt_model", "")                                   # 예전: 비움 = Codex 기본(무거움)
+    assert config.apply_072(conn) and db.get_setting(conn, "quizbot.chatgpt_model") == "gpt-6-luna"
+    db.set_setting(conn, "quizbot.chatgpt_model", "gpt-6.1-sol")                        # 그 뒤 사용자가 고른 값은 그대로
+    assert not config.apply_072(conn) and db.get_setting(conn, "quizbot.chatgpt_model") == "gpt-6.1-sol"

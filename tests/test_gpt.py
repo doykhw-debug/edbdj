@@ -157,3 +157,11 @@ def test_070_moves_saved_gpt_model_once(conn):
     assert config.apply_070(conn) and db.get_setting(conn, "quizbot.gpt_model") == "gpt-4.1-mini"
     db.set_setting(conn, "quizbot.gpt_model", "gpt-5-mini")                    # 그 뒤 사용자가 바꾼 값은 그대로
     assert not config.apply_070(conn) and db.get_setting(conn, "quizbot.gpt_model") == "gpt-5-mini"
+
+
+def test_api_usage_records_actual_model(conn):
+    data = reply('{"a": 1}')
+    data.update({"model": "gpt-4.1-mini-2025-04-14", "usage": {"input_tokens": 300, "output_tokens": 9,
+                                                               "input_tokens_details": {"cached_tokens": 0}}})
+    answerer.OpenAIAnswerer("", "low", post=FakePost((200, data)), key="sk-test")._call("s", "u", {"type": "object"})
+    assert answerer.usage_today(conn)["models"] == {"API 키 · gpt-4.1-mini-2025-04-14": 1}

@@ -665,6 +665,47 @@ def gpt_backup(conn) -> str:
     value = config.get(conn, "quizbot.gpt_fallback")
     return "openai" if value == "1" else value if value in GPT_BACKUPS else "0"
 OPENAI_KEYRING_USER = "openai_api_key"
+USAGE_KEY = "quizbot.gpt_usage"   # GPT 사용량 (날짜별 호출 수·토큰·모델, 0.72 — 사용량이 많다는 말에 실제로 확인하려고)
+
+
+def record_usage(path: str, model: str, usage: dict | None, conn=None) -> None:
+    """GPT 한 번 부른 것을 오늘 사용량에 더한다 (최근 7일만 둠). 실패해도 분석은 그대로."""
+    from .. import db
+
+    own = conn is None
+    try:
+        conn = conn or db.connect()
+        try:
+            data = json.loads(db.get_setting(conn, USAGE_KEY) or "{}")
+        except ValueError:
+            data = {}
+        today = time.strftime("%Y-%m-%d")
+        day = data.setdefault(today, {"calls": 0, "input": 0, "cached": 0, "output": 0, "models": {}})
+        u = usage or {}
+        cached = u.get("cached_input_tokens") or (u.get("input_tokens_details") or {}).get("cached_tokens") or 0
+        day["calls"] += 1
+        day["input"] += int(u.get("input_tokens") or 0)
+        day["cached"] += int(cached)
+        day["output"] += int(u.get("output_tokens") or 0)
+        name = f"{path} · {model}"
+        day["models"][name] = day["models"].get(name, 0) + 1
+        db.set_setting(conn, USAGE_KEY, json.dumps({k: data[k] for k in sorted(data)[-7:]}, ensure_ascii=False))
+    except Exception:
+        pass
+    finally:
+        if own and conn is not None:
+            conn.close()
+
+
+def usage_today(conn) -> dict:
+    from .. import db
+
+    try:
+        return json.loads(db.get_setting(conn, USAGE_KEY) or "{}").get(time.strftime("%Y-%m-%d")) or {}
+    except (ValueError, AttributeError):
+        return {}
+
+
 OPENAI_MODEL = "gpt-4.1-mini"     # 설정 'quizbot.gpt_model' 로 바꿈 (0.70 사용자 지정: 'GPT-4-mini' → gpt-4.1-mini)
 REASONING_MODEL = re.compile(r"^(gpt-5|o\d)", re.I)   # 추론 설정(reasoning.effort)을 받는 모델
 
@@ -1151,10 +1192,14 @@ class OpenAIAnswerer(ClaudeAnswerer):
             body["reasoning"] = {"effort": self.effort}
         return body
 
+    def _done(self, data: dict) -> dict:
+        record_usage("API 키", str(data.get("model") or self.model), data.get("usage"))
+        return data
+
     def _call(self, system: str, user: str, schema: dict, images=()) -> str:
         body = self._body(system + "\n응답은 정해진 JSON 하나만.", [{"role": "user", "content": self._parts(user, images)}])
         body["text"] = {"format": {"type": "json_schema", "name": "result", "schema": schema, "strict": False}}
-        return self._text(self._request(body))
+        return self._text(self._done(self._request(body)))
 
     def _web_research(self, system: str, ask: str, max_searches: int, what: str) -> str:
         last = None
@@ -1162,7 +1207,7 @@ class OpenAIAnswerer(ClaudeAnswerer):
             body = self._body(system + f"\n- 웹 검색은 {max_searches}번 안에서 끝냅니다.", ask)
             body["tools"] = [{"type": tool}]
             try:
-                text = self._text(self._request(body))
+                text = self._text(self._done(self._request(body)))
             except AnswererError as e:
                 last = e
                 if "400" in str(e):
@@ -1198,9 +1243,11 @@ class CodexAnswerer(ClaudeAnswerer):
 
     def _run(self, **kw) -> dict:
         try:
-            return self.cli.run(model=self.model or None, effort=self.effort, **kw)
+            done = self.cli.run(model=self.model or None, effort=self.effort, **kw)
         except self.cli.CodexCliError as e:
             raise AnswererError(str(e))
+        record_usage("ChatGPT 구독", str(done.get("model") or self.model or "Codex 기본"), done.get("usage"))
+        return done
 
     def _call(self, system: str, user: str, schema: dict, images=()) -> str:
         done = self._run(system=system, user=user, schema=schema, images=images)

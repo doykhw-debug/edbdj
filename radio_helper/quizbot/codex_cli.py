@@ -197,6 +197,23 @@ def drop_nulls(value):
     return value
 
 
+# 사용량 줄이기 (0.72, codex-cli 0.164 에서 받는 설정 확인): '빠른 모드'(우선 처리 — 사용량이 더 듦) 끄기,
+# 우리 일과 상관없는 환경·앱 안내문을 지시에 붙이지 않기. 모르는 키면 Codex 가 무시만 한다.
+LEAN = ["-c", "features.fast_mode=false", "-c", "include_environment_context=false",
+        "-c", "include_apps_instructions=false", "-c", "include_collaboration_mode_instructions=false"]
+# Codex 가 매번 붙이는 긴 코딩용 기본 지시 대신 쓰는 짧은 지시 (model_instructions_file — 입력 토큰을 크게 줄임)
+BASE_INSTRUCTIONS = ("당신은 라디오 참여 도우미의 분석기입니다. 명령 실행·파일 읽기·수정 같은 도구는 쓰지 않고, "
+                     "사용자 메시지의 [지시]를 따라 [입력]을 보고 바로 답합니다. 형식이 정해져 있으면 그 형식(JSON)만 답합니다.")
+DEFAULT_MODEL = "gpt-6-luna"     # Codex 목록에서 가장 가볍고 싼 모델 ('빠르고 저렴, 쉬운 일용'). 비우면 Codex 기본(gpt-6.1-sol, 무거움)
+MODEL_PROBLEM = ("not supported", "unsupported", "does not exist", "not found", "not available", "invalid model",
+                 "unknown model")
+
+
+def _model_problem(text: str) -> bool:
+    low = (text or "").lower()
+    return "model" in low and any(w in low for w in MODEL_PROBLEM)
+
+
 def _json_text(text: str):
     text = (text or "").strip()
     if text.startswith("```"):
@@ -206,7 +223,18 @@ def _json_text(text: str):
 
 def run(system: str, user: str, schema: dict | None = None, images=(), search: bool = False, model: str | None = None,
         effort: str | None = None, timeout: float = TIMEOUT, exe: list[str] | None = None, runner=None) -> dict:
-    """codex exec 한 번. images: [(설명, JPEG 바이트)]. → {text, data(구조화 결과)}"""
+    """codex exec 한 번. images: [(설명, JPEG 바이트)]. → {text, data(구조화 결과), usage(토큰 수), model(쓴 모델)}
+    고른 모델을 이 계정에서 못 쓰면 Codex 기본 모델로 한 번 다시 한다 (model 칸에 그렇게 적음)."""
+    try:
+        return _run_once(system, user, schema, images, search, model, effort, timeout, exe, runner)
+    except CodexCliError as e:
+        if not model or not _model_problem(str(e)):
+            raise
+        done = _run_once(system, user, schema, images, search, None, effort, timeout, exe, runner)
+        return {**done, "model": f"Codex 기본 ({model} 은 이 계정에서 못 씀)"}
+
+
+def _run_once(system, user, schema, images, search, model, effort, timeout, exe, runner) -> dict:
     if limited():
         raise CodexCliError(f"{MESSAGES['limit']} {pause_note()} 쉬는 중.", "limit")
     exe = exe or find_codex()
@@ -217,7 +245,10 @@ def run(system: str, user: str, schema: dict | None = None, images=(), search: b
         last = os.path.join(work, "last.txt")
         cmd = exe + (["--search"] if search else []) + [
             "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--json", "--color", "never",
-            "-C", work, "-o", last]
+            "-C", work, "-o", last] + LEAN
+        base = os.path.join(work, "instructions.md")
+        Path(base).write_text(BASE_INSTRUCTIONS, encoding="utf-8")
+        cmd += ["-c", f"model_instructions_file={json.dumps(base)}"]
         if schema is not None:
             path = os.path.join(work, "schema.json")
             Path(path).write_text(json.dumps(strict_schema(schema), ensure_ascii=False), encoding="utf-8")
@@ -248,7 +279,7 @@ def run(system: str, user: str, schema: dict | None = None, images=(), search: b
             answer = ""
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    failure, messages = "", []
+    failure, messages, usage = "", [], {}
     for line in (done.stdout or "").splitlines():
         try:
             event = json.loads(line)
@@ -256,6 +287,8 @@ def run(system: str, user: str, schema: dict | None = None, images=(), search: b
             continue
         if not isinstance(event, dict):
             continue
+        if event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
+            usage = event["usage"]
         if event.get("type") == "turn.failed":
             failure = str((event.get("error") or {}).get("message") or event)
         elif event.get("type") == "error" and not str(event.get("message", "")).startswith("Reconnecting"):
@@ -281,7 +314,7 @@ def run(system: str, user: str, schema: dict | None = None, images=(), search: b
             data = drop_nulls(_json_text(answer))
         except ValueError:
             raise CodexCliError("Codex 가 정해진 형식(JSON)으로 답하지 않았습니다.")
-    return {"text": answer, "data": data}
+    return {"text": answer, "data": data, "usage": usage, "model": model or "Codex 기본"}
 
 
 def status(exe: list[str] | None = None, timeout: float = 60, runner=None) -> dict:

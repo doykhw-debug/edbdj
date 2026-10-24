@@ -62,7 +62,7 @@ DEFAULTS = {
     "quizbot.effort": "low",
     "quizbot.gpt_model": "gpt-4.1-mini",    # GPT(OpenAI API 키)로 쓸 때 모델 (0.67, 0.70 기본 gpt-4.1-mini)
     "quizbot.gpt_fallback": "0",            # Claude 로 안 될 때 이어서 쓸 GPT: 0 / chatgpt(구독) / openai(API 키)
-    "quizbot.chatgpt_model": "",            # ChatGPT 구독(Codex)으로 쓸 때 모델 (비우면 Codex 기본, 0.68)
+    "quizbot.chatgpt_model": "gpt-6-luna",  # ChatGPT 구독(Codex)으로 쓸 때 모델 (0.72 기본: 가장 가벼운 gpt-6-luna, 비우면 Codex 기본)
     "quizbot.billing": "",                # 비우면 PC 는 subscription(Claude 구독, Claude Code 로그인) · 서버는 api(API 키, 충전 요금)
     "quizbot.billing_fallback": "0",      # 구독으로 안 될 때(한도·로그인 풀림) API 키로 이어서 (충전 요금, 켜야 함)
     "quizbot.autostart": "0",
@@ -321,10 +321,27 @@ def apply_070(conn: sqlite3.Connection) -> bool:
     return True
 
 
+FORCED_072 = "meta.defaults_072"
+
+
+def apply_072(conn: sqlite3.Connection) -> bool:
+    """0.72: ChatGPT 구독(Codex) 모델이 비어 있으면(= Codex 기본 gpt-6.1-sol, 무거움) 가장 가벼운 gpt-6-luna 로. 한 번만.
+    (사용자: 'GPT 사용량이 여전히 과도' — Codex 에는 gpt-4.1-mini 가 없음)"""
+    if db.get_setting(conn, FORCED_072) == "1":
+        return False
+    db.set_setting(conn, FORCED_072, "1")
+    if (db.get_setting(conn, "quizbot.chatgpt_model") or "").strip():
+        return False
+    db.set_setting(conn, "quizbot.chatgpt_model", "gpt-6-luna")
+    db.log(conn, "quizbot", "ChatGPT 구독(Codex) 모델을 Codex 기본(gpt-6.1-sol)에서 가장 가벼운 gpt-6-luna 로 바꿨습니다")
+    return True
+
+
 def migrate_defaults(conn: sqlite3.Connection) -> list[str]:
     """예전 기본값을 그대로 쓰던 설정만 새 기본값으로 (한 번만). 바꾼 이름 목록."""
     apply_066(conn)
     apply_070(conn)
+    apply_072(conn)
     if db.get_setting(conn, DEFAULTS_MIGRATED) == "1":
         return []
     changed = []
