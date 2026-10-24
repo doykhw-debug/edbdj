@@ -3,6 +3,12 @@
 {% block content %}
 <h1>코너·게시판 목록 {% if program %}<span class="muted">{{ program }}</span>{% endif %}</h1>
 
+<div class="panel actions" id="pause" style="align-items:center">
+  {% if boards_paused %}<span class="badge warn">게시판 작업 정지 중</span> <span class="muted">채팅(퀴즈·사연)만 켜져 있습니다 — 매일 확인·지금 방송 게시판·로그인 확인·모으기 모두 멈춤</span>
+  {% else %}<span class="badge ok">게시판 작업 켜짐</span> <span class="muted">채팅과 함께 게시판 공지 읽기·글쓰기도 합니다</span>{% endif %}
+  <form method="post" action="{{ url_for('boards_pause') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="on" value="{{ '0' if boards_paused else '1' }}"><input type="hidden" name="next" value="/corners">
+    <button class="{{ '' if boards_paused else 'secondary' }}">{{ '게시판 작업 다시 켜기' if boards_paused else '게시판 작업 정지 (채팅만)' }}</button></form>
+</div>
 <div class="panel" id="daily">
   <h2>매일 게시판 확인 <span class="muted">하루 한 번 모든 코너를 하나씩 — 아직 올린 적 없는 게시판이나 새 공지가 있으면 맞는 사연을 길게 올림</span>
     {% if daily.on %}<span class="badge ok">켜짐</span>{% else %}<span class="badge">꺼짐</span>{% endif %}

@@ -310,6 +310,10 @@ def tick(conn, now: datetime | None = None, launch=None) -> bool:
     now = now or datetime.now()
     if db.is_stopped(conn) or board_busy() or not (HUBS or start_pages(conn)):
         return False
+    from .boards import paused
+
+    if paused(conn):                         # 게시판 작업 정지 중 (채팅만)
+        return False
     from . import aside_records
 
     if aside_records.rules_on(conn):        # Aside 규칙: 전체 코너 수집은 사용자가 '지금 모으기'를 누를 때만

@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+{% if boards_paused and not stopped %}<div class="stopbar" style="background:#b7791f">게시판 읽기·쓰기 정지 중 — 채팅(퀴즈·사연)만 켜져 있습니다.
+  <form method="post" action="{{ url_for('boards_pause') }}" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="on" value="0"><input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}"><button class="secondary" style="padding:2px 10px;margin-left:8px">게시판 작업 다시 켜기</button></form></div>{% endif %}
 {% if stopped %}<div class="stopbar">일괄 중지 중 — 모든 입력 작업이 멈춰 있습니다. <a href="{{ url_for('settings') }}" style="color:#fff;text-decoration:underline">설정</a></div>{% endif %}
 <header>
   <span class="brand">라디오 참여 도우미</span>

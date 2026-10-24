@@ -166,9 +166,11 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.context_processor
     def inject():
         if "conn" not in g:
-            return {"csrf_token": session.get("csrf", ""), "stopped": False, "nav_pending": {}, "listening": False,
+            return {"csrf_token": session.get("csrf", ""), "stopped": False, "boards_paused": False, "nav_pending": {},
+                    "listening": False,
                     "is_remote": False}
         return {"csrf_token": session.get("csrf", ""), "stopped": db.is_stopped(g.conn),
+                "boards_paused": boards.paused(g.conn),
                 "nav_pending": notices.unseen_counts(g.conn), "listening": live.is_active(g.conn),
                 "is_remote": bool(g.get("remote"))}
 
@@ -692,6 +694,17 @@ def create_app(data_dir: str | None = None) -> Flask:
             flash(f"확장 폴더: {folder}")
         return redirect(url_for("corners") + "#bridge")
 
+    def paused_back(url: str):
+        flash(boards.PAUSE_TEXT + " — 게시판을 열지 않습니다. 다시 하려면 '게시판 작업 다시 켜기'를 누르세요.", "warn")
+        return redirect(url)
+
+    @app.post("/boards/pause")
+    def boards_pause():
+        """게시판 읽기·쓰기 정지 / 다시 켜기 (채팅 퀴즈·사연은 그대로)."""
+        flash(boards.set_paused(g.conn, form("on") == "1"))
+        back = form("next")
+        return redirect(back if back.startswith("/") and not back.startswith("//") else url_for("corners"))
+
     @app.post("/corners/aside-rules")
     def corners_aside_rules():
         on = bool(request.form.get("on"))
@@ -718,6 +731,8 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.post("/corners/login")
     def corners_login():
+        if boards.paused(g.conn):
+            return paused_back(url_for("corners") + "#daily")
         log_name = launch_module("radio_helper.boards", ["login"], "boards")
         flash("도우미 브라우저 창이 뜹니다. 방송국 탭마다 직접 로그인하고 창을 닫으면 로그인 상태를 확인해 적습니다 "
               f"(로그인 정보는 이 프로그램이 읽지 않고 도우미 브라우저에만 남습니다). (기록: {log_name})")
@@ -769,6 +784,8 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.post("/corners/collect")
     def corners_collect():
+        if boards.paused(g.conn):
+            return paused_back(url_for("corners") + "#daily")
         log_name = launch_module("radio_helper.collect", ["run"], "collect")
         db.set_setting(g.conn, "collect.started_at", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         flash("프로그램 홈페이지를 창 없이 하나씩 열어 사연·신청곡·코너 게시판 주소를 모읍니다 (몇 분 걸림, 게시판 작업이 "
@@ -777,6 +794,8 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.post("/corners/login-check")
     def corners_login_check():
+        if boards.paused(g.conn):
+            return paused_back(url_for("corners") + "#daily")
         log_name = launch_module("radio_helper.boards", ["login-check"], "boards")
         flash(f"방송국마다 창 없이 열어 로그인이 살아 있는지 확인합니다. 1~2분 뒤 새로 고치세요. (기록: {log_name})")
         return redirect(url_for("corners") + "#daily")
@@ -904,6 +923,8 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.post("/corners/<int:cid>/auto-run")
     def corner_auto_run(cid):
         corner = one("SELECT * FROM corners WHERE id = ?", cid)
+        if boards.paused(g.conn):
+            return paused_back(url_for("corner_edit", cid=cid) + "#auto")
         if db.is_stopped(g.conn):
             flash("일괄 중지가 켜져 있습니다.", "error")
             return redirect(url_for("corner_edit", cid=cid))
@@ -944,6 +965,8 @@ def create_app(data_dir: str | None = None) -> Flask:
     @app.post("/corners/<int:cid>/inspect")
     def corner_inspect(cid):
         corner = one("SELECT * FROM corners WHERE id = ?", cid)
+        if boards.paused(g.conn):
+            return paused_back(url_for("corner_edit", cid=cid))
         result = gates.evaluate_inspect(g.conn, cid)
         if not result.ok:
             for b in result.blockers:
@@ -1269,6 +1292,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         mode = form("mode")
         if mode not in (gates.MODE_MOCK, gates.MODE_FILL):
             abort(400)
+        if mode != gates.MODE_MOCK and boards.paused(g.conn):     # 모의 화면은 실제 게시판이 아니라 됨
+            return paused_back(url_for("draft_edit", did=did))
         result = gates.evaluate(g.conn, did, mode)
         if not result.ok:
             for b in result.blockers:
@@ -1483,7 +1508,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             has_openai=bool(answerer.get_openai_key()), gpt_fallback=answerer.gpt_backup(c), gpt_backups=answerer.GPT_BACKUPS,
             gpt_model=qconfig.get(c, "quizbot.gpt_model"), chatgpt_model=qconfig.get(c, "quizbot.chatgpt_model"),
             codex_check=codex_cli.saved_check(c), codex_found=bool(codex_cli.find_codex()),
-            gpt_usage=answerer.usage_today(c),
+            gpt_usage=answerer.usage_today(c), gpt_models=answerer.GPT_MODELS, chatgpt_models=answerer.CHATGPT_MODELS,
+            custom_model=CUSTOM_MODEL,
             can_open_login=not server.is_server() and not g.get("remote"),
             programs=programs_, days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
             autostart=qconfig.get(c, "quizbot.autostart") == "1",
@@ -1523,11 +1549,15 @@ def create_app(data_dir: str | None = None) -> Flask:
             db.set_setting(g.conn, "quizbot.billing_fallback", "1" if request.form.get("billing_fallback") else "0")
             backup = "openai" if form("gpt_fallback") == "1" else form("gpt_fallback")   # 0.67 체크 상자 값
             db.set_setting(g.conn, "quizbot.gpt_fallback", backup if backup in answerer_mod.GPT_BACKUPS else "0")
-        gpt_model = form("gpt_model").strip()
+        def picked(name: str) -> str:      # 목록에서 고른 값, '직접 입력'이면 옆 칸 (0.73)
+            value = form(name).strip()
+            return form(name + "_custom").strip() if value == CUSTOM_MODEL else value
+
+        gpt_model = picked("gpt_model")
         if gpt_model and re.fullmatch(r"[A-Za-z0-9._:-]{2,60}", gpt_model):
             db.set_setting(g.conn, "quizbot.gpt_model", gpt_model)
         if "chatgpt_model" in request.form:
-            chatgpt_model = form("chatgpt_model").strip()
+            chatgpt_model = picked("chatgpt_model")
             if not chatgpt_model or re.fullmatch(r"[A-Za-z0-9._:-]{2,60}", chatgpt_model):
                 db.set_setting(g.conn, "quizbot.chatgpt_model", chatgpt_model)
         openai_key = (request.form.get("openai_key") or "").strip()
@@ -2324,6 +2354,9 @@ def session_key() -> str:
     except OSError:
         pass
     return key
+
+
+CUSTOM_MODEL = "__custom__"   # 설정 화면 모델 목록의 '직접 입력'
 
 
 def launch_module(module: str, args: list[str], prefix: str) -> str:

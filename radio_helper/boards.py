@@ -54,6 +54,68 @@ HOMES = {"SBS": "https://www.sbs.co.kr", "MBC": "https://www.imbc.com", "KBS": "
 LOGIN_WAIT_MINUTES = 20
 
 
+PAUSE_KEY = "boards.paused"           # 1 = 게시판 읽기·쓰기 정지 (채팅 퀴즈·사연은 그대로, 0.73)
+PAUSE_TEXT = "게시판 작업 정지 중 (채팅만 켜짐)"
+
+
+def paused(conn) -> bool:
+    return db.get_setting(conn, PAUSE_KEY, "0") == "1"
+
+
+def set_paused(conn, on: bool, kill=None) -> str:
+    """게시판 작업 정지·다시 켜기. 정지하면 지금 돌고 있는 게시판 작업(지금 방송 게시판 쓰기·매일 확인·로그인 확인·
+    게시판 모으기)도 끝내고, 내 Aside 새 탭에 맡겨 둔 작업은 접는다. 결과 글을 돌려준다."""
+    db.set_setting(conn, PAUSE_KEY, "1" if on else "0")
+    if not on:
+        db.log(conn, "post", "게시판 작업을 다시 켰습니다")
+        return "게시판 작업을 다시 켰습니다."
+    stopped = stop_running(kill=kill)
+    try:
+        from . import tabbridge
+
+        tabbridge.ensure(conn)
+        conn.execute("UPDATE tab_tasks SET status = 'expired', updated_at = ? WHERE status IN ('waiting', 'login')",
+                     (time.time(),))
+        conn.commit()
+    except Exception:
+        pass
+    text = "게시판 읽기·쓰기를 정지했습니다 (채팅 퀴즈·사연은 계속)." + \
+        (" 돌고 있던 게시판 작업을 끝냈습니다 — 등록을 누른 직후였다면 그 글은 '결과 불명'으로 남아 다시 보내지 않습니다."
+         if stopped else "")
+    db.log(conn, "post", text)
+    return text
+
+
+def stop_running(kill=None) -> bool:
+    """게시판 잠금을 잡은 프로세스(와 그 브라우저)를 끝낸다. 끝냈으면 True."""
+    from . import autofill
+
+    path = db.data_dir() / BOARD_LOCK
+    try:
+        pid = int((path.read_text(encoding="ascii", errors="ignore") or "0").strip() or 0)
+    except (OSError, ValueError):
+        return False
+    if pid <= 0 or pid == os.getpid() or not autofill.pid_alive(pid):
+        return False
+    try:
+        (kill or _kill_tree)(pid)
+    except OSError:
+        return False
+    path.unlink(missing_ok=True)
+    return True
+
+
+def _kill_tree(pid: int) -> None:
+    import signal
+    import subprocess
+
+    if sys.platform == "win32":                     # 그 프로세스가 띄운 브라우저까지
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=30,
+                       creationflags=0x08000000)
+    else:
+        os.kill(pid, signal.SIGTERM)
+
+
 class BoardSkip(RuntimeError):
     """올리지 않음 (이유는 메시지)."""
 
@@ -349,6 +411,8 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
         test = bool(corner["auto_test"]) if corner["auto_on"] else daily(conn)["test"]
     if db.is_stopped(conn):
         return finish(conn, cid, "일괄 중지가 켜져 있어 하지 않음")
+    if paused(conn):
+        return finish(conn, cid, PAUSE_TEXT + " — 하지 않음")
     if stations.corner_station(corner) is None:
         return finish(conn, cid, "SBS·MBC·KBS·CBS 의 https 코너 주소가 아니라 하지 않음")
     if scheduled:
@@ -483,7 +547,7 @@ def tick(conn, now: datetime | None = None, launch=None) -> list[int]:
     """관리 화면 서버가 30초마다 부른다: 시각이 된 코너를 하나 띄운다 (하루 한 번). 게시판 작업은 같은 브라우저 프로필을
     쓰므로 하나가 끝나야 다음 것을 띄운다 (0.60 — 예전에는 같은 시각의 코너를 한꺼번에 띄워 프로필이 겹쳤음)."""
     now = now or datetime.now()
-    if db.is_stopped(conn) or board_busy():
+    if db.is_stopped(conn) or paused(conn) or board_busy():
         return []
     try:
         last = float(db.get_setting(conn, LAUNCHED_KEY) or 0)
@@ -591,6 +655,8 @@ def onair_tick(conn, now: datetime | None = None, launch=None) -> list[str]:
         return status("꺼져 있음 — 위 '지금 방송 프로그램 게시판에 쓰기'를 켜세요")
     if db.is_stopped(conn):
         return status("일괄 중지가 켜져 있음")
+    if paused(conn):
+        return status(PAUSE_TEXT + " — 코너 화면 '게시판 작업 다시 켜기'")
     mode = aside_records.onair_mode(conn) if aside_records.rules_on(conn) else "live"
     if mode == "mention" and not live.is_active(conn):
         return status("'게시판 멘트 때만'이라 듣는 중일 때만 합니다 — 지금은 듣지 않음")
@@ -660,6 +726,9 @@ def run_onair(conn, channel: str, program: str, runner=None, collector=None, say
         return []
     results = []
     for c in corners:
+        if paused(conn):
+            results.append(PAUSE_TEXT + " — 나머지는 하지 않음")
+            break
         text = (runner or run)(conn, c["id"], allow_window=True, trigger="onair")
         results.append(f"{c['title']}: {text}")
         say(results[-1])
@@ -876,6 +945,9 @@ def check_logins(conn, say=print) -> dict:
 
     from . import autofill
 
+    if paused(conn):
+        say(PAUSE_TEXT + " — 로그인 확인을 하지 않습니다.")
+        return logins(conn)
     targets = login_targets(conn)
     if not targets:
         say("확인할 코너가 없습니다.")

@@ -706,8 +706,30 @@ def usage_today(conn) -> dict:
         return {}
 
 
+# 설정 화면 목록 (0.73). 목록에 없는 이름은 '직접 입력'으로.
+GPT_MODELS = {   # OpenAI API 키 (충전 요금) — 위에서 아래로 대체로 비싸짐
+    "gpt-4.1-nano": "gpt-4.1-nano — 가장 쌈 (웹 검색이 안 될 수 있어 편성표·신청곡 확인은 실패할 수 있음)",
+    "gpt-4.1-mini": "gpt-4.1-mini — 기본 · 싸고 빠름",
+    "gpt-4o-mini": "gpt-4o-mini — 싸고 빠름",
+    "gpt-5-nano": "gpt-5-nano — 쌈 · 추론",
+    "gpt-5-mini": "gpt-5-mini — 중간 · 추론",
+    "gpt-6-luna": "gpt-6-luna — 새 세대 가벼운 모델",
+    "gpt-4.1": "gpt-4.1 — 더 정확 · 비쌈",
+    "gpt-4o": "gpt-4o — 비쌈",
+    "gpt-5": "gpt-5 — 비쌈 · 추론",
+    "gpt-6.1-sol": "gpt-6.1-sol — 비쌈",
+}
+CHATGPT_MODELS = {   # ChatGPT 구독 (Codex 로그인) — codex-cli 0.164 모델 목록, 위에서 아래로 사용량이 많아짐
+    "gpt-6-luna": "gpt-6-luna — 기본 · 가장 가볍고 사용량 적음",
+    "gpt-5.6-luna": "gpt-5.6-luna — 이전 세대 가벼운 모델",
+    "gpt-5.6-terra": "gpt-5.6-terra — 이전 세대 중간",
+    "gpt-6-sol": "gpt-6-sol — 이전 범용 모델",
+    "gpt-6.1-sol": "gpt-6.1-sol — Codex 기본 범용 · 무거움",
+    "gpt-6-astra": "gpt-6-astra — 최고 성능 · 사용량 가장 많음",
+    "": "(비움) Codex 기본 — 지금은 gpt-6.1-sol",
+}
 OPENAI_MODEL = "gpt-4.1-mini"     # 설정 'quizbot.gpt_model' 로 바꿈 (0.70 사용자 지정: 'GPT-4-mini' → gpt-4.1-mini)
-REASONING_MODEL = re.compile(r"^(gpt-5|o\d)", re.I)   # 추론 설정(reasoning.effort)을 받는 모델
+REASONING_MODEL = re.compile(r"^(gpt-[5-9]|o\d)", re.I)   # 추론 설정(reasoning.effort)을 받는 모델
 
 
 def get_openai_key() -> str | None:

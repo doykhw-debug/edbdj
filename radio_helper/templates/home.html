@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}청취 · 라디오 참여 도우미{% endblock %}
 {% block content %}
+{% if not boards_paused %}<form method="post" action="{{ url_for('boards_pause') }}" class="actions" style="justify-content:flex-end;margin:0 0 8px">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="on" value="1"><input type="hidden" name="next" value="/">
+  <button class="secondary" title="게시판 공지 읽기·글쓰기(매일 확인·지금 방송 게시판·로그인 확인·모으기)를 멈추고 채팅 퀴즈·사연만 합니다">게시판 작업 정지 (채팅만)</button></form>{% endif %}
 {% set missing = setup|rejectattr('ok')|list %}
 {% if missing %}
 <div class="flash warn">준비가 덜 된 항목: {% for i in missing %}<a href="{{ i.url }}">{{ i.name }}</a>{{ ', ' if not loop.last }}{% endfor %}

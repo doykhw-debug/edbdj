@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-24, 0.72 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-24, 0.73 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -23,6 +23,7 @@
 
 | 0.71 | 확장이 연결돼 있을 때만 새 탭(아니면 도우미 Edge 창) — 로그인 확인 '응답 없음' 해결. 지금 방송 게시판 쓰기 켬·기본 '방송 중이면 바로'(듣기 안 켜도, 상시·올린 게시판도 다른 날은 씀), 상태 줄(boards.onair_status) |
 | 0.72 | GPT 사용량: Codex 모델 기본 gpt-6-luna(Codex 목록에 gpt-4.1-mini 없음, 예전 비움 = gpt-6.1-sol), 빠른 모드 끔·짧은 기본 지시(model_instructions_file), 오늘 사용량·실제 모델 표시(quizbot.gpt_usage) |
+| 0.73 | 게시판 작업 정지(채팅만): boards.paused / set_paused (잠금 잡은 프로세스 끝냄, 탭 작업 접음), 모든 게시판 경로·관련 화면 단추가 확인. GPT 모델 목록(answerer.GPT_MODELS·CHATGPT_MODELS)+직접 입력 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).

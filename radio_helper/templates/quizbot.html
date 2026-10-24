@@ -94,9 +94,12 @@
       {% if codex_check %}<p class="muted">마지막 확인 {{ codex_check.at }} · {{ codex_check.detail }}{% if codex_check.version %} · {{ codex_check.version }}{% endif %}</p>{% endif %}
     </div>
     <div>
-      <label>ChatGPT 구독 모델 <span class="hint">기본 gpt-6-luna (Codex 에서 가장 가볍고 사용량이 적음). 비우면 Codex 기본 gpt-6.1-sol (무거움).
+      <label>ChatGPT 구독 모델 <span class="hint">기본 gpt-6-luna (가장 가볍고 사용량 적음) · 목록은 아래로 갈수록 사용량이 많음.
         ChatGPT 로그인은 Codex 용 모델만 써서 gpt-4.1-mini 는 아래 API 키로만 됩니다. '빠른 모드'(사용량이 더 듦)는 끄고 씁니다</span></label>
-      <input type="text" name="chatgpt_model" value="{{ chatgpt_model }}" placeholder="(Codex 기본 gpt-6.1-sol)">
+      {% set known = chatgpt_model in chatgpt_models %}
+      <select name="chatgpt_model">{% for k, label in chatgpt_models.items() %}<option value="{{ k }}" {{ 'selected' if known and chatgpt_model == k }}>{{ label }}</option>{% endfor %}
+        <option value="{{ custom_model }}" {{ 'selected' if not known }}>직접 입력 (옆 칸)</option></select>
+      <input type="text" name="chatgpt_model_custom" value="{{ '' if known else chatgpt_model }}" placeholder="목록에 없는 모델 이름 (직접 입력을 골랐을 때만)">
       <label style="margin-top:10px">Claude 로 안 될 때(구독 한도·로그인 풀림·Claude Code 없음) 이어서 쓸 GPT</label>
       <select name="gpt_fallback">{% for k, label in gpt_backups.items() %}<option value="{{ k }}" {{ 'selected' if gpt_fallback == k }}>{{ label }}</option>{% endfor %}</select>
     </div>
@@ -110,8 +113,11 @@
       <input type="password" name="openai_key" autocomplete="off" placeholder="sk-...">
     </div>
     <div>
-      <label>GPT 모델 <span class="hint">기본 gpt-4.1-mini · 예: gpt-4o-mini · gpt-5 (OpenAI 계정에서 쓸 수 있는 이름)</span></label>
-      <input type="text" name="gpt_model" value="{{ gpt_model }}">
+      <label>GPT 모델 (API 키) <span class="hint">기본 gpt-4.1-mini · 목록은 대체로 아래로 갈수록 비쌈 · OpenAI 계정에서 쓸 수 있는 이름이어야 함</span></label>
+      {% set known_api = gpt_model in gpt_models %}
+      <select name="gpt_model">{% for k, label in gpt_models.items() %}<option value="{{ k }}" {{ 'selected' if known_api and gpt_model == k }}>{{ label }}</option>{% endfor %}
+        <option value="{{ custom_model }}" {{ 'selected' if not known_api }}>직접 입력 (옆 칸)</option></select>
+      <input type="text" name="gpt_model_custom" value="{{ '' if known_api else gpt_model }}" placeholder="목록에 없는 모델 이름 (직접 입력을 골랐을 때만)">
     </div>
   </div>
   <p class="muted" id="gpt-usage"><b>오늘 GPT 사용량</b>

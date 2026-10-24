@@ -1023,8 +1023,11 @@ class Runner:
     def auto_board(self, pid: int, draft_id: int) -> bool:
         """방송에서 게시판에 남겨 달라고 한 사연: 검사 경고가 없으면 원고를 자동 승인하고 등록 도구를 띄운다.
         로그인·CAPTCHA 는 도구가 창을 띄워 사용자에게 맡긴다 (우회하지 않음). 띄웠으면 True."""
-        from .. import gates
+        from .. import boards, gates
 
+        if boards.paused(self.conn):          # 게시판 작업 정지 중: 원고만 남김 (채팅은 그대로)
+            self._hold("story_posts", pid, f"{boards.PAUSE_TEXT} — 원고 검토함 #{draft_id}에 둠, 다시 켜면 직접 입력할 수 있음")
+            return False
         result = gates.evaluate(self.conn, draft_id, gates.MODE_POST)
         if not result.ok and config.get(self.conn, "live.story_approved") == "1" and \
                 all(b.startswith(gates.AUTO_WARN_PREFIX) for b in result.blockers):
