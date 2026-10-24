@@ -87,6 +87,7 @@ def test_board_posted_by_older_version_counts_as_posted(conn):
 
 # ── 하루 한 번, 하나씩 ────────────────────────────────────────────────
 def test_daily_check_launches_corners_one_at_a_time(conn):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     a = boards.add_corner(conn, MBC_URL)
     b = boards.add_corner(conn, MBC_URL.replace("76233", "76299"))
     others = [r["id"] for r in conn.execute("SELECT id FROM corners WHERE id NOT IN (?, ?)", (a, b))]
@@ -110,6 +111,7 @@ def test_daily_check_launches_corners_one_at_a_time(conn):
 
 
 def test_scheduled_run_keeps_daily_cap_and_never_waits_for_login(conn):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     cid = boards.add_corner(conn, MBC_URL)
     eid = add_exp(conn, "편집", "주말에 영상을 편집하는데 첫째가 옆에서 한참 봤어요.")
     db.set_setting(conn, boards.DAILY_CAP_KEY, "1")

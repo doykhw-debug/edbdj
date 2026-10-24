@@ -310,6 +310,10 @@ def tick(conn, now: datetime | None = None, launch=None) -> bool:
     now = now or datetime.now()
     if db.is_stopped(conn) or board_busy() or not (HUBS or start_pages(conn)):
         return False
+    from . import aside_records
+
+    if aside_records.rules_on(conn):        # Aside 규칙: 전체 코너 수집은 사용자가 '지금 모으기'를 누를 때만
+        return False
     if not _older(db.get_setting(conn, LAST_KEY), now, timedelta(days=REFRESH_DAYS)):
         return False
     if not _older(db.get_setting(conn, STARTED_KEY), now, timedelta(hours=6)):

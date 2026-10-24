@@ -28,6 +28,7 @@ def test_broadcaster_of():
 
 
 def test_same_broadcaster_blocked_other_allowed(conn):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     a, b = make_experience(conn, label="가"), make_experience(conn, label="나")
     post(conn, a, "파워FM")
     assert ids(story.candidate_experiences(conn, "SBS")) == [b]          # 러브FM 이어도 같은 SBS 라 안 씀
@@ -38,6 +39,7 @@ def test_same_broadcaster_blocked_other_allowed(conn):
 
 
 def test_old_posts_and_boards_count_as_sbs(conn):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     a, b, c = (make_experience(conn, label=x) for x in "가나다")
     post(conn, a, None, program="두시탈출 컬투쇼")                        # 채널 없는 예전 기록 → 프로그램 채널(SBS)
     post(conn, b, "KBS 쿨FM", status="skipped")                          # 보내지 않은 글은 안 셈
@@ -51,6 +53,7 @@ def test_old_posts_and_boards_count_as_sbs(conn):
 
 
 def test_board_gate_only_blocks_sbs(conn):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     open_corner(conn)
     eid = make_experience(conn)
     did = make_draft(conn, eid, status="approved", fact_confirmed=1)

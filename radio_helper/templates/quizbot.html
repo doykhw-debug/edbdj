@@ -94,7 +94,7 @@
       {% if codex_check %}<p class="muted">마지막 확인 {{ codex_check.at }} · {{ codex_check.detail }}{% if codex_check.version %} · {{ codex_check.version }}{% endif %}</p>{% endif %}
     </div>
     <div>
-      <label>ChatGPT 구독 모델 <span class="hint">비우면 Codex 기본 모델</span></label>
+      <label>ChatGPT 구독 모델 <span class="hint">비우면 Codex 기본 모델 — ChatGPT 로그인은 Codex 용 모델만 써서 gpt-4.1-mini 는 API 키(위 GPT 모델)로만 됩니다</span></label>
       <input type="text" name="chatgpt_model" value="{{ chatgpt_model }}" placeholder="(Codex 기본)">
       <label style="margin-top:10px">Claude 로 안 될 때(구독 한도·로그인 풀림·Claude Code 없음) 이어서 쓸 GPT</label>
       <select name="gpt_fallback">{% for k, label in gpt_backups.items() %}<option value="{{ k }}" {{ 'selected' if gpt_fallback == k }}>{{ label }}</option>{% endfor %}</select>
@@ -109,7 +109,7 @@
       <input type="password" name="openai_key" autocomplete="off" placeholder="sk-...">
     </div>
     <div>
-      <label>GPT 모델 <span class="hint">예: gpt-5 · gpt-5-mini (OpenAI 계정에서 쓸 수 있는 이름)</span></label>
+      <label>GPT 모델 <span class="hint">기본 gpt-4.1-mini · 예: gpt-4o-mini · gpt-5 (OpenAI 계정에서 쓸 수 있는 이름)</span></label>
       <input type="text" name="gpt_model" value="{{ gpt_model }}">
     </div>
   </div>

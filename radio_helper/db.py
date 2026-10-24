@@ -449,6 +449,10 @@ _ADDED_COLUMNS = {
         ("auto_result", "TEXT"),                        # 마지막 결과 (화면 표시)
         ("found_links", "TEXT"),                        # 공지 화면에서 찾은 같은 프로그램의 다른 코너 (JSON)
         ("posted_notice", "TEXT"),                      # 마지막으로 올렸을 때의 공지 {notice, theme, deadline, at, test} (JSON)
+        # Aside 기록·규칙 (aside_records.py, 0.70)
+        ("run_class", "TEXT NOT NULL DEFAULT ''"),      # '' / mention 실시간(방송 멘트 때만) / standing 상시·이벤트 / alias 중복
+        ("hold_state", "TEXT NOT NULL DEFAULT ''"),     # '' / posted 등록함 / unknown 결과 불명 / hold 조건 보류
+        ("hold_reason", "TEXT"),
     ],
     "experiences": [
         ("gorilla_line", "TEXT"),                       # 공감로그용 한 줄 (사용자가 직접 씀, 200자 이내)

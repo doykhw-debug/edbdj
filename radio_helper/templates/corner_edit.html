@@ -20,6 +20,19 @@
   </div>
 </div>
 
+<div class="panel" id="aside">
+  <h2>Aside 규칙 <span class="muted">{{ aside_classes.get(c.run_class or '', '') }}</span>
+    {% if c.hold_state %}<span class="badge {{ 'ok' if c.hold_state == 'posted' else ('bad' if c.hold_state == 'unknown' else 'warn') }}">{{ aside_holds.get(c.hold_state, c.hold_state) }}</span>{% endif %}</h2>
+  {% if c.hold_reason %}<p class="muted">{{ c.hold_reason }}</p>{% endif %}
+  {% if aside_block %}<p class="hint">매일 자동: {{ aside_block }}</p>{% endif %}
+  <form method="post" action="{{ url_for('corner_aside', cid=c.id) }}" class="actions" style="margin-top:0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <select name="run_class">{% for k, label in aside_classes.items() %}<option value="{{ k }}" {{ 'selected' if (c.run_class or '') == k }}>{{ label }}</option>{% endfor %}</select>
+    {% if c.hold_state %}<label class="inline"><input type="checkbox" name="release" value="1"> 보류 풀기 (조건이 바뀌었을 때만)</label>{% endif %}
+    <button class="secondary">저장</button>
+  </form>
+</div>
+
 <div class="panel" id="auto">
   <h2>매일 자동 등록 <span class="muted">{{ station or '방송국 모름' }} · 매번 홈페이지 공지를 읽고 판단</span></h2>
   {% if not station %}<p class="flash warn">SBS·MBC·KBS·CBS 의 https 코너 주소가 아니어서 자동 등록을 할 수 없습니다.</p>{% endif %}

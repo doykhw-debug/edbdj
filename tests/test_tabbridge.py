@@ -128,7 +128,7 @@ def test_post_through_tab_records_submission(conn):
 def test_board_run_uses_my_aside_tabs_when_connected(conn, monkeypatch):
     cid = boards.add_corner(conn, BOARD)
     used = []
-    monkeypatch.setattr(boards, "_run", lambda conn_, cid_, test, answerer, now, reader, poster, aw, sched:
+    monkeypatch.setattr(boards, "_run", lambda conn_, cid_, test, answerer, now, reader, poster, aw, sched, trigger:
                         used.append((reader, poster)) or "ok")
     boards.run(conn, cid)
     assert used[-1] == (boards.read_page, None)                                            # 연결 전: 예전처럼

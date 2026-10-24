@@ -32,7 +32,7 @@ from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
-from . import db, gates, stations
+from . import aside_records, db, gates, stations
 from .checks import CLOSING, GREETING
 
 DAYS = "월화수목금토일"
@@ -228,14 +228,25 @@ def save_notice(conn, corner, notice: dict, page: dict) -> None:
     conn.commit()
 
 
-def skip_reason(notice: dict, corner, now: datetime, ai_assist_ok: bool = False) -> str | None:
-    """공지·요일로 보아 오늘 올리면 안 되는 이유 (없으면 None). ai_assist_ok: 'AI 글 제한' 공지도 올림 (사용자 설정)."""
+HOLD_PREFIX = "[보류] "                 # 이 이유면 Aside 규칙에서 '조건 보류'로 적어 자동으로 다시 시도하지 않음
+
+
+def skip_reason(notice: dict, corner, now: datetime, ai_assist_ok: bool = False, strict: bool = False) -> str | None:
+    """공지·요일로 보아 오늘 올리면 안 되는 이유 (없으면 None). ai_assist_ok: 'AI 글 제한' 공지도 올림 (사용자 설정).
+    strict: Aside 규칙의 자동 실행 — 공지에 '지금 모집한다'는 말이 있어야 올림 (게시판·글쓰기 버튼만으로는 모집 중이 아님)."""
     if notice.get("accepting") == "no":
         return "공지상 지금은 글을 받지 않습니다 (마감·종료·쉼)."
+    entry = notice.get("entry") or ""
+    if entry == "comment":
+        return HOLD_PREFIX + "공지 글에 댓글로 참여하는 코너라 게시판 글쓰기로 올리지 않습니다 (댓글 글자 수 제한이 따로 있음)."
+    if entry == "external":
+        return HOLD_PREFIX + "메일·외부 신청서·문자·전화로 받는 코너라 게시판에 올리지 않습니다."
+    if strict and notice.get("accepting") != "yes":
+        return "공지에서 지금 모집한다는 말을 확인하지 못해 올리지 않습니다 (Aside 규칙: 모집 확인 후에만)."
     if notice.get("ai_restricted") and not ai_assist_ok:
         return "공지가 AI 작성·대필·창작 글을 제한합니다 — 직접 쓴 글만 받는 코너라 자동으로 올리지 않습니다."
     if notice.get("needs_attachment") or notice.get("kind") == "photo":
-        return "사진·파일 첨부가 꼭 필요한 코너라 자동으로 올리지 않습니다."
+        return HOLD_PREFIX + "사진·파일 첨부가 꼭 필요한 코너라 자동으로 올리지 않습니다."
     deadline = notice.get("deadline") or ""
     try:
         if deadline and datetime.strptime(deadline, "%Y-%m-%d").date() < now.date():
@@ -258,6 +269,8 @@ def pick_text(conn, notice: dict, exp, pick: dict) -> tuple[str, str] | None:
 
     kind = notice.get("kind") or "story"
     limit = notice.get("max_chars") or DEFAULT_LIMIT.get(kind, 2000)
+    if notice.get("max_chars") and notice.get("limit_unit") == "bytes":   # 바이트 제한: 한글 한 글자를 3바이트로 (넉넉히)
+        limit = max(20, notice["max_chars"] // 3)
     if kind == "short":
         body = (pick.get("line") or "").strip()
         if not body or any(f["level"] in ("block", "warn") for f in story.message_checks(conn, body, exp, "ai", limit=limit)):
@@ -323,9 +336,11 @@ def finish(conn, corner_id: int, text: str) -> str:
 
 
 def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime | None = None,
-        reader=read_page, poster=None, allow_window: bool | None = None, scheduled: bool = False) -> str:
+        reader=read_page, poster=None, allow_window: bool | None = None, scheduled: bool = False,
+        trigger: str | None = None) -> str:
     """공지 읽기 → 판단 → 고르기 → 입력(·등록). 결과 글 (코너의 '마지막 결과'에도 적음).
-    scheduled: 정해진 시각의 자동 실행 — 창을 띄우지 않고(로그인이 풀렸으면 기다리지 않음) 하루 상한을 지킨다."""
+    scheduled: 정해진 시각의 자동 실행 — 창을 띄우지 않고(로그인이 풀렸으면 기다리지 않음) 하루 상한을 지킨다.
+    trigger: scheduled / onair(방송 중 게시판 멘트) / manual(사용자가 '지금 실행') — Aside 규칙 판단에 씀."""
     from . import autofill
 
     now = now or datetime.now()
@@ -338,13 +353,14 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
         return finish(conn, cid, "SBS·MBC·KBS·CBS 의 https 코너 주소가 아니라 하지 않음")
     if scheduled:
         allow_window = False
+    trigger = trigger or ("scheduled" if scheduled else "manual")
     try:
         if reader is read_page and poster is None and tabs_on(conn):   # 0.64: 내 Aside 새 탭 (로그인 그대로)
             from . import tabbridge
 
             reader, poster = tabbridge.read_page, tabbridge.post
         with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
-            return _run(conn, cid, test, answerer, now, reader, poster, allow_window, scheduled)
+            return _run(conn, cid, test, answerer, now, reader, poster, allow_window, scheduled, trigger)
     except autofill.AutofillError as e:     # 다른 게시판 작업이 오래 끝나지 않음
         return finish(conn, cid, f"입력 중단 — {e}")
 
@@ -357,11 +373,16 @@ def close_corner(conn, cid: int, why: str) -> None:
     db.log(conn, "post", f"코너 #{cid}: {why} — 다시 열지 않습니다")
 
 
-def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, allow_window, scheduled: bool) -> str:
+def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, allow_window, scheduled: bool,
+         trigger: str = "manual") -> str:
     from . import autofill
 
     corner = corner_row(conn, cid)
+    strict = aside_records.rules_on(conn) and trigger != "manual"
     try:
+        blocked = aside_records.block_reason(conn, corner, trigger)
+        if blocked:
+            raise BoardSkip(blocked)
         if scheduled:
             cap = daily(conn)["cap"]
             if cap and done_today(conn, now) >= cap:                  # 0 = 제한 없음
@@ -383,9 +404,14 @@ def _run(conn, cid: int, test: bool, answerer, now: datetime, reader, poster, al
         notice = answerer.read_notice(stations.corner_station(corner) or "", corner["board_url"], page["text"][:12000])
         save_notice(conn, corner, notice, page)
         corner = corner_row(conn, cid)
-        why = skip_reason(notice, corner, now, gates.ai_ok(conn)) or already_posted(conn, corner, notice, test)
+        why = skip_reason(notice, corner, now, gates.ai_ok(conn), strict=strict) or \
+            already_posted(conn, corner, notice, test, now=now if strict else None)
         if why:
-            raise BoardSkip(why)
+            if why.startswith(HOLD_PREFIX) and aside_records.rules_on(conn):   # 막힌 후보는 반복 시도하지 않음
+                conn.execute("UPDATE corners SET hold_state = 'hold', hold_reason = ? WHERE id = ?",
+                             (why[len(HOLD_PREFIX):][:300], cid))
+                conn.commit()
+            raise BoardSkip(why.removeprefix(HOLD_PREFIX))
         eid, title, body, reason = choose(conn, corner, notice, answerer)
         did = make_draft(conn, cid, eid, title, body, confirmed_text=notice.get("kind") != "short")
         result = gates.evaluate(conn, did, gates.MODE_POST)
@@ -465,7 +491,8 @@ def tick(conn, now: datetime | None = None, launch=None) -> list[int]:
     rows = conn.execute("SELECT * FROM corners WHERE auto_on = 1 OR (? = 1 AND board_exists = 1) "
                         "ORDER BY auto_on DESC, is_target DESC, (posted_notice IS NOT NULL), id", (int(d["on"]),)).fetchall()
     for corner in rows:
-        if stations.corner_station(corner) is None or not due(corner, now, d):
+        if stations.corner_station(corner) is None or not due(corner, now, d) or \
+                aside_records.block_reason(conn, corner, "scheduled"):
             continue
         conn.execute("UPDATE corners SET auto_last_on = ? WHERE id = ?", (now.strftime("%Y-%m-%d"), corner["id"]))
         conn.commit()
@@ -485,6 +512,7 @@ def tick(conn, now: datetime | None = None, launch=None) -> list[int]:
 # ── 매일 게시판 확인 설정 · 이미 올린 공지 ──────────────────────────────
 # ── 지금 방송 중인 프로그램의 게시판 (0.63) ─────────────────────────────
 ONAIR_KEY = "boards.onair"            # 1 = 듣는 중이면 지금 방송 프로그램의 게시판에 모두 쓴다 (Aside 창을 띄워)
+MENTION_MINUTES = 10                  # Aside 규칙: 최근 이만큼의 방송 녹취에서 게시판 참여 멘트를 찾는다
 ONAIR_DONE = "boards.onair_done"      # 오늘 한 프로그램들 {"날짜": ["채널|프로그램", …]}
 
 
@@ -529,9 +557,20 @@ def _done_today(conn, now: datetime) -> set[str]:
     return set(data.get(now.strftime("%Y-%m-%d"), []))
 
 
+def recent_mention(conn, channel: str, now: datetime) -> str | None:
+    """이 채널의 최근 방송 녹취에서 게시판 참여 멘트 (Aside 규칙: 멘트가 나와야 그 프로그램 게시판을 확인)."""
+    since = (now - timedelta(minutes=MENTION_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
+    for r in conn.execute("SELECT text FROM transcripts WHERE channel = ? AND at >= ? ORDER BY id DESC LIMIT 60",
+                          (channel, since)):
+        found = aside_records.board_mention(r["text"])
+        if found:
+            return found
+    return None
+
+
 def onair_tick(conn, now: datetime | None = None, launch=None) -> list[str]:
     """관리 화면 서버가 30초마다 부른다: 듣는 중이면 지금 방송 프로그램마다 하루 한 번, 그 게시판 쓰기를 띄운다.
-    게시판 작업은 같은 브라우저 프로필을 쓰므로 하나씩."""
+    Aside 규칙(기본)이면 방송에서 게시판 참여 멘트가 나왔을 때만. 게시판 작업은 같은 브라우저 프로필을 쓰므로 하나씩."""
     from .quizbot import live
 
     now = now or datetime.now()
@@ -544,27 +583,35 @@ def onair_tick(conn, now: datetime | None = None, launch=None) -> list[str]:
     if 0 <= now.timestamp() - last < LAUNCH_GAP_SECONDS:
         return []
     done = _done_today(conn, now)
+    rules = aside_records.rules_on(conn)
     for x in onair_now(conn, now):
         key = f"{x['channel']}|{x['program']}"
         if key in done:
+            continue
+        mention = recent_mention(conn, x["channel"], now) if rules else None
+        if rules and not mention:
             continue
         db.set_setting(conn, ONAIR_DONE, json.dumps({now.strftime("%Y-%m-%d"): sorted(done | {key})}, ensure_ascii=False))
         if launch is None:
             from .app import launch_module
 
             launch = lambda args: launch_module("radio_helper.boards", args, "boards")   # noqa: E731
-        log_name = launch(["onair", "--channel", x["channel"], "--program", x["program"]])
+        log_name = launch(["onair", "--channel", x["channel"], "--program", x["program"]]
+                          + (["--mention", mention] if mention else []))
         db.set_setting(conn, LAUNCHED_KEY, str(now.timestamp()))
-        db.log(conn, "post", f"지금 방송 '{x['program']}'({x['channel']}) 게시판 쓰기 시작 — Aside 창 (기록: {log_name})")
+        db.log(conn, "post", f"지금 방송 '{x['program']}'({x['channel']}) 게시판 쓰기 시작 — Aside 창"
+                             + (f" · 들은 멘트: “{mention[:80]}”" if mention else "") + f" (기록: {log_name})")
         return [key]
     return []
 
 
 def run_onair(conn, channel: str, program: str, runner=None, collector=None, say=print) -> list[str]:
     """지금 방송 프로그램의 게시판에 하나씩 쓴다 (공지 읽기·판단·입력·등록은 run 과 같음, 시험 모드면 입력만).
-    게시판을 모르면 그 프로그램 홈페이지 메뉴에서 먼저 모은다."""
+    게시판을 모르면 그 프로그램 홈페이지 메뉴에서 먼저 모은다 (Aside 규칙이면 모으기는 사용자가 누를 때만).
+    Aside 규칙: 상시·이벤트·중복 주소·이미 올린 곳·결과 불명·보류 게시판은 열지 않는다."""
+    rules = aside_records.rules_on(conn)
     corners = onair_corners(conn, channel, program)
-    if not corners:
+    if not corners and not rules:
         row = conn.execute("SELECT main_url FROM programs WHERE channel = ? AND title = ? AND on_air = 1",
                            (channel, program)).fetchone()
         if row and stations.station_of(row["main_url"] or ""):
@@ -573,14 +620,18 @@ def run_onair(conn, channel: str, program: str, runner=None, collector=None, say
             (collector or collect.collect_page)(conn, {"channel": channel, "program": program, "url": row["main_url"]},
                                                 say=say)
             corners = onair_corners(conn, channel, program)
+    skipped = [c for c in corners if aside_records.block_reason(conn, c, "onair")]
+    corners = [c for c in corners if c not in skipped]
     if not corners:
-        msg = f"지금 방송 '{program}'({channel}): 아는 게시판이 없습니다 — 코너 화면 '코너 게시판 지금 모으기' 뒤 다시 합니다"
+        msg = (f"지금 방송 '{program}'({channel}): " +
+               (f"게시판 {len(skipped)}곳 모두 Aside 규칙으로 열지 않습니다 (상시·이벤트·중복·이미 올림·결과 불명·보류)"
+                if skipped else "아는 게시판이 없습니다 — 코너 화면 '코너 게시판 지금 모으기' 뒤 다시 합니다"))
         db.log(conn, "post", msg)
         say(msg)
         return []
     results = []
     for c in corners:
-        text = (runner or run)(conn, c["id"], allow_window=True)
+        text = (runner or run)(conn, c["id"], allow_window=True, trigger="onair")
         results.append(f"{c['title']}: {text}")
         say(results[-1])
     db.log(conn, "post", f"지금 방송 '{program}'({channel}) 게시판 {len(corners)}곳: " + " / ".join(results)[:700])
@@ -640,9 +691,10 @@ def record_posted(conn, cid: int, notice: dict, test: bool, at: str | None = Non
     conn.commit()
 
 
-def already_posted(conn, corner, notice: dict, test: bool) -> str | None:
+def already_posted(conn, corner, notice: dict, test: bool, now: datetime | None = None) -> str | None:
     """이 게시판에 이미 올렸고 공지가 그때와 같으면 그 이유 (올리지 않음). 올린 적 없거나 새 공지면 None.
-    시험 입력만 한 공지는 '등록까지' 모드에서 다시 (실제로) 올린다."""
+    시험 입력만 한 공지는 '등록까지' 모드에서 다시 (실제로) 올린다.
+    now: Aside 규칙의 자동 실행 — 공지가 바뀌어도 같은 날(같은 방송)에는 한 게시판에 한 번만."""
     try:
         saved = json.loads(corner["posted_notice"] or "null") if "posted_notice" in corner.keys() else None
     except ValueError:
@@ -657,6 +709,8 @@ def already_posted(conn, corner, notice: dict, test: bool) -> str | None:
         return f"이미 {row['created_at'][:10]}에 올린 게시판입니다 — 새 공지가 올라오면 다시 올립니다"
     if saved.get("test") and not test:
         return None
+    if now is not None and not saved.get("test") and (saved.get("at") or "")[:10] == now.strftime("%Y-%m-%d"):
+        return "오늘 이미 이 게시판에 올렸습니다 — 같은 방송에는 한 번만 (Aside 규칙)"
     if same_notice(saved, notice):
         done = "시험 입력했습니다" if saved.get("test") else "올렸습니다"
         return f"{(saved.get('at') or '')[:10]}에 지금 공지로 이미 {done} — 새 공지가 올라오면 다시 올립니다"
@@ -880,6 +934,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--corner", type=int)
     ap.add_argument("--channel", help="onair: 듣는 채널")
     ap.add_argument("--program", help="onair: 지금 방송 프로그램")
+    ap.add_argument("--mention", help="onair: 방송에서 들은 게시판 참여 멘트 (기록용)")
     ap.add_argument("--scheduled", action="store_true", help="정해진 시각의 자동 실행 (창 없이, 하루 상한)")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--test", action="store_true", help="입력만 하고 등록은 누르지 않음")
@@ -898,6 +953,8 @@ def main(argv: list[str] | None = None) -> int:
             from . import autofill
 
             os.environ[autofill.SHOW_ENV] = "1"          # Aside 창을 띄워 보이게 (게시판마다 run 이 잠금을 잡음)
+            if args.mention:
+                print(f"들은 게시판 멘트: {args.mention}", flush=True)
             run_onair(conn, args.channel or "", args.program or "", say=lambda m: print(m, flush=True))
             return 0
         if args.corner is None:

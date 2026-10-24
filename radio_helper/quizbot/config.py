@@ -60,7 +60,7 @@ DEFAULTS = {
     # 분석 (Claude) — 구독 한도·요금을 아끼려고 Sonnet·low (Opus·medium 일 때 몇 시간 만에 구독 한도에 걸렸음)
     "quizbot.model": "claude-sonnet-5-5",
     "quizbot.effort": "low",
-    "quizbot.gpt_model": "gpt-5",           # GPT(OpenAI API 키)로 쓸 때 모델 (0.67)
+    "quizbot.gpt_model": "gpt-4.1-mini",    # GPT(OpenAI API 키)로 쓸 때 모델 (0.67, 0.70 기본 gpt-4.1-mini)
     "quizbot.gpt_fallback": "0",            # Claude 로 안 될 때 이어서 쓸 GPT: 0 / chatgpt(구독) / openai(API 키)
     "quizbot.chatgpt_model": "",            # ChatGPT 구독(Codex)으로 쓸 때 모델 (비우면 Codex 기본, 0.68)
     "quizbot.billing": "",                # 비우면 PC 는 subscription(Claude 구독, Claude Code 로그인) · 서버는 api(API 키, 충전 요금)
@@ -129,7 +129,7 @@ LABELS = {
     "quizbot.chat_shots": "분석 때 함께 보는 채팅창 사진 수 (0=녹취만)",
     "quizbot.model": "Claude 모델 (claude-sonnet-5-5 권장 · 더 정확하게: claude-opus-5-5, 구독 한도를 빨리 씀)",
     "quizbot.effort": "분석 노력 수준 (low 권장 / medium / high — 높을수록 한도를 빨리 씀)",
-    "quizbot.gpt_model": "GPT 모델 (OpenAI API 키로 쓸 때, 예: gpt-5 · gpt-5-mini)",
+    "quizbot.gpt_model": "GPT 모델 (OpenAI API 키로 쓸 때, 기본 gpt-4.1-mini · 예: gpt-4o-mini · gpt-5)",
     "gorilla.process_name": "고릴라 프로그램 이름 (자동 찾기로 채워짐)",
     "gorilla.window_title": "고릴라 창 제목(정규식, 프로그램 이름이 없을 때)",
     "gorilla.input_mode": "입력칸 찾기 (screen=모니터 위치 / uia / coords)",
@@ -306,9 +306,25 @@ def apply_066(conn: sqlite3.Connection) -> list[str]:
     return changed
 
 
+FORCED_070 = "meta.defaults_070"
+
+
+def apply_070(conn: sqlite3.Connection) -> bool:
+    """0.70: 사용자가 직접 정함 — GPT 기본 모델 gpt-4.1-mini ('GPT-4-mini' 라는 모델은 없어 가장 가까운 것). 한 번만."""
+    if db.get_setting(conn, FORCED_070) == "1":
+        return False
+    old = db.get_setting(conn, "quizbot.gpt_model", None)
+    db.set_setting(conn, "quizbot.gpt_model", "gpt-4.1-mini")
+    db.set_setting(conn, FORCED_070, "1")
+    if old and old != "gpt-4.1-mini":
+        db.log(conn, "quizbot", f"GPT 모델을 gpt-4.1-mini 로 맞췄습니다 ({old}→gpt-4.1-mini)")
+    return True
+
+
 def migrate_defaults(conn: sqlite3.Connection) -> list[str]:
     """예전 기본값을 그대로 쓰던 설정만 새 기본값으로 (한 번만). 바꾼 이름 목록."""
     apply_066(conn)
+    apply_070(conn)
     if db.get_setting(conn, DEFAULTS_MIGRATED) == "1":
         return []
     changed = []

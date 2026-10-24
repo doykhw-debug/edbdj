@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -410,6 +411,11 @@ NOTICE_SCHEMA = {
                  "description": "story 사연·이야기 / short 짧은 한마디·한 줄 / song 신청곡 위주 / photo 사진·파일 필수 / other"},
         "theme": {"type": "string", "description": "무엇을 써 달라는지 한 문장 (주제·조건)"},
         "max_chars": {"type": "integer", "description": "글자 수 제한이 적혀 있으면 그 숫자, 없으면 0"},
+        "limit_unit": {"type": "string", "enum": ["chars", "bytes", "none"],
+                       "description": "max_chars 의 단위: chars 글자 / bytes 바이트(byte) / none 제한 없음"},
+        "entry": {"type": "string", "enum": ["write", "comment", "external", "unknown"],
+                  "description": "참여 방법: write 이 게시판에 글쓰기 / comment 공지 글에 댓글로 / "
+                                 "external 메일·외부 신청서·문자·전화 / unknown 적혀 있지 않음"},
         "ai_restricted": {"type": "boolean",
                           "description": "AI 작성·대필·창작물·남의 글을 금지하거나 '직접 쓴 글만' 받는다고 적혀 있으면 true"},
         "needs_real": {"type": "boolean", "description": "실제로 겪은 일·실화를 받는다고 하면 true"},
@@ -419,7 +425,8 @@ NOTICE_SCHEMA = {
         "needs_attachment": {"type": "boolean", "description": "사진·파일 첨부가 꼭 필요하면 true"},
         "reason": {"type": "string", "description": "판단 근거 한두 문장"},
     },
-    "required": ["corner_title", "program", "notice", "accepting", "kind", "theme", "max_chars", "ai_restricted",
+    "required": ["corner_title", "program", "notice", "accepting", "kind", "theme", "max_chars", "limit_unit", "entry",
+                 "ai_restricted",
                  "needs_real", "deadline", "air_days", "needs_attachment", "reason"],
     "additionalProperties": False,
 }
@@ -430,6 +437,9 @@ NOTICE_SYSTEM = """당신은 라디오 프로그램(SBS·MBC·KBS·CBS) 홈페�
   코너 안내·공지 문장만 골라 notice 에 원문 그대로 옮깁니다. 소개된 글 예시는 notice 에 넣지 않지만
   어떤 글을 원하는지(kind, theme) 판단할 때는 참고합니다.
 - 공지에 적혀 있지 않은 조건은 지어내지 않습니다. 모르면 accepting 은 unknown, 숫자는 0, 날짜는 빈 글.
+- accepting 은 공지에 지금 모집·참여를 받는다는 말이 있을 때만 yes 입니다. 게시판·글쓰기 버튼이 있다는 것만으로는 yes 가 아닙니다.
+- 공지 글에 댓글을 달아 참여하라고 하면 entry 는 comment, 메일·외부 신청서로 받으면 external 입니다.
+  글자 수가 바이트(byte)로 적혀 있으면 limit_unit 은 bytes 입니다 (댓글 500자처럼 댓글에만 붙은 제한은 max_chars 에 넣지 않음).
 - 'AI 로 쓴 글 금지', '대필·창작 금지', '직접 쓴 글만', '타인 글 도용 금지(본인 글만)' 같은 문구가 있으면 ai_restricted 를 true 로 합니다.
 - 응답은 JSON 하나만."""
 
@@ -476,6 +486,8 @@ def parse_notice(text: str) -> dict:
     if not isinstance(data, dict) or "accepting" not in data:
         raise ValueError("공지 정리 결과 형식이 다릅니다")
     data["max_chars"] = max(0, int(data.get("max_chars") or 0))
+    data["limit_unit"] = data.get("limit_unit") if data.get("limit_unit") in ("chars", "bytes", "none") else "chars"
+    data["entry"] = data.get("entry") if data.get("entry") in ("write", "comment", "external", "unknown") else "unknown"
     data["air_days"] = [d for d in data.get("air_days") or [] if d in DAYS]
     return data
 
@@ -653,7 +665,8 @@ def gpt_backup(conn) -> str:
     value = config.get(conn, "quizbot.gpt_fallback")
     return "openai" if value == "1" else value if value in GPT_BACKUPS else "0"
 OPENAI_KEYRING_USER = "openai_api_key"
-OPENAI_MODEL = "gpt-5"            # 설정 'quizbot.gpt_model' 로 바꿈
+OPENAI_MODEL = "gpt-4.1-mini"     # 설정 'quizbot.gpt_model' 로 바꿈 (0.70 사용자 지정: 'GPT-4-mini' → gpt-4.1-mini)
+REASONING_MODEL = re.compile(r"^(gpt-5|o\d)", re.I)   # 추론 설정(reasoning.effort)을 받는 모델
 
 
 def get_openai_key() -> str | None:
@@ -1133,8 +1146,10 @@ class OpenAIAnswerer(ClaudeAnswerer):
         return "\n".join(t for t in texts if t)
 
     def _body(self, system: str, content) -> dict:
-        return {"model": self.model, "instructions": system, "max_output_tokens": 16000,
-                "reasoning": {"effort": self.effort}, "input": content}
+        body = {"model": self.model, "instructions": system, "max_output_tokens": 16000, "input": content}
+        if REASONING_MODEL.match(self.model):        # gpt-4.1-mini 같은 모델은 추론 설정을 받지 않음
+            body["reasoning"] = {"effort": self.effort}
+        return body
 
     def _call(self, system: str, user: str, schema: dict, images=()) -> str:
         body = self._body(system + "\n응답은 정해진 JSON 하나만.", [{"role": "user", "content": self._parts(user, images)}])

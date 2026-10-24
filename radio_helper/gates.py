@@ -173,7 +173,11 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
             result.blockers.append("원고가 승인되지 않았습니다. 사용자가 확인한 원고만 제출 대상입니다.")
         if not draft["fact_confirmed"]:
             result.blockers.append("원고의 사건·인물·결과가 실제와 같다는 확인이 없습니다.")
-    # 같은 방송국에 한 번 보낸 경험은 다시 보내지 않는다 (다른 방송국은 가능, 결과 불명이어도 다시 보내지 않음)
+    # 같은 방송국에 한 번 보낸 경험은 다시 보내지 않는다 (다른 방송국은 가능, 결과 불명이어도 다시 보내지 않음).
+    # Aside 규칙(0.70, 기본)이면 모든 방송국·채널에서 다시 보내지 않는다.
+    from . import aside_records
+
+    every = aside_records.rules_on(conn)
     station = stations.corner_station(corner) or "SBS"
     active = conn.execute(
         "SELECT s.id, c.title AS corner_title, s.post_status, c.station, c.write_url, c.board_url FROM submissions s "
@@ -182,18 +186,19 @@ def evaluate(conn: sqlite3.Connection, draft_id: int, mode: str) -> GateResult:
         (draft["experience_id"],),
     ).fetchall()
     for s in active:
-        if (stations.corner_station(s) or "SBS") != station:
+        if not every and (stations.corner_station(s) or "SBS") != station:
             continue
         result.blockers.append(
             f"같은 경험이 이미 제출 이력 #{s['id']} ({s['corner_title']}, {STATUS_LABELS.get(s['post_status'], s['post_status'])})에 있습니다. "
-            f"같은 방송국({station})에는 다시 보내지 않고, 결과 불명이어도 다시 보내지 않습니다.")
+            + ("모든 방송국·채널에서 다시 보내지 않고 (Aside 규칙)" if every else f"같은 방송국({station})에는 다시 보내지 않고")
+            + ", 결과 불명이어도 다시 보내지 않습니다.")
     from .quizbot.story import post_broadcaster
 
     for sp in conn.execute("SELECT * FROM story_posts WHERE experience_id = ? AND COALESCE(draft_id, -1) != ? "
                            "AND status IN ('entered','posted','unknown')", (draft["experience_id"], draft_id)):
-        if post_broadcaster(conn, sp) == station:
-            result.blockers.append(f"같은 경험을 {station} 사연 #{sp['id']} ({sp['program']})로 이미 보냈습니다. "
-                                   "같은 방송국에는 다시 보내지 않습니다.")
+        if every or post_broadcaster(conn, sp) == station:
+            result.blockers.append(f"같은 경험을 사연 #{sp['id']} ({sp['program']})로 이미 보냈습니다. "
+                                   + ("모든 방송국·채널에서 다시 보내지 않습니다." if every else "같은 방송국에는 다시 보내지 않습니다."))
     result.blockers += [f.message for f in findings if f.level == checks.BLOCK]
     if auto:   # 사람이 보지 않고 올리므로 '지어냈을 수 있음' 경고도 막는다
         result.blockers += [AUTO_WARN_PREFIX + f.message for f in findings if f.level == checks.WARN]

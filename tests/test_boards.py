@@ -182,6 +182,7 @@ def test_no_matching_story_is_not_forced(conn):
 
 def test_same_station_never_twice_other_station_ok(conn):
     """SBS 게시판에 보낸 경험도 MBC 에는 보낼 수 있고, MBC 에 한 번 보낸 경험은 MBC 에 다시 보내지 않는다."""
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     eid = funny(conn)
     sbs = conn.execute("SELECT id FROM corners WHERE board_url LIKE 'https://programs.sbs.co.kr/%' LIMIT 1").fetchone()
     sbs_cid = sbs["id"] if sbs else boards.add_corner(conn, "https://programs.sbs.co.kr/radio/x/cornerboards/1")
@@ -308,6 +309,7 @@ function save() {{
 @pytest.mark.skipif(not Path(CHROMIUM).exists(), reason="Chromium 없음")
 @pytest.mark.parametrize("test_mode", [True, False])
 def test_real_browser_mbc_like_corner(conn, monkeypatch, test_mode):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     pytest.importorskip("playwright")
     monkeypatch.setenv("RADIO_HELPER_CHROMIUM", CHROMIUM)
     monkeypatch.setenv("RADIO_HELPER_HEADLESS", "1")

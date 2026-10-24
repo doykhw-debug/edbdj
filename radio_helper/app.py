@@ -15,7 +15,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import (__version__, aside, boards, broadcast_seed, collect, db, evidence, gates, generator, notices, quiz, remote,
+from . import (__version__, aside, aside_records, boards, broadcast_seed, collect, db, evidence, gates, generator, notices, quiz, remote,
                repair, schedules, server, stations, tabbridge, updater)
 from .errors import error_page
 from .gates import STATUS_LABELS
@@ -80,6 +80,10 @@ def create_app(data_dir: str | None = None) -> Flask:
             db.log(conn, "post", f"코너 목록 정리: 게시판이 아닌 '글 하나' 주소 {gone}개를 지웠습니다 (0.63 코너 게시판 모으기가 잘못 넣은 것)")
     if not server.is_server():
         boards.enable_daily_once(conn)
+        try:                                              # 이 PC 의 Aside 기록 폴더 (0.70, 바뀌었을 때만)
+            aside_records.auto_import(conn)
+        except Exception as e:                            # 가져오기가 실패해도 관리 화면은 켠다
+            db.log(conn, "post", f"Aside 기록 자동 가져오기 못 함: {type(e).__name__}: {str(e)[:200]}")
     conn.close()
 
     app.jinja_env.globals.update(
@@ -620,6 +624,8 @@ def create_app(data_dir: str | None = None) -> Flask:
                                   "tabs": tabbridge.use_tabs(g.conn)},
                        "onair": db.get_setting(g.conn, boards.ONAIR_KEY, "1") == "1",
                        "ai_ok": gates.ai_ok(g.conn),
+                       "rules": aside_records.rules_on(g.conn), "aside_import": aside_records.last(g.conn),
+                       "aside_folder": aside_records.DEFAULT_FOLDER,
                        "collect_last": (db.get_setting(g.conn, collect.LAST_KEY) or "")[:16],
                        "collect_pages": len(collect.start_pages(g.conn)),
                        "collect_log": g.conn.execute("SELECT * FROM events WHERE kind = 'post' AND message LIKE "
@@ -646,6 +652,47 @@ def create_app(data_dir: str | None = None) -> Flask:
         flash("매일 게시판 확인 설정을 저장했습니다." + (" 지금은 시험 모드라 등록은 누르지 않습니다 — 증거 사진을 확인한 뒤 "
                                                        "'시험'을 끄면 등록까지 합니다." if d["on"] and d["test"] else ""))
         return redirect(url_for("corners") + "#daily")
+
+    @app.post("/corners/aside-import")
+    def corners_aside_import():
+        """Aside 로 따로 한 게시판 점검·등록 기록 가져오기: 이 PC 의 artifacts 폴더 경로 또는 그 폴더를 묶은 zip."""
+        upload = request.files.get("file")
+        try:
+            if upload and upload.filename:
+                summary = aside_records.apply(g.conn, aside_records.read_source(data=upload.read()),
+                                              source=upload.filename)
+            else:
+                summary = aside_records.import_path(g.conn, form("folder").strip().strip('"')
+                                                    or aside_records.DEFAULT_FOLDER)
+        except aside_records.AsideImportError as e:
+            flash(str(e), "error")
+            return redirect(url_for("corners") + "#aside")
+        flash("Aside 기록을 가져왔습니다: " + aside_records.describe(summary))
+        return redirect(url_for("corners") + "#aside")
+
+    @app.post("/corners/aside-rules")
+    def corners_aside_rules():
+        on = bool(request.form.get("on"))
+        db.set_setting(g.conn, aside_records.RULES_KEY, "1" if on else "0")
+        db.log(g.conn, "post", f"Aside 규칙 {'켬' if on else '끔'}")
+        flash("Aside 규칙을 " + ("켰습니다: 실시간 게시판은 방송 멘트 때만, 상시·이벤트는 정기 자동 제외, 올린 곳·결과 불명은 다시 보내지 않음."
+                                 if on else "껐습니다 (예전처럼 매일 확인·방송 중 모든 게시판)."))
+        return redirect(url_for("corners") + "#aside")
+
+    @app.post("/corners/<int:cid>/aside")
+    def corner_aside(cid):
+        """코너의 운영 분류 바꾸기 · 보류 풀기."""
+        one("SELECT id FROM corners WHERE id = ?", cid)
+        cls = form("run_class")
+        if cls in aside_records.CLASSES:
+            g.conn.execute("UPDATE corners SET run_class = ?, updated_at = ? WHERE id = ?", (cls, db.now(), cid))
+        if request.form.get("release"):
+            g.conn.execute("UPDATE corners SET hold_state = '', hold_reason = NULL, updated_at = ? WHERE id = ?",
+                           (db.now(), cid))
+            db.log(g.conn, "post", f"코너 #{cid} 보류 풀기 (사용자)")
+        g.conn.commit()
+        flash("저장했습니다." + (" 보류를 풀었습니다 — 같은 경험은 여전히 다시 쓰지 않습니다." if request.form.get("release") else ""))
+        return redirect(url_for("corner_edit", cid=cid) + "#aside")
 
     @app.post("/corners/login")
     def corners_login():
@@ -802,6 +849,8 @@ def create_app(data_dir: str | None = None) -> Flask:
                                reports=[(r.name, r.read_text(encoding="utf-8")) for r in reports],
                                station=stations.corner_station(corner), notice=boards.notice_of(corner),
                                next_run=boards.next_run(corner, datetime.now()),
+                               aside_classes=aside_records.CLASSES, aside_holds=aside_records.HOLDS,
+                               aside_block=aside_records.block_reason(g.conn, corner, "scheduled"),
                                found=[f for f in found if f.get("url") not in known], days=boards.DAYS)
 
     # ── 방송국 상관없는 코너 게시판 자동 등록 (boards.py) ─────────────

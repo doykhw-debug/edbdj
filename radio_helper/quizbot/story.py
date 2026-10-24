@@ -71,7 +71,12 @@ def sent_broadcasters(conn: sqlite3.Connection) -> dict[int, set[str]]:
 
 
 def used_experience_ids(conn: sqlite3.Connection, broadcaster: str | None = None) -> set[int]:
-    """broadcaster 에 이미 보낸 경험. broadcaster 를 안 주면 어디로든 한 번이라도 보낸 경험."""
+    """broadcaster 에 이미 보낸 경험. broadcaster 를 안 주면 어디로든 한 번이라도 보낸 경험.
+    Aside 규칙(0.70, 기본): 한 번 보낸(결과 불명 포함) 경험은 모든 방송국·채널에서 다시 쓰지 않는다."""
+    from .. import aside_records
+
+    if aside_records.rules_on(conn):
+        broadcaster = None
     return {eid for eid, where in sent_broadcasters(conn).items() if broadcaster is None or broadcaster in where}
 
 

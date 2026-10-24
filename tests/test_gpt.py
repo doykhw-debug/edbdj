@@ -136,3 +136,24 @@ def test_settings_screen_saves_gpt(client, conn, monkeypatch):
     assert (db.get_setting(conn, "quizbot.billing"), db.get_setting(conn, "quizbot.gpt_model"),
             db.get_setting(conn, "quizbot.gpt_fallback")) == ("openai", "gpt-5-mini", "openai")
     assert "sk-new" not in json.dumps([dict(r) for r in conn.execute("SELECT * FROM events")], ensure_ascii=False)
+
+
+# ── 0.70: 기본 모델 gpt-4.1-mini (사용자 지정 'GPT-4-mini') ────────────────────
+def test_default_model_is_gpt_4_1_mini_without_reasoning_setting(conn):
+    from radio_helper.quizbot import config
+
+    assert answerer.OPENAI_MODEL == "gpt-4.1-mini" and config.get(conn, "quizbot.gpt_model") == "gpt-4.1-mini"
+    post = FakePost((200, reply('{"a": 1}')))
+    a = answerer.OpenAIAnswerer("", "low", post=post, key="sk-test")
+    assert a._call("s", "u", {"type": "object"}) == '{"a": 1}'
+    body = post.calls[0]["body"]
+    assert body["model"] == "gpt-4.1-mini" and "reasoning" not in body       # 4.1 계열은 추론 설정을 받지 않음
+
+
+def test_070_moves_saved_gpt_model_once(conn):
+    from radio_helper.quizbot import config
+
+    db.set_setting(conn, "quizbot.gpt_model", "gpt-5")
+    assert config.apply_070(conn) and db.get_setting(conn, "quizbot.gpt_model") == "gpt-4.1-mini"
+    db.set_setting(conn, "quizbot.gpt_model", "gpt-5-mini")                    # 그 뒤 사용자가 바꾼 값은 그대로
+    assert not config.apply_070(conn) and db.get_setting(conn, "quizbot.gpt_model") == "gpt-5-mini"

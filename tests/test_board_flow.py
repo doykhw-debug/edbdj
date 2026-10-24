@@ -58,6 +58,7 @@ def fake_sbs_board(posted: list):
 
 @pytest.mark.skipif(not Path(CHROMIUM).exists(), reason="Chromium 없음")
 def test_board_story_whole_flow(client, conn, app, monkeypatch):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     pytest.importorskip("playwright")
     monkeypatch.setenv("RADIO_HELPER_CHROMIUM", CHROMIUM)
 

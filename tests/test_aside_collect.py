@@ -143,6 +143,7 @@ def test_collect_visits_program_homepages_and_adds_boards(conn):
 
 
 def test_collect_tick_weekly_when_boards_idle(conn, monkeypatch):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     monkeypatch.setattr(collect, "board_busy", lambda: False)
     conn.execute("INSERT INTO programs (channel, code, title, main_url, on_air, updated_at) "
                  "VALUES ('CBS 음악FM', 'x1', '꿈음', ?, 1, ?)", (HOME, db.now()))
@@ -294,6 +295,7 @@ def _onair_setup(conn):
 
 
 def test_onair_tick_launches_current_program_once_a_day(conn, monkeypatch):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     boards = _onair_setup(conn)
     monkeypatch.setattr(boards, "board_busy", lambda: False)
     launched = []
@@ -310,6 +312,7 @@ def test_onair_tick_launches_current_program_once_a_day(conn, monkeypatch):
 
 
 def test_run_onair_collects_then_writes_every_board(conn):
+    db.set_setting(conn, "boards.aside_rules", "0")     # 예전 규칙으로 (0.70 Aside 규칙 끔)
     boards = _onair_setup(conn)
     collected, ran = [], []
 
@@ -320,7 +323,7 @@ def test_run_onair_collects_then_writes_every_board(conn):
             collect.add(c, url, title, start["program"], "시험")
         return 2
 
-    def runner(c, cid, allow_window=None):
+    def runner(c, cid, allow_window=None, trigger=None):
         ran.append((cid, allow_window))
         return "시험 입력함"
     out = boards.run_onair(conn, "KBS 쿨FM", "윤정수 남창희의 미스터 라디오", runner=runner, collector=collector,

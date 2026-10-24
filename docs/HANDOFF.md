@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-24, 0.69 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-24, 0.70 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -19,8 +19,19 @@
 | 0.67 | GPT (OpenAI API 키) 분석 |
 | 0.68 | **ChatGPT 구독(Codex CLI 'ChatGPT 로 로그인')** 분석, Claude 가 막히면 이어서 쓸 GPT 선택 |
 | 0.69 | 레인보우: 확인 창 닫기(Esc) → 입력칸 두 번 클릭 → 붙여넣기 → 전송 → 확인 창 닫기. 다른 사용자 글 주소는 열지 않고, 권한 없는 화면이면 그 코너를 닫음 |
+| 0.70 | **Aside 기록 가져오기·Aside 규칙** (aside_records.py): 등록 118·결과 불명 9 → 제출 이력, 실시간은 방송 게시판 멘트 때만, 상시·이벤트 정기 자동 제외, 같은 경험은 모든 방송국·채널에서 한 번, 조건 보류. GPT 기본 모델 gpt-4.1-mini |
+
+## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
+- 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).
+  **사용자 사연 본문이 들어 있으므로 저장소에 넣지 않는다.** 앱이 켜질 때 기본 폴더에서 저절로 가져옴(정본이 바뀌었을 때만).
+- 코너 칼럼 `run_class`(mention/standing/alias) · `hold_state`(posted/unknown/hold) · `hold_reason`. `aside_records.block_reason(conn, corner, trigger)` 가 판단.
+- 실시간: `boards.onair_tick` 이 transcripts(최근 10분)에서 `aside_records.board_mention` 을 찾아야 띄움 → `run(trigger="onair")` 는 공지에 accepting=yes 가 있어야 올림.
+- 공지 정리(NOTICE_SCHEMA)에 `entry`(write/comment/external)·`limit_unit`(chars/bytes) 추가.
 
 ## 사용자 PC 에서 아직 확인 못 한 것 (다음에 확인받을 것)
+0. **0.70 Aside 기록 가져오기**: 관리 화면을 켠 뒤 코너 화면 'Aside 기록·규칙'의 '마지막 가져오기' 숫자 (등록함 118 · 결과 불명 9 · 보류 89 근처,
+   '앱에 없는 경험 번호'가 0 인지). 방송 중 게시판 멘트로 실제로 게시판 쓰기가 뜨는지 (받아쓰기 품질에 달림).
+   GPT 기본 모델 gpt-4.1-mini 는 API 키 연결일 때만 쓰임 — 실제 호출 미확인.
 1. **0.68 ChatGPT 구독**: `npm install -g @openai/codex` → 설정 'ChatGPT 로그인' → '연결 확인' → 실제 분석 한 번.
    codex-cli 0.163 의 옵션은 확인했지만(`codex [--search] exec --skip-git-repo-check --ephemeral --sandbox read-only --json -o … --output-schema …`)
    실제 답 받기·`--output-schema` 가 우리 스키마(strict 변환)를 받는지는 미확인.
@@ -31,8 +42,6 @@
 5. 매일 게시판 확인은 **시험 모드**로 켜져 있음 → 증거 사진 확인 뒤 사용자가 '시험'을 꺼야 실제 등록.
 
 ## 남은 일
-- **Aside 로 따로 한 게시판 점검·사연 올린 기록·규칙 반영**: 사용자 PC 의 `C:\Users\USER\.aside\u\0\sessions\2026-10-22_lG75L0zryyfBAZAE\artifacts`
-  에 있음 (이 개발 환경에서는 열 수 없음) → 사용자가 폴더를 압축해 대화에 올리면 읽고 반영 (올린 게시판은 같은 공지로 다시 올리지 않게 기록, 규칙은 코너·검사에).
 - 레인보우 0.69 전송 순서를 실제 PC 에서 확인 (Esc 가 확인 창을 닫는지 — 안 닫히면 [확인] 자리를 템플릿에 더함).
 - 비공개 저장소 `haetsal-radio` 로 옮겨 푸시 — 사용자가 저장소를 만들면 (아직 없음, 이 세션에서 접근 가능한 저장소는 edbdj 하나).
 - KBS 코너 게시판 기본값: 개발 환경에서 kbs.co.kr 이 막혀 넣지 못함 → PC 의 '코너 게시판 모으기'가 채움.
@@ -42,6 +51,7 @@
 - `radio_helper/quizbot/answerer.py` — Claude(API·구독)·GPT(API)·ChatGPT 구독(CodexAnswerer) 분석기, `make(conn)` 이 설정대로 고름
 - `radio_helper/quizbot/claude_cli.py` · `codex_cli.py` — 구독 프로그램 실행 (로그인 정보는 다루지 않음)
 - `radio_helper/boards.py` — 코너 게시판 공지 읽기·판단·입력·등록, 매일 확인·지금 방송·로그인
+- `radio_helper/aside_records.py` — Aside 기록 가져오기·Aside 규칙(block_reason·board_mention)
 - `radio_helper/tabbridge.py` · `aside.py` — 내 Aside 새 탭 확장 다리 · Aside 찾기
 - `radio_helper/collect.py` · `broadcast_seed.py/.json` — 게시판 모으기 · 기본 편성표·게시판
 - `radio_helper/quizbot/runner.py` · `lanes.py` · `appaudio.py` · `power.py` · `clues.py` — 듣기·동시 청취·앱 소리·절전 막기·끊김 원인
