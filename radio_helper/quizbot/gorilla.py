@@ -267,8 +267,8 @@ DIALOG_APPS = {"mini", "rainbow"}
 DIALOG_TEXT = re.compile(r"메[세시]지를\s*(작성|입력)|채팅을\s*입력|내용을\s*(작성|입력)")
 SLOW_APPS = {"mini": 2.0, "rainbow": 2.0}
 # 0.80 사용자 요청 (MBC mini): 입력칸을 간격 두고 두 번 클릭 → 붙여넣기 → 2초 뒤 입력칸 확인 → 됐으면 등록,
-# 안 됐으면 복사·붙여넣기부터 다시 (최대 PASTE_TRIES 번)
-PASTE_CHECK_APPS = {"mini"}
+# 안 됐으면 복사·붙여넣기부터 다시 (최대 PASTE_TRIES 번). 0.81: CBS 레인보우도 같은 방식 (사용자 요청)
+PASTE_CHECK_APPS = {"mini", "rainbow"}
 PASTE_CHECK_SECONDS = 2.0
 PASTE_TRIES = 3
 CLICK_GAP_SECONDS = 0.6
@@ -1497,17 +1497,36 @@ class Gorilla:
         x, y = point
         return max(left, x - 220), max(top, y - 16), min(right, x + 220), min(bottom, y + 16)
 
+    def _went_in(self, text: str, edit, before, box) -> tuple[bool, str]:
+        """입력칸에 글이 들어갔는지: 글을 읽을 수 있으면 글로, 못 읽으면 입력칸 사진이 바뀌었는지로
+        (사진도 못 찍으면 확인할 길이 없어 예전처럼 들어간 것으로 본다)."""
+        got, where = self._read_input(edit)
+        if got is not None:
+            return self._check_filled(text, got), where
+        try:
+            after = grab_region(box)
+        except Exception:
+            return True, where
+        if before is None or after is None:
+            return True, where
+        return region_changed(before, after), where
+
+    def _click_twice(self, w, point: tuple[int, int]) -> None:
+        """입력칸을 간격 두고 두 번 클릭 (두 번째 클릭으로 확실히 커서). 레인보우는 첫 클릭을 예전처럼 더블클릭으로
+        (한 번 클릭으로는 커서가 안 들어가던 앱 — 0.69)."""
+        self._click(w, point, "입력칸", clicks=self._input_clicks())
+        time.sleep(CLICK_GAP_SECONDS)
+        self._click(w, point, "입력칸")
+
     def _fill_checked(self, w, point: tuple[int, int], text: str, edit=None) -> None:
-        """MBC mini (0.80 사용자 요청): ① 입력칸을 간격 두고 두 번 클릭 ② 지우고 → 복사 → 붙여넣기 → 2초 뒤 입력칸 확인
+        """MBC mini·CBS 레인보우 (0.80·0.81 사용자 요청): ① 입력칸을 간격 두고 두 번 클릭 ② 지우고 → 복사 → 붙여넣기 → 2초 뒤 입력칸 확인
         (글을 읽을 수 있으면 글로, 못 읽으면 입력칸 사진이 바뀌었는지로) ③ 안 됐으면 복사·붙여넣기부터 다시.
         그래도 안 되면 한 글자씩 입력해 보고, 그것도 안 되면 등록을 누르지 않는다."""
         from pywinauto.keyboard import send_keys
 
         box = self._input_box(w, point)
         for n in range(1, PASTE_TRIES + 1):
-            self._click(w, point, "입력칸")
-            time.sleep(CLICK_GAP_SECONDS)
-            self._click(w, point, "입력칸")              # 두 번째 클릭으로 확실히 입력칸에 커서
+            self._click_twice(w, point)
             self._wait(0.2)
             self._check_front(w)
             send_keys("^a{BACKSPACE}", pause=0.08)
@@ -1521,27 +1540,17 @@ class Gorilla:
             self._check_front(w)
             send_keys("^v", pause=0.08)                    # 붙여넣기
             time.sleep(PASTE_CHECK_SECONDS)                # 2초 기다린 뒤 확인
-            got, where = self._read_input(edit)
-            if got is not None:
-                ok = self._check_filled(text, got)
-            else:
-                try:
-                    ok = region_changed(before, grab_region(box))
-                except Exception:
-                    ok = True                              # 확인할 길이 없으면 예전처럼 보냄
+            ok, where = self._went_in(text, edit, before, box)
             if ok:
                 if n > 1:
                     self.fixes.append(f"붙여넣기가 {n - 1}번 안 들어가 다시 붙여넣음")
                 return
-        self._click(w, point, "입력칸")                    # 붙여넣기가 끝내 안 됨 → 한 글자씩
-        time.sleep(CLICK_GAP_SECONDS)
-        self._click(w, point, "입력칸")
+        self._click_twice(w, point)                         # 붙여넣기가 끝내 안 됨 → 한 글자씩
         self._check_front(w)
         send_keys("^a{BACKSPACE}", pause=0.08)
         type_unicode(text)
         time.sleep(PASTE_CHECK_SECONDS)
-        got, where = self._read_input(edit)
-        ok = self._check_filled(text, got) if got is not None else region_changed(before, grab_region(box))
+        ok, where = self._went_in(text, edit, before, box)
         if ok:
             self.fixes.append(f"붙여넣기가 {PASTE_TRIES}번 안 들어가 한 글자씩 입력함")
             return

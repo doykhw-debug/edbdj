@@ -90,3 +90,36 @@ def test_sent_list_page(client, conn):
     only_mbc = client.get("/stories/sent?b=MBC").get_data(as_text=True)
     assert "문자로 보낸 글" in only_mbc and "첫째가 유튜버냐고" not in only_mbc
     assert "보낸 사연 목록" in client.get("/stories").get_data(as_text=True)
+
+
+# ── 0.81: 사연 내보내기 — 보낸 사연을 엑셀용 .csv / 읽기용 .txt 로 ─────────────────────────────
+def test_sent_stories_export(client, conn):
+    import csv
+    import io
+
+    a = make_experience(conn, label="편집 화면")
+    post(conn, a, "파워FM", program="김영철의 파워FM", message="첫째가 유튜버냐고 물었어요")
+    post(conn, a, "MBC FM4U", program="정오의 희망곡", via="sms", status="unknown", message="=문자로 보낸 글")
+    post(conn, a, "KBS 쿨FM", status="skipped", message="안 보낸 글")
+    r = client.get("/stories/sent/export")
+    assert r.status_code == 200 and "attachment" in r.headers["Content-Disposition"]
+    assert ".csv" in r.headers["Content-Disposition"]
+    body = r.data.decode("utf-8")
+    assert body.startswith("﻿")                                       # 엑셀에서 한글이 깨지지 않게
+    table = list(csv.reader(io.StringIO(body.lstrip("﻿"))))
+    assert table[0][:3] == ["보낸 때", "방송국", "채널·프로그램"] and len(table) == 3   # 안 보낸 글은 빠짐
+    texts = {row[6] for row in table[1:]}
+    assert "첫째가 유튜버냐고 물었어요" in texts and "'=문자로 보낸 글" in texts    # 수식으로 읽히지 않게
+    assert all(row[7].startswith("#") for row in table[1:])
+
+    txt = client.get("/stories/sent/export?fmt=txt&b=MBC").data.decode("utf-8")
+    assert "■ MBC (1건)" in txt and "=문자로 보낸 글" in txt and "첫째가 유튜버냐고" not in txt and "SBS" not in txt
+    assert "/stories/sent/export" in client.get("/stories").get_data(as_text=True)
+    assert "stories/sent/export?b=MBC" in client.get("/stories/sent?b=MBC").get_data(as_text=True)
+
+
+def test_export_with_nothing_sent(client):
+    from radio_helper import story_export
+
+    assert "아직 보낸 사연이 없습니다" in client.get("/stories/sent/export?fmt=txt").data.decode("utf-8")
+    assert story_export.to_csv([]).count("\r\n") == 1

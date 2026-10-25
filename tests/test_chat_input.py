@@ -21,7 +21,7 @@ def typed(monkeypatch, desk):
 
     def keys(k, pause=None):
         desk.keys.append(k)
-        if k == "^a{BACKSPACE}^v" and box.paste_works:
+        if k.endswith("^v") and box.paste_works:                 # 한 번에(^a{BACKSPACE}^v) 또는 따로(^v)
             box.value = box.clip if box.keep is None else box.clip[:box.keep]
         elif k.startswith("^a{BACKSPACE}"):
             box.value = ""
@@ -62,8 +62,9 @@ def test_nothing_goes_in_then_send_is_not_pressed(typed, desk, monkeypatch):
     monkeypatch.setattr(g, "_with_focus", lambda fn: fn(Win()))
     monkeypatch.setattr(g, "evidence_image", lambda w: None)
     result = g.send("정답은 사과")
-    assert result.status == "failed" and "전송을 누르지 않았습니다" in result.detail
-    assert all(len(c) == 3 for c in desk.clicks)      # 입력칸(두 번 클릭)만 눌렀고 전송 버튼은 누르지 않음
+    assert result.status == "failed" and "등록을 누르지 않았습니다" in result.detail
+    assert (1576, 902) not in desk.clicks             # 입력칸만 눌렀고 전송 버튼은 누르지 않음
+    assert {c[:2] for c in desk.clicks} == {(1320, 902)}
 
 
 def test_cut_text_remembers_app_limit(typed, desk, conn):
@@ -79,7 +80,7 @@ def test_unreadable_input_keeps_old_behaviour(desk, monkeypatch):
     monkeypatch.setattr(gorilla, "focused_value", lambda: (None, ""))
     g = rainbow()
     g._put_text(Win(), "정답")
-    assert desk.keys == ["{ESC}", "^a{BACKSPACE}^v"]
+    assert desk.keys == ["{ESC}", "^a{BACKSPACE}", "^v"]      # 0.81: 레인보우도 지우기 → 복사 → 붙여넣기 따로
 
 
 def test_flat_text_and_unicode_typing():
@@ -247,3 +248,39 @@ def test_mini_never_pasted_does_not_press_register(mini_box, desk, monkeypatch):
 def test_empty_text_is_never_pasted(desk):
     r = coords_gorilla(app="mini").send("  \n ")
     assert r.status == "failed" and "비어" in r.detail and desk.clicks == [] and desk.keys == []
+
+
+# ── 0.81: CBS 레인보우도 mini 와 같은 방식 (간격 두고 두 번 클릭 → 붙여넣기 → 2초 뒤 확인 → 안 됐으면 다시) ─────
+def test_rainbow_clicks_twice_pastes_and_checks(mini_box, desk):
+    g = rainbow()
+    g._put_text(Win(), "정답은 사과")
+    assert desk.clicks == [(1320, 902, 2), (1320, 902)]          # 더블클릭(커서 넣기) → 간격 → 한 번 더
+    assert desk.keys == ["{ESC}", "^a{BACKSPACE}", "^v"] and mini_box.value == "정답은 사과"
+    assert gorilla.PASTE_CHECK_SECONDS in mini_box.waited and g.fixes == []
+
+
+def test_rainbow_paste_retried_from_copy(mini_box, desk):
+    mini_box.works_from = 2
+    g = rainbow()
+    g._put_text(Win(), "정답은 사과")
+    assert mini_box.pastes == 2 and len(desk.clicks) == 4 and "1번 안 들어가 다시 붙여넣음" in g.fixes[0]
+
+
+def test_rainbow_never_pasted_does_not_press_send(mini_box, desk, monkeypatch):
+    mini_box.works_from = 99
+    monkeypatch.setattr(gorilla, "type_unicode", lambda text, **kw: None)
+    g = rainbow()
+    monkeypatch.setattr(g, "_with_focus", lambda fn: fn(Win()))
+    monkeypatch.setattr(g, "evidence_image", lambda w: None)
+    result = g.send("정답은 사과")
+    assert result.status == "failed" and "등록을 누르지 않았습니다" in result.detail
+    assert mini_box.pastes == gorilla.PASTE_TRIES and (1576, 902) not in desk.clicks
+
+
+def test_unreadable_and_no_screenshot_still_sends(desk, monkeypatch):
+    """입력칸 글도 못 읽고 사진도 못 찍으면 확인할 길이 없어 예전처럼 한 번에 넣고 보낸다 (막지 않음)."""
+    monkeypatch.setattr(gorilla, "focused_value", lambda: (None, ""))
+    monkeypatch.setattr(gorilla, "grab_region", lambda box: (_ for _ in ()).throw(OSError("no screen")))
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    g._put_text(Win(), "정답")
+    assert desk.keys == ["^a{BACKSPACE}", "^v"] and g.fixes == []

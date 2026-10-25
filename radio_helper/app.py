@@ -1856,12 +1856,10 @@ def create_app(data_dir: str | None = None) -> Flask:
         return render_template("stories.html", pending=[(p, json.loads(p["warnings"] or "[]")) for p in pending],
                                recent=recent, counts=counts)
 
-    @app.get("/stories/sent")
-    def stories_sent():
-        """보낸 사연 목록: 앱 채팅·문자·게시판으로 보낸 글을 방송국별로, 경험마다 보낸 방송국을 한눈에."""
+    def sent_story_rows() -> list[dict]:
+        """보낸 사연 줄 (앱 채팅·문자·게시판, 최근 것부터). 보낸 사연 목록 화면과 내보내기에 같이 쓴다."""
         from .quizbot import story
 
-        who = request.args.get("b", "")
         rows = []
         # 게시판 자동 등록한 사연은 제출 이력(아래)이 생기면 그쪽 한 줄로 보인다
         on_board = {r[0] for r in g.conn.execute("SELECT DISTINCT draft_id FROM submissions WHERE draft_id IS NOT NULL "
@@ -1892,6 +1890,15 @@ def create_app(data_dir: str | None = None) -> Flask:
         for r in rows:
             r["shots"] = shot_counts[r["ev_t"]].get(r["ev_id"], 0)
         rows.sort(key=lambda r: r["at"] or "", reverse=True)
+        return rows
+
+    @app.get("/stories/sent")
+    def stories_sent():
+        """보낸 사연 목록: 앱 채팅·문자·게시판으로 보낸 글을 방송국별로, 경험마다 보낸 방송국을 한눈에."""
+        from .quizbot import story
+
+        who = request.args.get("b", "")
+        rows = sent_story_rows()
         order = list(qconfig.BROADCASTERS)
         counts = [(b, sum(1 for r in rows if r["broadcaster"] == b))
                   for b in sorted({r["broadcaster"] for r in rows}, key=lambda b: (order.index(b) if b in order else 9, b))]
@@ -1903,6 +1910,29 @@ def create_app(data_dir: str | None = None) -> Flask:
                   for e in g.conn.execute("SELECT * FROM experiences WHERE user_confirmed = 1 ORDER BY id")]
         return render_template("stories_sent.html", rows=shown, total=len(rows), counts=counts, who=who,
                                columns=columns, matrix=matrix)
+
+    @app.get("/stories/sent/export")
+    def stories_sent_export():
+        """사연 내보내기 (0.81): 보낸 사연을 파일로 — 엑셀용(.csv) / 읽기용(.txt). b=방송국 이면 그 방송국만."""
+        from urllib.parse import quote
+
+        from flask import Response
+
+        from . import story_export
+
+        who = request.args.get("b", "")
+        rows = [r for r in sent_story_rows() if not who or r["broadcaster"] == who]
+        stamp = datetime.now().strftime("%Y%m%d")
+        if request.args.get("fmt") == "txt":
+            data, ext, mime = story_export.to_text(rows, datetime.now().strftime("%Y-%m-%d"), who), "txt", \
+                "text/plain; charset=utf-8"
+        else:
+            data, ext, mime = story_export.to_csv(rows), "csv", "text/csv; charset=utf-8"
+        name = f"보낸사연{'_' + who if who else ''}_{stamp}.{ext}"
+        db.log(g.conn, "story", f"보낸 사연 내보내기: {len(rows)}건 ({ext}{', ' + who if who else ''})")
+        # 엑셀·메모장에서 한글이 깨지지 않게 BOM 을 붙인다
+        return Response(("\ufeff" + data).encode("utf-8"), mimetype=mime, headers={
+            "Content-Disposition": f"attachment; filename=radio_sent_stories_{stamp}.{ext}; filename*=UTF-8''{quote(name)}"})
 
     @app.get("/inspect-image/<name>")
     def inspect_image(name):

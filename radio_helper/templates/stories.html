@@ -14,6 +14,21 @@
   <a class="stat" href="{{ url_for('submissions') }}"><span class="muted">게시판 제출 이력</span><b>{{ counts.unresolved }}</b><span class="muted">등록 확인 필요</span></a>
 </div>
 
+<div class="panel" id="export">
+  <h2>사연 내보내기 <span class="muted">파일로 받기 — 이 PC 에서만 내려받고 어디에도 올리지 않습니다</span></h2>
+  <div class="actions">
+    <span class="muted">보낸 사연 (채팅·문자·게시판):</span>
+    <a class="btn secondary" href="{{ url_for('stories_sent_export') }}">엑셀용 (.csv)</a>
+    <a class="btn secondary" href="{{ url_for('stories_sent_export', fmt='txt') }}">읽기용 (.txt)</a>
+  </div>
+  <div class="actions" style="margin-top:6px">
+    <span class="muted">내 사연 목록 (실제 경험):</span>
+    <a class="btn secondary" href="{{ url_for('experiences_export') }}">읽기용 (.txt)</a>
+    <a class="btn secondary" href="{{ url_for('experiences_export', fmt='jsonl', all=1, library=1) }}"
+       title="확인한 사연·확인 전 사연·보관함 전체. 가져오기에 넣으면 되살아남">다시 가져오기용 (.jsonl, 전체)</a>
+  </div>
+</div>
+
 <div class="panel" id="pending">
   <h2>확인 대기 <span class="muted">진행자가 주제를 주고 사연을 받을 때 · 경고가 있거나 경험이 안 맞아 자동으로 보내지 않은 글</span>
   {% if nav_pending.stories %}

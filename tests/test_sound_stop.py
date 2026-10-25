@@ -85,8 +85,9 @@ def test_rainbow_double_clicks_input_and_closes_dialog(desk, monkeypatch):
     g._put_text(w, "정답은 사과")
     g._press_send(w)
     g._dismiss_dialog(w)
-    assert desk.keys == ["{ESC}", "^a{BACKSPACE}^v", "{ESC}"]                   # 창 닫기 → 붙여넣기 → (전송 뒤) 창 닫기
-    assert desk.clicks[0][2] == 2 and len(desk.clicks[1]) == 2                   # 입력칸은 두 번, 전송 버튼은 한 번
+    assert desk.keys == ["{ESC}", "^a{BACKSPACE}", "^v", "{ESC}"]               # 창 닫기 → 지우고 붙여넣기 → (전송 뒤) 창 닫기
+    assert desk.clicks[0][2] == 2 and len(desk.clicks[1]) == 2                   # 입력칸은 더블클릭 + 한 번 더 (0.81)
+    assert desk.clicks[2] == (1576, 902)                                         # 전송 버튼은 한 번
     desk.keys.clear()
     desk.clicks.clear()
     g = coords_gorilla()                                                         # 고릴라는 예전 그대로
