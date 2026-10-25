@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-25, 0.82 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-25, 0.83 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -33,6 +33,7 @@
 | 0.80 | **빈 글 원인**: 맞는 경험 없음 → message "" 인데 message_checks 가 exp 있을 때만 돌아 자동 전송됨 → story.decide·runner.deliver·Gorilla.send 에서 빈 글 막음. mini: gorilla._fill_checked (두 번 클릭·2초 뒤 확인·최대 3번 다시, 사진 비교 region_changed) |
 | 0.81 | 레인보우도 PASTE_CHECK_APPS (_click_twice: 레인보우 첫 클릭은 더블클릭, _went_in: 글 못 읽고 사진도 못 찍으면 보냄). 사연 내보내기: /stories/sent/export (fmt csv·txt, b=방송국), radio_helper/story_export.py, app.sent_story_rows 를 보낸 사연 목록과 같이 씀 |
 | 0.82 | gorilla._enter_retry: 보내기 뒤 입력칸에 글이 남으면(_text_left: uia 값 / 초점 Edit 값 / _remember_filled 사진 비교, 모르면 False) 입력칸 클릭 → {ENTER}, 그래도 남으면 failed. 사용자 수정본(E:\라디오 0.81 ZIP) 반영: 맞는 경험 없으면 AI 작성 source ai_generated (answerer STORY_SYSTEM·runner.analyze_story·story.message_checks/decide), ZIP 의 app.py·stories.html 은 0.81 내보내기가 빠진 옛 바탕이라 해당 줄만 옮김 |
+| 0.83 | 레인보우: 글이 입력칸 한 칸을 넘으면 전송 안 됨(사용자 화면 사진) → config.APP_CHAT_LIMITS rainbow 60 (chat_limit 에 반영), config.fit_text(신청곡 꼬리 → 뒤 문장부터 뺌), runner.analyze_story 가 profile["chat_limit"] 로 AI에 알림(build_story_message), 제한 넘는 글은 막지 않고 줄임, Gorilla.send 도 레인보우 긴 글을 줄여 보냄. 60은 화면 사진으로 어림한 값(한 줄 17자 안팎×4줄) |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).

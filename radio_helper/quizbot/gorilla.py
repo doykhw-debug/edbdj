@@ -34,7 +34,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from .config import GorillaConfig, localize
+from .config import APP_CHAT_LIMITS, GorillaConfig, fit_text, localize
 
 # 제목에 '고릴라'가 들어갈 수 있지만 고릴라 앱이 아닌 창
 OWN_TITLE = "라디오 참여 도우미"
@@ -1833,6 +1833,10 @@ class Gorilla:
             return SendResult("failed", "보낼 글이 비어 있어 입력하지 않았습니다")
         shots = []
         self.fixes = []
+        limit = APP_CHAT_LIMITS.get(self.cfg.app)
+        if limit and len(text) > limit:                  # 0.83: 레인보우는 입력칸 한 칸을 넘으면 전송이 안 됨 → 줄여 보냄
+            text = fit_text(text, limit)
+            self.fixes.append(f"글이 길어 {self.cfg.label} 입력칸 한 칸({limit}자)에 맞게 줄임")
         self._refound = False
         self._filled = None                              # 지난번 입력칸 사진은 쓰지 않음
 

@@ -351,3 +351,42 @@ def test_chat_list_focus_is_not_taken_for_input(desk, monkeypatch):
     assert g._text_left(None, "정답은 사과") is False
     monkeypatch.setattr(gorilla, "focused_value", lambda: ("정답은 사과", "Edit '메시지'"))
     assert g._text_left(None, "정답은 사과") is True
+
+
+# ── 0.83: 레인보우는 글이 입력칸 한 칸을 넘으면 전송이 안 됨 (사용자 화면 사진) → 한 칸 안으로 ───────────────
+LONG = ("오늘 아침 커피를 내리다 보니 예전 생각이 나네요. 저는 커피를 마실 때 잠깐 숨을 고르고 창밖을 바라보곤 해요. "
+        "오늘도 커피 향처럼 포근한 하루 보내세요. (신청곡: 브라운 아이즈 - With Coffee)")
+
+
+def test_fit_text_drops_song_then_last_sentences():
+    limit = config.APP_CHAT_LIMITS["rainbow"]
+    out = config.fit_text(LONG, limit)
+    assert len(out) <= limit and out == "오늘 아침 커피를 내리다 보니 예전 생각이 나네요."
+    assert config.fit_text("짧은 글 (신청곡: 가수 - 노래)", 60) == "짧은 글 (신청곡: 가수 - 노래)"   # 들어가면 그대로
+    assert config.fit_text("한 문장이 아주 길어서 문장 단위로는 줄일 수 없는 글", 10) == "한 문장이 아주…"
+
+
+def test_rainbow_chat_limit(conn):
+    assert config.chat_limit(conn, "CBS 음악FM") == config.APP_CHAT_LIMITS["rainbow"]
+    assert config.chat_limit(conn, "SBS 파워FM") == 200
+
+
+def test_rainbow_send_shortens_long_text(typed, desk, monkeypatch):
+    g = rainbow()
+    monkeypatch.setattr(g, "_with_focus", lambda fn: fn(Win()))
+    monkeypatch.setattr(g, "evidence_image", lambda w: None)
+    r = g.send(LONG)
+    assert typed.clip == "오늘 아침 커피를 내리다 보니 예전 생각이 나네요." and "한 칸(60자)에 맞게 줄임" in r.detail
+    typed.clip = None
+    m = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    monkeypatch.setattr(m, "_with_focus", lambda fn: fn(Win()))
+    monkeypatch.setattr(m, "evidence_image", lambda w: None)
+    m.send(LONG)
+    assert typed.clip == LONG                                                       # mini 는 줄이지 않음
+
+
+def test_story_prompt_tells_rainbow_limit():
+    from radio_helper.quizbot import answerer
+
+    msg = answerer.build_story_message("아침", "녹취", {"chat_limit": 60}, [])
+    assert "60자 이내" in msg and "60자" not in answerer.build_story_message("아침", "녹취", {}, [])

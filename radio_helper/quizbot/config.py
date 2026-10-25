@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, fields
 from datetime import datetime, timedelta
@@ -208,9 +209,33 @@ NEW_CHANNELS = ("CBS 음악FM=#9390", "CBS 표준FM=")   # 0.55 에 기본 목�
 AUTO_EBS = "EBS FM=#1045"                             # 0.55 가 저절로 더했던 줄
 
 
+# 0.83 사용자 확인 (화면 사진): CBS 레인보우는 글이 입력칸 한 칸(보이는 4줄 정도, 한 줄 17자 안팎)을 넘어가면
+# 전송이 안 됨 → 레인보우 채팅 글은 이 글자 수 안에서 만들고, 넘는 글은 문장 단위로 줄여 보낸다.
+APP_CHAT_LIMITS = {"rainbow": 60}
+SONG_TAIL = re.compile(r"\s*\(신청곡:.*\)\s*$")
+
+
+def fit_text(text: str, limit: int) -> str:
+    """글을 limit 자 안으로: 넘으면 신청곡 꼬리부터 빼고, 그래도 넘으면 뒤 문장부터 뺀다 (문장 하나가 넘으면 그 문장을 자름)."""
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if len(text) <= limit:
+        return text
+    body = SONG_TAIL.sub("", text).strip()
+    if len(body) <= limit:
+        return body
+    out = ""
+    for sentence in re.findall(r"[^.!?…~]+[.!?…~]*\s*", body):
+        if len((out + sentence).strip()) > limit:
+            break
+        out += sentence
+    return out.strip() or body[:limit - 1].rstrip() + "…"
+
+
 def chat_limit(conn: sqlite3.Connection, channel: str | None, default: int = 200) -> int:
-    """채팅 사연 글자 수: 그 채널 채팅 앱 입력칸이 더 적게 받는다고 알아낸 수가 있으면 그것 (0.74), 아니면 default."""
+    """채팅 사연 글자 수: 그 채널 채팅 앱 입력칸이 더 적게 받는다고 알아낸 수가 있으면 그것 (0.74), 아니면 default.
+    레인보우처럼 한 칸을 넘으면 전송이 안 되는 앱은 APP_CHAT_LIMITS (0.83)."""
     app = chat_app(conn, channel) or "gorilla"
+    default = min(default, APP_CHAT_LIMITS.get(app, default))
     try:
         learned = int(db.get_setting(conn, f"{app}.input_limit") or 0)
     except ValueError:

@@ -311,8 +311,11 @@ def build_story_message(program: str, transcript: str, profile: dict, experience
              "[보내는 사람]",
              f"- 문체: {profile.get('tone') or '담백함'}",
              f"- 가족 호칭: {profile.get('family_aliases') or '(없음)'}",
-             f"- 피할 소재: {profile.get('avoid_topics') or '(없음)'}",
-             "", "[실제 경험 목록]"]
+             f"- 피할 소재: {profile.get('avoid_topics') or '(없음)'}"]
+    if profile.get("chat_limit"):   # 0.83: 레인보우처럼 입력칸 한 칸을 넘으면 전송이 안 되는 앱
+        lines.append(f"- 채팅 글 길이: 이 방송 앱은 입력칸 한 칸을 넘으면 전송이 안 됩니다. message 는 신청곡 포함 공백 포함 "
+                     f"{profile['chat_limit']}자 이내 (짧은 두세 문장)")
+    lines += ["", "[실제 경험 목록]"]
     for e in experiences:
         quote_kind = {"exact": "정확한 인용", "gist": "취지만"}.get(e.get("quote_kind"), "없음")
         lines.append(f"#{e['id']} {e.get('label') or ''}".rstrip())

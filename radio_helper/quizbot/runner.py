@@ -850,9 +850,13 @@ class Runner:
         if self.claude_paused():
             return None
         self.story_analyses += 1
+        limit = config.chat_limit(self.conn, schedule["channel"], answerer_mod.STORY_LIMIT)   # 앱 입력칸이 받는 글자 수
+        profile = story.masked_profile(self.conn)
+        if limit < answerer_mod.STORY_LIMIT:
+            profile["chat_limit"] = limit
         try:
             extra = {"images": list(images)} if images else {}
-            res = self.deps.answerer.analyze_story(program, transcript, story.masked_profile(self.conn), exps, **extra)
+            res = self.deps.answerer.analyze_story(program, transcript, profile, exps, **extra)
         except Exception as e:
             db.log(self.conn, "quizbot", f"{program} 사연 분석 실패: {str(e)[:120]}")
             return None
@@ -883,13 +887,14 @@ class Runner:
         source = "ai_generated" if exp is None and res.experience_id == 0 else "ai"
         if exp is not None and res.use_user_line and (exp["gorilla_line"] or "").strip():
             message, source = exp["gorilla_line"].strip(), "user_line"
-        limit = config.chat_limit(self.conn, schedule["channel"], answerer_mod.STORY_LIMIT)   # 앱 입력칸이 받는 글자 수
         if exp is not None and not message and board_too:       # 게시판 글만 만들었으면 채팅에는 승인한 경험 글 그대로
             message, source = story.approved_text(self.conn, exp, limit, song), "approved"
         elif song and message and len(message) + len(song) + 8 <= limit:
             message = f"{message} (신청곡: {song})"
         if exp is None and source != "ai_generated":
             message = ""
+        if len(message) > limit:          # 0.83: 입력칸 한 칸을 넘으면 전송이 안 되는 앱(레인보우) — 뒤 문장부터 빼서 줄임
+            message = config.fit_text(message, limit)
         warnings = story.message_checks(self.conn, message, exp, source, res.added_facts,
                                         limit=limit)
         if exp is not None and source == "ai" and warnings and config.get(self.conn, "live.story_approved") == "1":
