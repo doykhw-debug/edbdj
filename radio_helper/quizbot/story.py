@@ -1,10 +1,11 @@
-"""사연·주제 모집 → 내 실제 경험으로 공감로그 글 만들기 (확인 후 전송).
+"""사연·주제 모집 → 내 경험 우선, 없으면 AI가 주제에 맞춰 공감로그 글 작성.
 
 - 사용자가 '실제로 있었던 일'로 확인한 경험만 쓴다. 한 번 보낸 경험은 같은 방송국(SBS·MBC·KBS·CBS)에 다시 보내지 않는다.
   (다른 방송국에는 보낼 수 있다)
 - Claude 에 보내기 전 '공개하지 않을 단어'와 경험별 '가릴 내용'을 ○○로 가린다.
 - 사용자가 직접 쓴 한 줄은 허용했을 때 자동으로 보낸다. AI 초안은 '사연 자동 전송'을 켜고 검사 경고가
   하나도 없을 때만 바로 보내고, 경고가 있으면 확인 대기로 남긴다.
+- 맞는 경험이 없어 작성한 글은 ai_generated 로 구분하며 실제 경험 저장소에 넣지 않는다.
 """
 
 from __future__ import annotations
@@ -159,10 +160,14 @@ def message_checks(conn: sqlite3.Connection, message: str, exp, source: str, add
         for f in (checks.check_sensitive_additions(core, src) + checks.check_numbers(core, src)
                   + checks.check_quotes(core, exp["quotes"], exp["quote_kind"])):
             found.append({"level": f.level, "message": f.message})
-    if added_facts:
+    if added_facts and source != "ai_generated":
         found.append({"level": "warn", "message": "AI가 경험에 없는 내용을 넣었다고 표시함: " + " / ".join(added_facts)[:200]})
     if exp is None:
-        if source != "manual":
+        if source == "ai_generated":
+            core = SONG_TAIL.sub("", message)
+            for f in checks.check_sensitive_additions(core, ""):
+                found.append({"level": f.level, "message": f.message})
+        elif source != "manual":
             found.append({"level": "block", "message": "연결된 실제 경험이 없습니다. 직접 써서 보낼 수 있습니다."})
     elif not exp["user_confirmed"]:
         found.append({"level": "block", "message": "'실제로 있었던 일'로 확인되지 않은 경험입니다."})
@@ -199,7 +204,7 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
         reasons.append(f"이미 처리됨({quiz.ENTRY_LABELS.get(post['status'], post['status'])})")
     warnings = json.loads(post["warnings"] or "[]")
     if not (post["message"] or "").strip():      # 0.80: 맞는 경험이 없으면 글이 비어 있음 — 빈 글을 붙여넣어 '메시지를 작성해주세요'가 떴음
-        reasons.append("보낼 글이 비어 있음 (주제에 맞는 경험이 없음 — 직접 써서 보내거나 건너뛰기)")
+        reasons.append("보낼 글이 비어 있음 (AI 작성 결과가 없거나 직접 입력한 내용이 없음)")
     if has_block(warnings):
         reasons.append("검사에서 막힌 항목이 있음")
     # 0.76: 응모 방법 판단('문자로만' 등)으로 막지 않는다 — 문자로만 받는 방송은 없음, 무조건 채팅
@@ -212,7 +217,7 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
             # 승인한(확인·고친) 경험 글 그대로: 덧붙인 내용이 없으니 '사연 자동 전송'이 켜져 있으면 바로 보낸다
             or (post["source"] == "approved" and allowed("story_auto_ai") and not has_block(warnings))
             # AI 초안은 검사 경고가 하나도 없을 때만 (재료에 없는 내용·민감 소재·숫자가 있으면 확인 대기)
-            or (post["source"] == "ai" and allowed("story_auto_ai") and not warnings))
+            or (post["source"] in ("ai", "ai_generated") and allowed("story_auto_ai") and not warnings))
         if not auto_ok:
             reasons.append("사연은 확인 후 전송 (화면에서 '이 글로 보내기')")
     since = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")

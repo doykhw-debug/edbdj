@@ -847,8 +847,6 @@ class Runner:
     def analyze_story(self, schedule, w: Window, transcript: str, images=()) -> int | None:
         program = schedule["program"]
         exps = story.candidate_experiences(self.conn, config.broadcaster_of(schedule["channel"]))
-        if not exps:
-            return None  # 쓸 수 있는 실제 경험이 없으면 유료 분석을 하지 않는다
         if self.claude_paused():
             return None
         self.story_analyses += 1
@@ -867,17 +865,22 @@ class Runner:
             self.conn.execute("UPDATE story_posts SET repeat_count = repeat_count + 1, updated_at = ? WHERE id = ?",
                               (db.now(), dup))
             self.conn.commit()
-            return dup
+            old = next(p for p in existing if p["id"] == dup)
+            # 0.81: 같은 주제가 다시 들리면 예전에 경험이 없어 비워 둔 채팅 글도 새 분석 결과로 채운다.
+            if old["status"] != "pending" or old["target"] != "chat" or (old["message"] or "").strip():
+                return dup
         exp = None
         if res.experience_id in {e["id"] for e in exps}:
             exp = self.conn.execute("SELECT * FROM experiences WHERE id = ?", (res.experience_id,)).fetchone()
         # 0.76 사용자 요청: '게시판에 올려 달라'는 사연도 채팅에 먼저 올리고, 그다음 게시판에도 올린다
         board_too = bool(res.board_only)
         song = (res.song or "").strip()
-        if song and config.get(self.conn, "live.song_free") != "1" and exp is not None and \
-                song != (exp["song"] or "").strip() and song != (db.get_profile(self.conn).get("song") or "").strip():
+        if song and config.get(self.conn, "live.song_free") != "1" and \
+                song != ((exp["song"] or "").strip() if exp is not None else "") and \
+                song != (db.get_profile(self.conn).get("song") or "").strip():
             song = ""   # '신청곡 알아서 고르기'를 끄면 경험·내 정보에 적힌 신청곡만 쓴다
-        message, source = (res.message or "").strip(), "ai"
+        message = (res.message or "").strip()
+        source = "ai_generated" if exp is None and res.experience_id == 0 else "ai"
         if exp is not None and res.use_user_line and (exp["gorilla_line"] or "").strip():
             message, source = exp["gorilla_line"].strip(), "user_line"
         limit = config.chat_limit(self.conn, schedule["channel"], answerer_mod.STORY_LIMIT)   # 앱 입력칸이 받는 글자 수
@@ -885,17 +888,17 @@ class Runner:
             message, source = story.approved_text(self.conn, exp, limit, song), "approved"
         elif song and message and len(message) + len(song) + 8 <= limit:
             message = f"{message} (신청곡: {song})"
-        if exp is None:
+        if exp is None and source != "ai_generated":
             message = ""
         warnings = story.message_checks(self.conn, message, exp, source, res.added_facts,
-                                        limit=limit) if exp is not None else []
+                                        limit=limit)
         if exp is not None and source == "ai" and warnings and config.get(self.conn, "live.story_approved") == "1":
             # 승인한(확인·고친) 경험이면 확인을 다시 받지 않는다: AI가 덧붙여 경고가 난 글 대신 승인한 글 그대로 보낸다
             plain = story.approved_text(self.conn, exp, limit, song)
             plain_warnings = story.message_checks(self.conn, plain, exp, "approved", limit=limit)
             if not story.has_block(plain_warnings):
                 message, source, warnings = plain, "approved", plain_warnings
-        note = res.fit_reason if exp is not None else "주제에 맞는 실제 경험이 없음 — 직접 써서 보내거나 건너뛰세요"
+        note = res.fit_reason
         board_body = (res.board_body or "").strip() or message
         # 채팅 글과 게시판 원고는 같은 경험 한 번 (원고 번호를 함께 적어 두면 같은 경험 검사에서 서로를 빼고 본다)
         draft_id = self.make_board_draft(program, exp, res.board_title, board_body, song,
@@ -903,6 +906,16 @@ class Runner:
             if board_too and exp is not None and board_body else None
 
         def add(target: str, text: str, src: str, warns: list) -> int:
+            if dup and target == "chat":
+                self.conn.execute(
+                    """UPDATE story_posts SET experience_id = ?, message = ?, source = ?, gorilla_accepted = ?,
+                           deadline = ?, warnings = ?, excerpt = ?, note = ?, board_title = ?, draft_id = ?, song = ?,
+                           chat_shots = ?, approved = 0, decision = NULL, updated_at = ? WHERE id = ?""",
+                    (exp["id"] if exp is not None else None, text, src, res.gorilla_accepted, res.deadline_hint or None,
+                     json.dumps(warns, ensure_ascii=False), transcript[-2000:], note, res.board_title or None,
+                     draft_id, song or None, len(images), db.now(), dup))
+                self.conn.commit()
+                return dup
             cur = self.conn.execute(
                 """INSERT INTO story_posts (schedule_id, channel, program, broadcast_date, topic, experience_id, message, source,
                        gorilla_accepted, deadline, warnings, excerpt, note, target, board_title, draft_id, song, chat_shots,
@@ -917,7 +930,7 @@ class Runner:
 
         pid = add("chat", message, source, warnings)
         db.log(self.conn, "quizbot", f"{program} 사연 주제 감지 #{pid}: {res.topic[:40]} → "
-                                     + (f"경험 #{exp['id']} 사용" if exp is not None else "맞는 경험 없음")
+                                     + (f"경험 #{exp['id']} 사용" if exp is not None else "주제에 맞춰 작성")
                                      + (" · 게시판 요청 → 채팅 먼저, 그다음 게시판" if board_too else "")
                                      + (f" · 채팅창 {len(images)}장 함께 분석" if images else ""))
         if self.try_send_story(pid, schedule) is None:

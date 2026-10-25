@@ -1566,8 +1566,10 @@ class Gorilla:
                 raise GorillaError("입력칸 위치가 지정되지 않았습니다. '① 입력칸 영역 지정'을 하세요.")
             self._check_layout(w)
             self._dismiss_dialog(w)
-            fill(w, self._fresh_point(w, "input"), text)
+            point = self._fresh_point(w, "input")
+            fill(w, point, text)
             self._wait(0.3)                       # 붙여넣은 글이 앱에 자리 잡은 뒤 등록
+            self._remember_filled(w, point)
             return None
         edit = self._find_input(w)
         self._check_point(w, self._center(edit), "입력칸")
@@ -1575,6 +1577,48 @@ class Gorilla:
         # (pywinauto click_input 은 다른 모니터에서 주 모니터 가장자리를 누름 → click_at)
         fill(w, self._center(edit), text, edit=edit)
         return edit
+
+    def _remember_filled(self, w, point: tuple[int, int]) -> None:
+        """글이 들어간 입력칸 사진 (보내기를 누른 뒤에도 그대로면 전송이 안 된 것 — 0.82)."""
+        self._input_pt, self._box = point, self._input_box(w, point)
+        try:
+            self._filled = grab_region(self._box)
+        except Exception:
+            self._filled = None
+
+    def _text_left(self, edit, text: str) -> bool:
+        """보내기를 누른 뒤에도 입력칸에 글이 그대로 남아 있는지 (확실할 때만 True — 모르면 False 로 두어 두 번 보내지 않음)."""
+        if edit is not None:
+            return text in (self._value(edit) or "")
+        got, what = focused_value()
+        if got and text in got and what.startswith("Edit"):     # 채팅 목록(보낸 글이 보이는 곳)은 아님
+            return True
+        filled = getattr(self, "_filled", None)
+        if filled is None:
+            return False
+        try:
+            after = grab_region(self._box)
+        except Exception:
+            return False
+        return after is not None and not region_changed(filled, after)
+
+    def _enter_retry(self, w, edit, text: str) -> bool:
+        """0.82 사용자 요청: 보내기 클릭이 안 됐으면(입력칸에 글이 그대로) 입력칸을 눌러 커서를 두고 '엔터'로 다시 보낸다.
+        엔터를 눌렀으면 True."""
+        from pywinauto.keyboard import send_keys
+
+        if not self._text_left(edit, text):
+            return False
+        if edit is not None:
+            self._click(w, self._center(edit), "입력칸")
+        else:
+            self._click_twice(w, self._input_pt)
+        self._wait(0.3)
+        self._check_front(w)
+        send_keys("{ENTER}")
+        time.sleep(1.5)
+        self.fixes.append("보내기 클릭이 안 돼 엔터로 다시 보냄")
+        return True
 
     def _press_send(self, w) -> None:
         from pywinauto.keyboard import send_keys
@@ -1728,6 +1772,7 @@ class Gorilla:
         shots, notes = [], []
         self.fixes = []
         self._refound = False
+        self._filled = None                              # 지난번 입력칸 사진은 쓰지 않음
 
         def run(w):
             def snap(name: str, label: str, points=()) -> None:
@@ -1748,8 +1793,11 @@ class Gorilla:
                 snap("test", "누르기 직전 (빨간 원 = 입력칸으로 누른 곳, 초록 원 = 전송 버튼)", self.click_points(w))
                 self._press_send(w)
                 time.sleep(1.5)
+                self._enter_retry(w, edit, text)             # 보내기 클릭이 안 됨 → 엔터로 다시 (0.82, fixes 에 남음)
                 after = self._value(edit) if edit is not None else None
                 result = judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
+                if self._text_left(edit, text):
+                    result = SendResult("failed", "보내기 클릭·엔터 모두 안 돼 입력칸에 글이 남아 있음 (전송 버튼 위치를 확인해 보세요)")
                 snap("test_sent", "보낸 뒤")
                 self._dismiss_dialog(w)
             except GorillaError:
@@ -1786,6 +1834,7 @@ class Gorilla:
         shots = []
         self.fixes = []
         self._refound = False
+        self._filled = None                              # 지난번 입력칸 사진은 쓰지 않음
 
         def run(w):
             label = f"보내지 못했을 때 {self.cfg.label} 창"
@@ -1797,6 +1846,13 @@ class Gorilla:
                 if self.close_dialog(w):          # 빈 칸이 전송돼 확인 창이 뜸 = 보내지 못함 → 닫고 다음에 다시
                     return SendResult("failed", f"{self.cfg.label} 입력칸이 비어 '메시지를 작성해주세요' 창이 떠서 닫았습니다 "
                                                 "— 보내지 못해 잠시 뒤 다시 보냅니다")
+                if self._enter_retry(w, edit, text):     # 보내기 클릭이 안 됨 → 엔터로 다시 (0.82)
+                    if self.close_dialog(w):
+                        return SendResult("failed", f"{self.cfg.label} 엔터로 다시 보냈더니 '메시지를 작성해주세요' 창이 떠서 "
+                                                    "닫았습니다 — 잠시 뒤 다시 보냅니다")
+                    if self._text_left(edit, text):
+                        return SendResult("failed", f"{self.cfg.label} 보내기 클릭·엔터 모두 안 돼 입력칸에 글이 남아 있습니다 "
+                                                    "— 잠시 뒤 다시 보냅니다 (전송 버튼 위치를 확인해 보세요)")
                 self._dismiss_dialog(w)          # 레인보우: 전송 뒤 확인 창이 남아 다음 전송을 막지 않게
                 after = self._value(edit) if edit is not None else None
                 return judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))

@@ -284,3 +284,70 @@ def test_unreadable_and_no_screenshot_still_sends(desk, monkeypatch):
     g = coords_gorilla(app="mini", process_name="mbc mini.exe")
     g._put_text(Win(), "정답")
     assert desk.keys == ["^a{BACKSPACE}", "^v"] and g.fixes == []
+
+
+# ── 0.82: 보내기 클릭이 안 되면(입력칸에 글이 그대로) 입력칸을 눌러 '엔터'로 다시 ─────────────────────
+SEND_POINT = (1576, 902)
+
+
+def sending(mini_box, desk, monkeypatch, click_works: bool, enter_works: bool, app="mini"):
+    """보내기 클릭·엔터가 입력칸을 비우는지(=전송됐는지) 정해 두고 한 번 보낸다."""
+    def click(x, y, clicks=1):
+        desk.clicks.append((x, y) if clicks == 1 else (x, y, clicks))
+        if (x, y) == SEND_POINT and click_works:
+            mini_box.value = ""
+    monkeypatch.setattr(gorilla, "click_at", click)
+
+    def keys(k, pause=None):
+        desk.keys.append(k)
+        mini_box.keys(k)
+        if k == "{ENTER}" and enter_works:
+            mini_box.value = ""
+    sys.modules["pywinauto.keyboard"].send_keys = keys
+    g = coords_gorilla(app=app, process_name="flutter_rainbow.exe" if app == "rainbow" else "mbc mini.exe")
+    monkeypatch.setattr(g, "_with_focus", lambda fn: fn(Win()))
+    monkeypatch.setattr(g, "evidence_image", lambda w: None)
+    return g, g.send("정답은 사과")
+
+
+def test_send_click_works_no_enter(mini_box, desk, monkeypatch):
+    g, r = sending(mini_box, desk, monkeypatch, click_works=True, enter_works=True)
+    assert r.status == "entered" and "{ENTER}" not in desk.keys and g.fixes == []
+
+
+def test_send_click_ignored_then_enter(mini_box, desk, monkeypatch):
+    g, r = sending(mini_box, desk, monkeypatch, click_works=False, enter_works=True)
+    assert r.status == "entered" and desk.keys[-1] == "{ENTER}"
+    assert "엔터로 다시 보냄" in r.detail
+    after_send = desk.clicks[desk.clicks.index(SEND_POINT) + 1:]
+    assert after_send == [(1320, 902), (1320, 902)]                  # 입력칸을 다시 눌러 커서를 두고 엔터
+
+
+def test_rainbow_send_click_ignored_then_enter(mini_box, desk, monkeypatch):
+    g, r = sending(mini_box, desk, monkeypatch, click_works=False, enter_works=True, app="rainbow")
+    assert r.status == "entered" and "{ENTER}" in desk.keys and "엔터로 다시 보냄" in r.detail
+
+
+def test_click_and_enter_both_fail_is_retried_later(mini_box, desk, monkeypatch):
+    g, r = sending(mini_box, desk, monkeypatch, click_works=False, enter_works=False)
+    assert r.status == "failed" and "엔터 모두 안 돼" in r.detail and desk.keys.count("{ENTER}") == 1
+
+
+def test_unknown_input_state_does_not_press_enter(desk, monkeypatch):
+    """입력칸 사진을 못 찍는 등 남았는지 모르면 엔터를 누르지 않는다 (두 번 보내지 않게)."""
+    monkeypatch.setattr(gorilla, "focused_value", lambda: (None, ""))
+    monkeypatch.setattr(gorilla, "grab_region", lambda box: (_ for _ in ()).throw(OSError("no screen")))
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    monkeypatch.setattr(g, "_with_focus", lambda fn: fn(Win()))
+    monkeypatch.setattr(g, "evidence_image", lambda w: None)
+    r = g.send("정답")
+    assert r.status == "entered" and "{ENTER}" not in desk.keys
+
+
+def test_chat_list_focus_is_not_taken_for_input(desk, monkeypatch):
+    monkeypatch.setattr(gorilla, "focused_value", lambda: ("…정답은 사과", "List '채팅'"))
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    g._filled = None
+    assert g._text_left(None, "정답은 사과") is False
+    monkeypatch.setattr(gorilla, "focused_value", lambda: ("정답은 사과", "Edit '메시지'"))
+    assert g._text_left(None, "정답은 사과") is True

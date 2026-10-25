@@ -186,12 +186,18 @@ def test_user_line_auto_send_when_allowed(conn):
     assert post["source"] == "user_line" and post["decision"] == "직접 쓴 한 줄 자동 전송"
 
 
-def test_story_skipped_without_confirmed_experiences_and_merges_topics(conn):
+def test_story_written_without_confirmed_experiences_and_merges_topics(conn):
     add_schedule(conn)
-    ans = FullAnswerer()
+    # 0.82 사용자 결정: 확인된 경험이 없어도 분석해서 주제에 맞는 사연을 AI가 작성 (확인 대기 — 자동 전송 꺼짐)
+    ans = FullAnswerer(stories=[story_for(0, message="첫 출근 날 너무 떨려서 넥타이를 두 번 맸어요")])
     r, clock, _ = make(conn, {3: "오늘의 주제 첫 출근"}, ans)
     run_window(r, clock)
-    assert ans.story_calls == []  # 확인된 경험이 없으면 유료 분석을 하지 않는다
+    assert ans.story_calls == [[]]
+    post = conn.execute("SELECT * FROM story_posts").fetchone()
+    assert post["source"] == "ai_generated" and post["experience_id"] is None and "넥타이" in post["message"]
+    assert post["status"] == "pending"
+    conn.execute("DELETE FROM story_posts")
+    conn.commit()
 
     eid = make_experience(conn)
     make_experience(conn, story="다른 실제 경험")  # 첫 경험이 확인 대기 글에 묶여도 분석할 경험이 남도록
@@ -235,13 +241,39 @@ def test_blocked_story_stays_blocked_when_approved_auto_off(conn):
     assert sender.sent == [] and "막힌 항목" in post["decision"]
 
 
-def test_no_fitting_experience_records_topic_for_manual(conn):
-    add_schedule(conn)
+def test_no_fitting_experience_ai_writes_and_auto_sends(conn):
+    """0.82 사용자 결정: 맞는 경험이 없으면 AI가 주제에 맞춰 쓴 글(ai_generated)을 기존 자동 전송 설정대로 보낸다."""
+    add_schedule(conn, story_auto_ai=1, gorilla_confirmed=1)
     make_experience(conn)
-    r, clock, _ = make(conn, {3: "오늘의 주제 첫 출근"}, FullAnswerer(stories=[story_for(0, message="지어낸 글")]))
+    sender = FakeGorilla()
+    r, clock, _ = make(conn, {3: "오늘의 주제 첫 출근"},
+                       FullAnswerer(stories=[story_for(0, message="첫 출근 날 지하철을 반대로 탔어요")]), sender)
     run_window(r, clock)
     post = conn.execute("SELECT * FROM story_posts").fetchone()
-    assert post["experience_id"] is None and post["message"] == "" and "맞는 실제 경험이 없음" in post["note"]
+    assert post["experience_id"] is None and post["source"] == "ai_generated"
+    assert sender.sent == ["첫 출근 날 지하철을 반대로 탔어요"]
+
+
+def test_ai_written_story_keeps_privacy_and_sensitive_checks(conn):
+    add_schedule(conn, story_auto_ai=1, gorilla_confirmed=1)
+    sender = FakeGorilla()
+    r, clock, _ = make(conn, {3: "오늘의 주제 첫 출근"},
+                       FullAnswerer(stories=[story_for(0, message="첫 출근 날 제 번호 010-1234-5678 로 연락 주세요")]), sender)
+    run_window(r, clock)
+    post = conn.execute("SELECT * FROM story_posts").fetchone()
+    assert sender.sent == [] and post["status"] == "pending"            # 전화번호 → 막힘, 보내지 않음
+    assert story.message_checks(conn, "첫 출근 날 교통사고가 났어요", None, "ai_generated")   # 민감한 사건 → 경고
+
+
+def test_ai_wrong_experience_number_is_not_written(conn):
+    """AI가 이 방송국에 쓸 수 없는 경험 번호를 고르면(이미 보낸 경험 등) 지어서 채우지 않고 빈 글로 둔다."""
+    add_schedule(conn, story_auto_ai=1, gorilla_confirmed=1)
+    make_experience(conn)
+    sender = FakeGorilla()
+    r, clock, _ = make(conn, {3: "오늘의 주제 첫 출근"}, FullAnswerer(stories=[story_for(999, message="다른 글")]), sender)
+    run_window(r, clock)
+    post = conn.execute("SELECT * FROM story_posts").fetchone()
+    assert sender.sent == [] and post["message"] == "" and post["source"] == "ai"
 
 
 def test_empty_story_is_never_pasted_even_with_auto_send(conn):

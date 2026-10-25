@@ -31,7 +31,7 @@ RECRUITING = {"unknown": "미확인", "open": "모집 중", "closed": "모집 �
 AI_POLICY = {"unknown": "미확인", "allowed": "제한 없음 확인", "restricted": "제한 있음"}
 DRAFT_STATUS = {"draft": "작성 중", "approved": "승인됨", "archived": "보관"}
 SOURCE = {"template": "템플릿 초안", "pasted": "AI 결과 붙여넣음", "manual": "직접 작성"}
-STORY_SOURCE = {"ai": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀",
+STORY_SOURCE = {"ai": "AI 초안", "ai_generated": "AI 초안", "user_line": "직접 쓴 한 줄", "edited": "고친 글", "manual": "직접 씀",
                 "approved": "승인한 내 사연 그대로", "song": "신청곡 (DJ 한마디)"}
 LIVE_OPTIONS = (("live.auto_quiz", "auto_quiz"), ("live.auto_story", "auto_story"), ("live.gift", "gift"),
                 ("live.captions", "captions"), ("live.witty", "witty"), ("live.quiz_always", "quiz_always"),

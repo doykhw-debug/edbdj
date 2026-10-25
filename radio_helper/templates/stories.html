@@ -8,7 +8,7 @@
   <span class="hint">'문자로만 받는다'·'게시판에만'으로 막혔던 것 — 문자로만 받는 방송은 없어 모두 채팅으로 보냅니다 (게시판 요청은 채팅 먼저, 그다음 게시판)</span></form>
 
 <div class="grid" style="margin-bottom:16px">
-  <a class="stat" href="{{ url_for('experiences') }}"><span class="muted">실제 경험</span><b>{{ counts.experiences }}</b><span class="muted">사실 확인 {{ counts.confirmed }}건 · 사연은 이것으로만 씀</span></a>
+  <a class="stat" href="{{ url_for('experiences') }}"><span class="muted">실제 경험</span><b>{{ counts.experiences }}</b><span class="muted">사실 확인 {{ counts.confirmed }}건 · 주제에 맞으면 우선 사용</span></a>
   <a class="stat" href="{{ url_for('import_page') }}"><span class="muted">특징·경험 가져오기</span><b>↓</b><span class="muted">파일로 한 번에 넣기</span></a>
   <a class="stat" href="{{ url_for('drafts') }}"><span class="muted">게시판 원고 검토</span><b>{{ counts.drafts }}</b><span class="muted">작성 중 원고</span></a>
   <a class="stat" href="{{ url_for('submissions') }}"><span class="muted">게시판 제출 이력</span><b>{{ counts.unresolved }}</b><span class="muted">등록 확인 필요</span></a>
@@ -30,7 +30,7 @@
 </div>
 
 <div class="panel" id="pending">
-  <h2>확인 대기 <span class="muted">진행자가 주제를 주고 사연을 받을 때 · 경고가 있거나 경험이 안 맞아 자동으로 보내지 않은 글</span>
+  <h2>확인 대기 <span class="muted">진행자가 주제를 주고 사연을 받을 때 · 검사 경고가 있거나 자동 전송이 꺼져 있는 글</span>
   {% if nav_pending.stories %}
   <form method="post" action="{{ url_for('notices_seen') }}" style="display:inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="kind" value="stories">
@@ -38,8 +38,7 @@
     <button class="secondary" style="font-size:13px;margin-left:6px" title="메뉴의 빨간 숫자만 지웁니다 (글은 그대로)">✓ 알림 확인함</button>
   </form>{% endif %}</h2>
   {% if not counts.confirmed %}
-    <div class="flash warn">'실제로 있었던 일'로 확인한 경험이 없어 사연 글을 만들지 않습니다.
-      <a href="{{ url_for('experiences') }}">실제 경험</a>을 적거나 <a href="{{ url_for('import_page') }}">가져오기</a>를 하세요.</div>
+    <div class="flash">맞는 실제 경험이 없으면 AI가 주제에 맞는 사연을 작성합니다. 사연 자동 전송이 켜져 있고 검사 경고가 없으면 바로 보냅니다.</div>
   {% endif %}
   {% for p, warns in pending %}
   <div style="border-bottom:1px solid var(--line);padding:10px 0">
