@@ -71,7 +71,8 @@ def resend_wrong_holds(conn, since: str) -> dict:
                        f"AND kind = 'new' AND created_at >= ? AND ({like})", (note, db.now(), since, *WRONG_HOLD_LIKE))
     out["quizzes"] = cur.rowcount
     cur = conn.execute(f"UPDATE story_posts SET approved = 1, decision = ?, updated_at = ? WHERE status = 'pending' "
-                       f"AND COALESCE(target, 'chat') = 'chat' AND created_at >= ? AND ({like})",
+                       f"AND COALESCE(target, 'chat') = 'chat' AND TRIM(COALESCE(message, '')) != '' "
+                       f"AND created_at >= ? AND ({like})",
                        (note, db.now(), since, *WRONG_HOLD_LIKE))
     out["stories"] = cur.rowcount
     for b in conn.execute(f"SELECT * FROM story_posts WHERE status = 'pending' AND target = 'board' AND created_at >= ? "
@@ -1290,6 +1291,10 @@ class Runner:
                 self.conn.commit()
                 return None
         retried[key] = now
+        if not (text or "").strip():                 # 0.80: 빈 글은 붙여넣지 않는다 (붙여넣어도 앱이 '메시지를 작성해주세요')
+            self._hold(table, item_id, "보류: 보낼 글이 비어 있음 — 빈 글은 보내지 않음")
+            db.log(self.conn, "quizbot", f"{label}: 보낼 글이 비어 있어 보내지 않았습니다")
+            return None
         number, app = None, config.chat_app(self.conn, channel)
         if route == "sms":
             number = config.sms_number(self.conn, channel)

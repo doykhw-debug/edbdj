@@ -265,7 +265,31 @@ DISMISS_DIALOG = {"rainbow"}            # Esc 로도 닫는 앱
 # 0.77: 'mini 메세지를 작성해주세요.'(MBC mini)·'채팅을 입력하세요'(레인보우) — 빈 칸이 전송될 때 뜨는 확인 창
 DIALOG_APPS = {"mini", "rainbow"}
 DIALOG_TEXT = re.compile(r"메[세시]지를\s*(작성|입력)|채팅을\s*입력|내용을\s*(작성|입력)")
-SLOW_APPS = {"mini": 2.0, "rainbow": 2.0}   # 0.77 사용자 요청: 창 띄우기·클릭·붙여넣기·등록 사이를 더 천천히 (배수)
+SLOW_APPS = {"mini": 2.0, "rainbow": 2.0}
+# 0.80 사용자 요청 (MBC mini): 입력칸을 간격 두고 두 번 클릭 → 붙여넣기 → 2초 뒤 입력칸 확인 → 됐으면 등록,
+# 안 됐으면 복사·붙여넣기부터 다시 (최대 PASTE_TRIES 번)
+PASTE_CHECK_APPS = {"mini"}
+PASTE_CHECK_SECONDS = 2.0
+PASTE_TRIES = 3
+CLICK_GAP_SECONDS = 0.6
+
+
+def grab_region(box: tuple[int, int, int, int]):
+    """화면의 그 부분 사진 (입력칸이 바뀌었는지 보려고)."""
+    from PIL import ImageGrab
+
+    return ImageGrab.grab(bbox=box, all_screens=True)
+
+
+def region_changed(before, after, threshold: float = 0.004) -> bool:
+    """두 사진이 눈에 띄게 다른지 (입력칸에 글이 들어가면 안내 글이 사라지고 글자가 생김)."""
+    if before is None or after is None or before.size != after.size:
+        return False
+    a, b = before.convert("L"), after.convert("L")
+    pa, pb = a.load(), b.load()
+    w, h = a.size
+    diff = sum(1 for y in range(h) for x in range(w) if abs(pa[x, y] - pb[x, y]) > 40)
+    return diff / max(1, w * h) >= threshold   # 0.77 사용자 요청: 창 띄우기·클릭·붙여넣기·등록 사이를 더 천천히 (배수)
 
 
 def is_dialog_purple(r: int, g: int, b: int) -> bool:
@@ -1467,22 +1491,80 @@ class Gorilla:
                            f"지금 커서 자리: {where or '모름'}, 읽은 글: '{(got2 or got or '')[:20]}'). "
                            "입력칸 위치를 다시 지정하거나 앱 입력칸을 한 번 직접 눌러 보세요.")
 
+    def _input_box(self, w, point: tuple[int, int]) -> tuple[int, int, int, int]:
+        """입력칸 둘레 (입력칸을 누른 자리 좌우로 넓게, 위아래로 얇게 — 창 안으로 자름)."""
+        left, top, right, bottom = self._frame(w)
+        x, y = point
+        return max(left, x - 220), max(top, y - 16), min(right, x + 220), min(bottom, y + 16)
+
+    def _fill_checked(self, w, point: tuple[int, int], text: str, edit=None) -> None:
+        """MBC mini (0.80 사용자 요청): ① 입력칸을 간격 두고 두 번 클릭 ② 지우고 → 복사 → 붙여넣기 → 2초 뒤 입력칸 확인
+        (글을 읽을 수 있으면 글로, 못 읽으면 입력칸 사진이 바뀌었는지로) ③ 안 됐으면 복사·붙여넣기부터 다시.
+        그래도 안 되면 한 글자씩 입력해 보고, 그것도 안 되면 등록을 누르지 않는다."""
+        from pywinauto.keyboard import send_keys
+
+        box = self._input_box(w, point)
+        for n in range(1, PASTE_TRIES + 1):
+            self._click(w, point, "입력칸")
+            time.sleep(CLICK_GAP_SECONDS)
+            self._click(w, point, "입력칸")              # 두 번째 클릭으로 확실히 입력칸에 커서
+            self._wait(0.2)
+            self._check_front(w)
+            send_keys("^a{BACKSPACE}", pause=0.08)
+            self._wait(0.2)
+            try:
+                before = grab_region(box)
+            except Exception:
+                before = None
+            self._clipboard(text)                         # 복사
+            time.sleep(0.2)
+            self._check_front(w)
+            send_keys("^v", pause=0.08)                    # 붙여넣기
+            time.sleep(PASTE_CHECK_SECONDS)                # 2초 기다린 뒤 확인
+            got, where = self._read_input(edit)
+            if got is not None:
+                ok = self._check_filled(text, got)
+            else:
+                try:
+                    ok = region_changed(before, grab_region(box))
+                except Exception:
+                    ok = True                              # 확인할 길이 없으면 예전처럼 보냄
+            if ok:
+                if n > 1:
+                    self.fixes.append(f"붙여넣기가 {n - 1}번 안 들어가 다시 붙여넣음")
+                return
+        self._click(w, point, "입력칸")                    # 붙여넣기가 끝내 안 됨 → 한 글자씩
+        time.sleep(CLICK_GAP_SECONDS)
+        self._click(w, point, "입력칸")
+        self._check_front(w)
+        send_keys("^a{BACKSPACE}", pause=0.08)
+        type_unicode(text)
+        time.sleep(PASTE_CHECK_SECONDS)
+        got, where = self._read_input(edit)
+        ok = self._check_filled(text, got) if got is not None else region_changed(before, grab_region(box))
+        if ok:
+            self.fixes.append(f"붙여넣기가 {PASTE_TRIES}번 안 들어가 한 글자씩 입력함")
+            return
+        raise GorillaError(f"{self.cfg.label} 입력칸에 글이 들어가지 않아 등록을 누르지 않았습니다 (붙여넣기 {PASTE_TRIES}번·직접 입력 모두, "
+                           f"지금 커서 자리: {where or '모름'}). 입력칸 위치를 다시 지정해 보세요.")
+
     def _put_text(self, w, text: str):
         """입력칸에 글자를 넣고 입력칸 객체(uia) 또는 None(coords)을 돌려준다.
         앱이 키 입력으로 글자를 인식하도록 실제 클릭 후 붙여넣기를 먼저 쓰고, 들어갔는지 확인한다."""
+        fill = self._fill_checked if self.cfg.app in PASTE_CHECK_APPS else self._fill
         if self.cfg.input_mode in ("coords", "screen"):
             if not self._has_point("input"):
                 raise GorillaError("입력칸 위치가 지정되지 않았습니다. '① 입력칸 영역 지정'을 하세요.")
             self._check_layout(w)
             self._dismiss_dialog(w)
-            self._fill(w, self._fresh_point(w, "input"), text)
+            fill(w, self._fresh_point(w, "input"), text)
             self._wait(0.3)                       # 붙여넣은 글이 앱에 자리 잡은 뒤 등록
             return None
         edit = self._find_input(w)
         self._check_point(w, self._center(edit), "입력칸")
         self._dismiss_dialog(w)
         # (pywinauto click_input 은 다른 모니터에서 주 모니터 가장자리를 누름 → click_at)
-        self._fill(w, self._center(edit), text, edit=edit)
+        fill(w, self._center(edit), text, edit=edit)
         return edit
 
     def _press_send(self, w) -> None:
@@ -1690,6 +1772,8 @@ class Gorilla:
 
     def send(self, text: str) -> SendResult:
         text = flat_text(text)
+        if not text:                                     # 0.80: 빈 글은 붙여넣지도 등록하지도 않음
+            return SendResult("failed", "보낼 글이 비어 있어 입력하지 않았습니다")
         shots = []
         self.fixes = []
         self._refound = False

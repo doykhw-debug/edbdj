@@ -198,6 +198,8 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
     if post["status"] != "pending":
         reasons.append(f"이미 처리됨({quiz.ENTRY_LABELS.get(post['status'], post['status'])})")
     warnings = json.loads(post["warnings"] or "[]")
+    if not (post["message"] or "").strip():      # 0.80: 맞는 경험이 없으면 글이 비어 있음 — 빈 글을 붙여넣어 '메시지를 작성해주세요'가 떴음
+        reasons.append("보낼 글이 비어 있음 (주제에 맞는 경험이 없음 — 직접 써서 보내거나 건너뛰기)")
     if has_block(warnings):
         reasons.append("검사에서 막힌 항목이 있음")
     # 0.76: 응모 방법 판단('문자로만' 등)으로 막지 않는다 — 문자로만 받는 방송은 없음, 무조건 채팅

@@ -244,6 +244,22 @@ def test_no_fitting_experience_records_topic_for_manual(conn):
     assert post["experience_id"] is None and post["message"] == "" and "맞는 실제 경험이 없음" in post["note"]
 
 
+def test_empty_story_is_never_pasted_even_with_auto_send(conn):
+    """0.80 원인: 맞는 경험이 없으면 글이 비는데, 자동 전송이 켜져 있으면 빈 글을 붙여넣고 등록을 눌러
+    MBC mini 가 'mini 메세지를 작성해주세요.'를 띄웠음 → 빈 글은 보내지 않는다 (승인해도)."""
+    add_schedule(conn, story_auto_ai=1, gorilla_confirmed=1)
+    make_experience(conn)
+    sender = FakeGorilla()
+    r, clock, _ = make(conn, {3: "오늘의 주제 첫 출근"}, FullAnswerer(stories=[story_for(0, message="")]), sender=sender)
+    run_window(r, clock)
+    post = conn.execute("SELECT * FROM story_posts").fetchone()
+    assert sender.tried == [] and post["status"] == "pending" and "비어" in post["decision"]
+    conn.execute("UPDATE story_posts SET approved = 1")
+    conn.commit()
+    r.process_approved(None)
+    assert sender.tried == [] and "비어" in conn.execute("SELECT decision FROM story_posts").fetchone()[0]
+
+
 def test_gifts_recorded_by_channel_and_merged(conn):
     add_schedule(conn, story_enabled=0)
     g1 = {"gift": "커피 기프티콘", "condition": "정답자 중 추첨", "entry_method": "", "related": "quiz",

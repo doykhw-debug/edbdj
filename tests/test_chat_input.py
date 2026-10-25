@@ -137,17 +137,21 @@ def test_find_dialog_button_only_for_the_confirm_box():
 
 
 def test_mini_dialog_closed_before_typing_and_points_refound(desk, monkeypatch):
+    monkeypatch.setattr(gorilla, "PASTE_CHECK_SECONDS", 0)
+    monkeypatch.setattr(gorilla, "CLICK_GAP_SECONDS", 0)
     shots = iter([mini_window(), mini_window(dialog=False)])
     monkeypatch.setattr(gorilla, "window_image", lambda handle: next(shots, mini_window(dialog=False)))
     monkeypatch.setattr(gorilla, "focused_value", lambda: (None, ""))
     g = coords_gorilla(app="mini", process_name="mbc mini.exe")
     g._put_text(Win(), "정답은 사과")
     assert near(desk.clicks[0], (1340, 502))                                    # 먼저 '확인'을 눌러 창을 닫고
-    assert len(desk.clicks) == 2 and desk.keys == ["^a{BACKSPACE}^v"]           # 입력칸 → 붙여넣기 (Esc 는 안 씀)
+    assert len(desk.clicks) == 3 and desk.keys == ["^a{BACKSPACE}", "^v"]       # 입력칸 두 번 → 지우고 → 붙여넣기 (Esc 는 안 씀)
     assert g._refound and "확인 창을 닫음" in g.fixes[0]
 
 
 def test_dialog_after_send_means_not_sent(desk, monkeypatch):
+    monkeypatch.setattr(gorilla, "PASTE_CHECK_SECONDS", 0)
+    monkeypatch.setattr(gorilla, "CLICK_GAP_SECONDS", 0)
     state = {"sent": False}
 
     def image(handle):
@@ -174,3 +178,72 @@ def test_mini_and_rainbow_wait_longer(monkeypatch):
     coords_gorilla(app="mini")._wait(0.3)
     coords_gorilla(app="gorilla")._wait(0.3)
     assert waited == [0.6, 0.3]
+
+
+
+# ── 0.80: MBC mini — 간격 두고 두 번 클릭 → 붙여넣기 → 2초 뒤 확인 → 안 됐으면 복사·붙여넣기부터 다시 ──────────
+class InputBox:
+    """mini 입력칸 흉내: 붙여넣기가 몇 번째부터 들어가는지 정하고, 입력칸 사진(글이 있으면 다름)을 돌려준다."""
+
+    def __init__(self, works_from=1):
+        from PIL import Image
+
+        self.works_from, self.pastes, self.value, self.clip = works_from, 0, "", None
+        self.empty = Image.new("L", (440, 32), 240)
+        self.full = Image.new("L", (440, 32), 240)
+        self.full.paste(20, (10, 8, 300, 24))                                       # 글자 줄
+
+    def keys(self, k, pause=None):
+        if k == "^a{BACKSPACE}":
+            self.value = ""
+        elif k == "^v":
+            self.pastes += 1
+            if self.pastes >= self.works_from:
+                self.value = self.clip or ""
+
+    def grab(self, box):
+        return self.full if self.value else self.empty
+
+
+@pytest.fixture
+def mini_box(desk, monkeypatch):
+    box = InputBox()
+    sys.modules["pywinauto.keyboard"].send_keys = lambda k, pause=None: (desk.keys.append(k), box.keys(k))
+    monkeypatch.setattr(gorilla.Gorilla, "_clipboard", staticmethod(lambda text=None: setattr(box, "clip", text) or text))
+    monkeypatch.setattr(gorilla, "grab_region", box.grab)
+    monkeypatch.setattr(gorilla, "focused_value", lambda: (None, ""))              # mini 는 입력칸 글을 못 읽는다고 봄
+    monkeypatch.setattr(gorilla, "window_image", lambda h: None)
+    monkeypatch.setattr(gorilla, "PASTE_CHECK_SECONDS", 0)
+    monkeypatch.setattr(gorilla, "CLICK_GAP_SECONDS", 0)
+    waited = []
+    monkeypatch.setattr(gorilla.time, "sleep", waited.append)
+    box.waited = waited
+    return box
+
+
+def test_mini_clicks_twice_pastes_and_checks(mini_box, desk):
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    g._put_text(Win(), "정답은 사과")
+    assert len(desk.clicks) == 2 and all(len(c) == 2 for c in desk.clicks)        # 두 번 따로 클릭 (더블클릭 아님)
+    assert desk.keys == ["^a{BACKSPACE}", "^v"] and mini_box.value == "정답은 사과" and g.fixes == []
+
+
+def test_mini_paste_retried_from_copy(mini_box, desk):
+    mini_box.works_from = 3                                                         # 붙여넣기가 두 번 안 들어감
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    g._put_text(Win(), "정답은 사과")
+    assert mini_box.pastes == 3 and len(desk.clicks) == 6 and "2번 안 들어가 다시 붙여넣음" in g.fixes[0]
+
+
+def test_mini_never_pasted_does_not_press_register(mini_box, desk, monkeypatch):
+    mini_box.works_from = 99
+    monkeypatch.setattr(gorilla, "type_unicode", lambda text, **kw: None)          # 직접 입력도 안 됨
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    with pytest.raises(gorilla.GorillaError, match="등록을 누르지 않았습니다"):
+        g._put_text(Win(), "정답은 사과")
+    assert mini_box.pastes == gorilla.PASTE_TRIES
+
+
+def test_empty_text_is_never_pasted(desk):
+    r = coords_gorilla(app="mini").send("  \n ")
+    assert r.status == "failed" and "비어" in r.detail and desk.clicks == [] and desk.keys == []

@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-25, 0.79 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-25, 0.80 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -30,6 +30,7 @@
 | 0.77 | MBC mini 'mini 메세지를 작성해주세요.' 확인 창: gorilla.close_dialog (UI 자동화 → 보라색 '확인' 단추 찾기 find_dialog_button), 닫은 뒤 _fresh_point 로 자리 다시 찾기, 등록 뒤 창이 뜨면 failed(다시 보냄). mini·레인보우 SLOW_APPS 기다림 2배 |
 | 0.78 | KBS 로그인 확인·미리 로그인은 radio.kbs.co.kr (boards.LOGIN_PAGES, HOMES) — 게시판 화면(knews 등)으로는 판단이 안 됨 |
 | 0.79 | 채팅 입력 차례 줄: runner.shared_input_lock 이 데이터 폴더 input_queue 의 표(시각_pid)로 먼저 온 순서대로, 최대 300초, 넘어갈 때 0.8초. 채팅창 찍기의 확인 창 클릭은 차례가 비었을 때만 |
+| 0.80 | **빈 글 원인**: 맞는 경험 없음 → message "" 인데 message_checks 가 exp 있을 때만 돌아 자동 전송됨 → story.decide·runner.deliver·Gorilla.send 에서 빈 글 막음. mini: gorilla._fill_checked (두 번 클릭·2초 뒤 확인·최대 3번 다시, 사진 비교 region_changed) |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).
