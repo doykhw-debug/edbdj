@@ -80,6 +80,11 @@ def create_app(data_dir: str | None = None) -> Flask:
             db.log(conn, "post", f"코너 목록 정리: 게시판이 아닌 '글 하나' 주소 {gone}개를 지웠습니다 (0.63 코너 게시판 모으기가 잘못 넣은 것)")
     if not server.is_server():
         boards.enable_daily_once(conn)
+        if db.get_setting(conn, "meta.browser_075") != "1":    # 0.75: Aside CLI 를 먼저 쓰도록 'Aside 확장 새 탭' 고정을 '자동'으로
+            db.set_setting(conn, "meta.browser_075", "1")
+            if db.get_setting(conn, aside.BROWSER_KEY) == "tab":
+                db.set_setting(conn, aside.BROWSER_KEY, "auto")
+                db.log(conn, "post", "게시판 작업을 '자동 (Aside CLI, 안 되면 확장 새 탭)'으로 바꿨습니다")
         if db.get_setting(conn, "meta.logins_074") != "1":     # 0.74: Edge 보조 창 시절의 로그인 표시는 내 Aside 와 달라 지움
             db.set_setting(conn, "meta.logins_074", "1")
             db.set_setting(conn, boards.LOGIN_KEY, "")

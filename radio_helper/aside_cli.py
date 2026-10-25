@@ -38,7 +38,8 @@ class AsideCliError(RuntimeError):
 def candidates(env=os.environ) -> list[str]:
     home = env.get("USERPROFILE") or env.get("HOME") or ""
     local = env.get("LOCALAPPDATA") or ""
-    out = []
+    # 0.75: 사용자 PC 에서 확인한 자리 (Aside 1.26 윈도우: %LOCALAPPDATA%\Aside\CLI\current\aside.exe)
+    out = [os.path.join(local, "Aside", "CLI", "current", "aside.exe")] if local else []
     for base in ([os.path.join(home, ".local", "bin"), os.path.join(home, ".aside", "bin")] if home else []) + \
             ([os.path.join(local, "Aside", "bin"), os.path.join(local, "Programs", "Aside", "bin")] if local else []):
         out += [os.path.join(base, n) for n in ("aside.exe", "aside.cmd", "aside")]
@@ -173,7 +174,13 @@ def install_skills(conn, runner=None) -> str:
 # ── 페이지 안에서 돌리는 코드 (확장 content.js 와 같은 기준) ─────────────────
 LIB = r"""
 const vis = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-const text = () => (document.body ? document.body.innerText : "").slice(0, 20000);
+function frameText(doc, depth) {          // 같은 사이트 안쪽 틀(iframe)의 글도 (KBS 게시판 등)
+  let t = "";
+  if (!doc || depth > 2) return t;
+  doc.querySelectorAll("iframe").forEach(f => { try { const d = f.contentDocument; if (d && d.body) t += "\n" + d.body.innerText + frameText(d, depth + 1); } catch (e) {} });
+  return t;
+}
+const text = () => ((document.body ? document.body.innerText : "") + frameText(document, 0)).slice(0, 20000);
 const words = el => [el.name, el.id, el.placeholder, el.title, el.getAttribute("aria-label"),
                      (el.closest("tr, li, dl, .row, .form-group") || {}).innerText || ""].join(" ");
 function q(sel) {
@@ -259,6 +266,9 @@ def read_script(url: str) -> str:
         f"const pg = await openTab({_js(url)});",
         "try { await pg.waitForLoadState(\"load\"); } catch (e) {}",
         "await sleep(2500);",
+        # 늦게 그려지는 화면(KBS 등): 글이 적으면 조금씩 더 기다린다 (최대 6초)
+        "for (let i = 0; i < 4; i++) { const n = await pg.evaluate(" + _js(page_expr("return text().length;")) +
+        "); if (n > 400) break; await sleep(1500); }",
         "const first = JSON.parse(await pg.evaluate(" + _js(page_expr(
             "const before = text(); const clicked = clickText(RULES);"
             "const links = [...document.querySelectorAll('a[href]')].map(a => [a.href, (a.innerText || '').trim().slice(0, 60)]);"
@@ -410,16 +420,20 @@ def post(conn, draft, corner, allow_window: bool = True, dry_run: bool = False, 
     return sub_id
 
 
-def check_login(conn, url: str, runner=None) -> tuple[bool | None, str]:
-    """그 방송국 화면을 내 Aside 로 열어 로그인 여부 (tabbridge.login_from_text 기준)."""
+def check_login(conn, url: str, runner=None, home: str = "") -> tuple[bool | None, str]:
+    """그 방송국 화면을 내 Aside 로 열어 로그인 여부 (tabbridge.login_from_text 기준).
+    게시판 화면으로 판단이 안 되면(KBS — 위쪽 메뉴에 로그인·로그아웃 글이 안 보임) 방송국 첫 화면으로 한 번 더 본다."""
     from .tabbridge import login_from_text
 
-    try:
-        got = run(read_script(url), runner=runner)["data"]
-    except AsideCliError as e:
-        return None, f"확인 못 함 — {str(e)[:100]}"
-    if got.get("write_url"):
-        return True, "내 Aside 에서 글쓰기 화면이 열림"
-    ok = login_from_text(got.get("text") or "", bool(got.get("password")))
-    return ok, {True: "내 Aside 에서 로그인됨", False: "내 Aside 에서 로그인 화면 — Aside 에서 직접 로그인하세요",
-                None: "판단 못 함"}[ok]
+    for n, where in enumerate([url] + ([home] if home and home != url else [])):
+        try:
+            got = run(read_script(where), runner=runner)["data"]
+        except AsideCliError as e:
+            return None, f"확인 못 함 — {str(e)[:100]}"
+        if got.get("write_url"):
+            return True, "내 Aside 에서 글쓰기 화면이 열림"
+        ok = login_from_text(got.get("text") or "", bool(got.get("password")))
+        if ok is not None:
+            place = " (방송국 첫 화면)" if n else ""
+            return ok, ("내 Aside 에서 로그인됨" if ok else "내 Aside 에서 로그인 화면 — Aside 에서 직접 로그인하세요") + place
+    return None, "판단 못 함 — 게시판·첫 화면 어디에도 로그인·로그아웃 글이 없음 (Aside 에서 그 방송국 화면을 한 번 열어 확인해 주세요)"

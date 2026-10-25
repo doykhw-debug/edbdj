@@ -128,6 +128,9 @@ document.getElementById('l').innerText = '목록 ' + (new URLSearchParams(locati
 </script></body></html>"""
 
 
+SITE_DIR: dict[str, str] = {}
+
+
 @pytest.fixture
 def site(tmp_path):
     for name, html in (("board.html", BOARD_HTML), ("write.html", WRITE_HTML), ("list.html", LIST_HTML)):
@@ -135,6 +138,7 @@ def site(tmp_path):
     handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
     httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    SITE_DIR[str(httpd.server_address[1])] = str(tmp_path)
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()
 
@@ -166,3 +170,59 @@ def test_e2e_read_board_follow_write_and_post(site):
     d = res["data"]
     assert d["status"] == "done" and d["step"] == "verified" and "가을 소풍 이야기" in d["after_text"]
     assert d["dialogs"] == ["등록하시겠습니까?"] and not d["still_form"]                  # 확인 창은 도우미가 '확인'
+
+
+# ── 0.75: KBS 로그인 '판단 못 함' · 사용자 PC 의 CLI 자리 · 확장 고정 → 자동 ───────────────────
+def test_cli_path_seen_on_users_pc_is_a_candidate():
+    env = {"LOCALAPPDATA": "/AppData/Local", "USERPROFILE": "/home/me"}
+    assert aside_cli.candidates(env)[0].replace("\\\\", "/").endswith("Aside/CLI/current/aside.exe")
+
+
+def test_kbs_login_falls_back_to_station_home(conn, monkeypatch):
+    monkeypatch.setattr(aside_cli, "find", lambda saved="": "aside")
+    pages = iter([{"text": "사연과 신청곡 게시판 목록"}, {"text": "KBS 홍길동 님 MY 로그아웃"}])
+    seen = []
+
+    def runner(cmd, t):
+        seen.append(cmd[-1])
+        return Out("RH_JSON=" + json.dumps(next(pages)) + "\nRH_OK")
+    ok, why = aside_cli.check_login(conn, "https://program.kbs.co.kr/x/pc/board.html", runner=runner,
+                                    home="https://www.kbs.co.kr")
+    assert ok is True and "방송국 첫 화면" in why and "www.kbs.co.kr" in seen[1]
+    ok, why = aside_cli.check_login(conn, "https://program.kbs.co.kr/x/pc/board.html", home="https://www.kbs.co.kr",
+                                    runner=lambda c, t: Out('RH_JSON={"text": "목록"}\nRH_OK'))
+    assert ok is None and "판단 못 함" in why
+
+
+def test_tab_choice_moves_to_auto_once(data_dir):
+    from radio_helper import aside
+    from radio_helper.app import create_app
+
+    c = db.connect()
+    db.init_db(c)
+    db.set_setting(c, aside.BROWSER_KEY, "tab")
+    c.close()
+    create_app()
+    c = db.connect()
+    assert db.get_setting(c, aside.BROWSER_KEY) == "auto"
+    db.set_setting(c, aside.BROWSER_KEY, "tab")                                     # 그 뒤 사용자가 고른 값은 그대로
+    c.close()
+    create_app()
+    c = db.connect()
+    assert db.get_setting(c, aside.BROWSER_KEY) == "tab"
+    c.close()
+
+
+LATE_HTML = """<html><head><meta charset="utf-8"></head><body><div id="gnb"></div>
+<iframe src="inner.html"></iframe>
+<script>setTimeout(() => { document.getElementById('gnb').innerText = 'KBS 홍길동 님 로그아웃'; }, 3000);</script></body></html>"""
+INNER_HTML = """<html><head><meta charset="utf-8"></head><body>공지: 사연과 신청곡을 받습니다 (게시판 안쪽 틀)</body></html>"""
+
+
+@e2e
+def test_e2e_late_render_and_iframe_text(site):
+    folder = Path(SITE_DIR[site.rsplit(":", 1)[1]])                                 # 가짜 게시판 폴더에 두 화면 추가
+    for name, html in (("late.html", LATE_HTML), ("inner.html", INNER_HTML)):
+        (folder / name).write_text(html, encoding="utf-8")
+    got = aside_cli.run(aside_cli.read_script(site + "/late.html"), exe="aside", runner=fake_runner)["data"]
+    assert "로그아웃" in got["text"] and "게시판 안쪽 틀" in got["text"]

@@ -984,7 +984,7 @@ def check_logins(conn, say=print) -> dict:
 
         with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
             for t in targets:
-                ok, why = aside_cli.check_login(conn, t["url"])
+                ok, why = aside_cli.check_login(conn, t["url"], home=t.get("home") or "")
                 mark_login(conn, t["station"], ok, why)
                 say(f"{t['station']}: {why}")
         return logins(conn)
