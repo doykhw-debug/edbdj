@@ -261,7 +261,47 @@ PASTE_SETTLE_SECONDS = 0.6   # 붙여넣은 뒤 기다림 (0.74) — 레인보�
                              # 바로 전송을 누르면 빈 칸이 전송됐음 ('채팅을 입력하세요' 확인 창)
 CLIPBOARD_TRIES = 10         # 다른 프로그램이 클립보드를 잡고 있으면 잠깐씩 다시 시도
 DOUBLE_CLICK_INPUT = {"rainbow"}
-DISMISS_DIALOG = {"rainbow"}
+DISMISS_DIALOG = {"rainbow"}            # Esc 로도 닫는 앱
+# 0.77: 'mini 메세지를 작성해주세요.'(MBC mini)·'채팅을 입력하세요'(레인보우) — 빈 칸이 전송될 때 뜨는 확인 창
+DIALOG_APPS = {"mini", "rainbow"}
+DIALOG_TEXT = re.compile(r"메[세시]지를\s*(작성|입력)|채팅을\s*입력|내용을\s*(작성|입력)")
+SLOW_APPS = {"mini": 2.0, "rainbow": 2.0}   # 0.77 사용자 요청: 창 띄우기·클릭·붙여넣기·등록 사이를 더 천천히 (배수)
+
+
+def is_dialog_purple(r: int, g: int, b: int) -> bool:
+    """mini 확인 창의 보라색 '확인' 단추 색 (#7b45cf 언저리)."""
+    return 90 <= r <= 160 and 35 <= g <= 100 and 175 <= b <= 245 and b - g > 100
+
+
+def find_dialog_button(img, frame: tuple[int, int, int, int]) -> tuple[int, int] | None:
+    """창 사진(img, 창 왼쪽 위가 0,0)의 가운데쯤에 보라색 단추 덩어리(확인 창의 '확인')가 있으면 그 화면 좌표.
+    진행 막대(얇음)·재생 단추(아래)·FM4U(위)·등록 단추(오른쪽 아래)는 가운데 영역 밖이거나 모양이 달라 걸리지 않는다."""
+    rgb = img.convert("RGB")
+    w, h = rgb.size
+    x0, x1, y0, y1 = int(w * 0.2), int(w * 0.8), int(h * 0.3), int(h * 0.75)
+    step = 2
+    px = rgb.load()
+    hits = {(x, y) for y in range(y0, y1, step) for x in range(x0, x1, step) if is_dialog_purple(*px[x, y])}
+    best = None
+    while hits:                                   # 붙어 있는 보라색 덩어리마다 (진행 막대·단추가 따로 잡히게)
+        start = hits.pop()
+        blob, todo = [start], [start]
+        while todo:
+            cx, cy = todo.pop()
+            for nb in ((cx + step, cy), (cx - step, cy), (cx, cy + step), (cx, cy - step)):
+                if nb in hits:
+                    hits.remove(nb)
+                    blob.append(nb)
+                    todo.append(nb)
+        xs, ys = [p[0] for p in blob], [p[1] for p in blob]
+        bw, bh = max(xs) - min(xs) + step, max(ys) - min(ys) + step
+        area = len(blob) * step * step
+        if area >= 600 and 30 <= bw <= 320 and 20 <= bh <= 130 and area / (bw * bh) >= 0.5 and \
+                (best is None or area > best[0]):
+            best = (area, (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2)
+    if best is None:
+        return None
+    return frame[0] + best[1], frame[1] + best[2]
 
 
 def click_at(x: int, y: int, user32=None, sleep=time.sleep, clicks: int = 1) -> None:
@@ -844,6 +884,7 @@ class Gorilla:
     def __init__(self, cfg: GorillaConfig):
         self.cfg = cfg
         self.fixes: list[str] = []   # 보내기 전에 창을 되살리거나 앱을 다시 켠 일 (전송 기록에 붙음)
+        self._refound = False        # 확인 창을 닫은 뒤라 누를 자리를 새로 찾음
 
     # ── 창 찾기 ─────────────────────────────────────────────────
     def _candidates(self):
@@ -1298,9 +1339,65 @@ class Gorilla:
     def _input_clicks(self) -> int:
         return 2 if self.cfg.app in DOUBLE_CLICK_INPUT else 1
 
+    def _wait(self, seconds: float) -> None:
+        """단계 사이 기다림 (mini·레인보우는 더 천천히 — SLOW_APPS)."""
+        time.sleep(seconds * SLOW_APPS.get(self.cfg.app, 1.0))
+
+    def _dialog_point(self, w) -> tuple[int, int] | None:
+        """'메세지를 작성해주세요' 같은 확인 창의 '확인' 단추 자리 (없으면 None).
+        화면 요소(UI 자동화)로 먼저 찾고, 안 보이면 창 사진에서 보라색 '확인' 단추를 찾는다 (MBC mini)."""
+        if self.cfg.app not in DIALOG_APPS:
+            return None
+        try:
+            texts = [t.element_info.name or "" for t in w.descendants(control_type="Text")[:200]]
+            if any(DIALOG_TEXT.search(t) for t in texts):
+                ok = [b for b in w.descendants(control_type="Button")
+                      if (b.element_info.name or "").strip() == "확인" and b.is_visible()]
+                if ok:
+                    return self._center(ok[-1])
+        except Exception:
+            pass
+        if self.cfg.app == "mini":
+            try:
+                img = window_image(w.handle)
+                if img is not None:
+                    return find_dialog_button(img, self._frame(w))
+            except Exception:
+                pass
+        return None
+
+    def close_dialog(self, w) -> bool:
+        """확인 창이 떠 있으면 '확인'을 눌러 닫는다. 닫았으면 True (다음 누를 자리는 새로 찾는다)."""
+        point = self._dialog_point(w)
+        if point is None:
+            return False
+        if covered_by(window_at_point(*point), getattr(w, "handle", None)):
+            return False                           # 다른 창이 가리고 있으면 누르지 않음
+        click_at(*point)
+        self._wait(0.5)
+        self._refound = True
+        self.fixes.append(f"{self.cfg.label} '메시지를 작성해주세요' 확인 창을 닫음")
+        return True
+
+    def _fresh_point(self, w, target: str) -> tuple[int, int]:
+        """누를 자리: 확인 창을 닫은 뒤에는 화면 요소로 입력칸·등록 단추를 새로 찾아 그 자리 (못 찾으면 저장한 자리)."""
+        if getattr(self, "_refound", False):
+            try:
+                if target == "input":
+                    return self._center(self._find_input(w))
+                pattern = re.compile(self.cfg.send_button_name or SEND_BUTTON_HINT.pattern)
+                buttons = [b for b in w.descendants(control_type="Button")
+                           if pattern.search(b.element_info.name or "") and b.is_visible()]
+                if buttons:
+                    return self._center(buttons[-1])
+            except Exception:
+                pass
+        return self._target_point(w, target)
+
     def _dismiss_dialog(self, w) -> None:
-        """레인보우: '채팅을 입력하세요' 같은 확인 창이 떠 있으면 닫는다 (Esc — 떠 있지 않으면 아무 일 없음)."""
-        if self.cfg.app not in DISMISS_DIALOG:
+        """확인 창('채팅을 입력하세요'·'mini 메세지를 작성해주세요')이 떠 있으면 닫는다: '확인'을 눌러서,
+        못 찾으면 레인보우는 Esc (떠 있지 않으면 아무 일 없음)."""
+        if self.close_dialog(w) or self.cfg.app not in DISMISS_DIALOG:
             return
         from pywinauto.keyboard import send_keys
 
@@ -1343,18 +1440,18 @@ class Gorilla:
         from pywinauto.keyboard import send_keys
 
         self._click(w, point, "입력칸", clicks=self._input_clicks())
-        time.sleep(0.3)
+        self._wait(0.3)
         self._paste(w, text)
-        time.sleep(PASTE_SETTLE_SECONDS)
+        self._wait(PASTE_SETTLE_SECONDS)
         got, where = self._read_input(edit)
         if self._check_filled(text, got):
             return
         self._click(w, point, "입력칸", clicks=self._input_clicks())   # 붙여넣기가 안 들어감 → 한 글자씩
-        time.sleep(0.3)
+        self._wait(0.3)
         self._check_front(w)
         send_keys("^a{BACKSPACE}", pause=0.08)
         type_unicode(text)
-        time.sleep(PASTE_SETTLE_SECONDS)
+        self._wait(PASTE_SETTLE_SECONDS)
         got2, where = self._read_input(edit)
         if self._check_filled(text, got2):
             self.fixes.append("붙여넣기가 안 들어가 한 글자씩 입력함")
@@ -1378,7 +1475,8 @@ class Gorilla:
                 raise GorillaError("입력칸 위치가 지정되지 않았습니다. '① 입력칸 영역 지정'을 하세요.")
             self._check_layout(w)
             self._dismiss_dialog(w)
-            self._fill(w, self._target_point(w, "input"), text)
+            self._fill(w, self._fresh_point(w, "input"), text)
+            self._wait(0.3)                       # 붙여넣은 글이 앱에 자리 잡은 뒤 등록
             return None
         edit = self._find_input(w)
         self._check_point(w, self._center(edit), "입력칸")
@@ -1395,7 +1493,7 @@ class Gorilla:
             if not self._has_point("send"):
                 raise GorillaError("전송 버튼 위치가 지정되지 않았습니다. '② 전송 버튼 영역 지정'을 하세요.")
             self._check_layout(w)
-            self._click(w, self._target_point(w, "send"), "전송 버튼")
+            self._click(w, self._fresh_point(w, "send"), "전송 버튼")
             return
         if mode in ("button", "auto"):
             pattern = re.compile(self.cfg.send_button_name or SEND_BUTTON_HINT.pattern)
@@ -1440,7 +1538,7 @@ class Gorilla:
             except Exception:
                 pass  # 일부 앱은 포커스 요청을 거부한다 → 아래에서 한 번 더, 그래도 안 되면 입력칸을 직접 클릭
             bring_to_front(w)
-            time.sleep(0.3)
+            self._wait(0.4)                       # 채팅 창을 맨 앞에 올려 두고 (mini·레인보우는 더 오래)
             return fn(w)
         finally:
             show_windows(hidden)
@@ -1482,6 +1580,11 @@ class Gorilla:
             rw, rh = rr - rl, rb - rt
             area = (rl + int(rw * frac[0]), rt + int(rh * frac[1]), rl + int(rw * frac[2]), rt + int(rh * frac[3]))
             by_window = self._region() is None
+        try:                                      # 0.77: 찍을 때 확인 창이 떠 있으면 '확인'으로 닫고 찍는다
+            if self.cfg.app in DIALOG_APPS:
+                self.close_dialog(w)
+        except Exception:
+            pass
         img = None
         if by_window:
             try:
@@ -1533,6 +1636,7 @@ class Gorilla:
         text = flat_text(text)
         shots, notes = [], []
         self.fixes = []
+        self._refound = False
 
         def run(w):
             def snap(name: str, label: str, points=()) -> None:
@@ -1588,6 +1692,7 @@ class Gorilla:
         text = flat_text(text)
         shots = []
         self.fixes = []
+        self._refound = False
 
         def run(w):
             label = f"보내지 못했을 때 {self.cfg.label} 창"
@@ -1595,9 +1700,12 @@ class Gorilla:
                 edit = self._put_text(w, text)
                 self._press_send(w)
                 time.sleep(1.5)
+                label = f"보낸 뒤 {self.cfg.label} 창"
+                if self.close_dialog(w):          # 빈 칸이 전송돼 확인 창이 뜸 = 보내지 못함 → 닫고 다음에 다시
+                    return SendResult("failed", f"{self.cfg.label} 입력칸이 비어 '메시지를 작성해주세요' 창이 떠서 닫았습니다 "
+                                                "— 보내지 못해 잠시 뒤 다시 보냅니다")
                 self._dismiss_dialog(w)          # 레인보우: 전송 뒤 확인 창이 남아 다음 전송을 막지 않게
                 after = self._value(edit) if edit is not None else None
-                label = f"보낸 뒤 {self.cfg.label} 창"
                 return judge_result(self.cfg.input_mode, after, text, self._seen_in_chat(w, text))
             finally:   # 창이 아직 앞에 있을 때 찍는다 (실패해도 그때 화면을 남김)
                 shot = self.evidence_image(w)

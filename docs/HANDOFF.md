@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-25, 0.76 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-25, 0.77 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -27,6 +27,7 @@
 | 0.74 | 게시판은 Aside 로만: aside_cli.py (`aside repl` 스크립트로 읽기·쓰기·로그인 확인, Aside CLI 1.26 API — gstack 문서 기준), 안 되면 확장, Edge 보조 창 뺌. 채팅 입력: 붙여넣기 뒤 기다림·입력칸 읽어 확인·유니코드 직접 입력·잘림 글자 수 기억 |
 | 0.75 | 사용자 PC: Aside CLI 1.26.1022.0 `%LOCALAPPDATA%\Aside\CLI\current\aside.exe` 연결 확인됨. 'tab' 고정 → 'auto' 한 번, KBS 로그인: 늦은 화면 기다림·iframe 글·첫 화면으로 다시 |
 | 0.76 | **무조건 채팅** (사용자 확인: '문자로만' 판단 구간은 모두 채팅 구간, 문자로만 받는 방송 없음) — gorilla_accepted 로 막지 않음·문자 자동 전환 없앰. 게시판 요청 사연은 채팅 먼저(story_posts target chat) + 게시판 줄(target board, 같은 draft_id). runner.resend_wrong_holds + '오늘 못 보낸 것 다시 보내기' 단추 |
+| 0.77 | MBC mini 'mini 메세지를 작성해주세요.' 확인 창: gorilla.close_dialog (UI 자동화 → 보라색 '확인' 단추 찾기 find_dialog_button), 닫은 뒤 _fresh_point 로 자리 다시 찾기, 등록 뒤 창이 뜨면 failed(다시 보냄). mini·레인보우 SLOW_APPS 기다림 2배 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).
