@@ -226,3 +226,12 @@ def test_e2e_late_render_and_iframe_text(site):
         (folder / name).write_text(html, encoding="utf-8")
     got = aside_cli.run(aside_cli.read_script(site + "/late.html"), exe="aside", runner=fake_runner)["data"]
     assert "로그아웃" in got["text"] and "게시판 안쪽 틀" in got["text"]
+
+
+def test_kbs_login_is_checked_on_radio_kbs_home(conn):
+    """0.78 사용자 지정: KBS 로그인은 게시판 화면(예: 1라디오 뉴스 게시판)이 아닌 radio.kbs.co.kr 에서 확인."""
+    boards.add_corner(conn, "https://program.kbs.co.kr/1radio/radio/knews/pc/board.html?smenu=9c15ec&"
+                            "bbs_loc=R2023-0196-03-387642,list,none,1,0")
+    kbs = next(t for t in boards.login_targets(conn) if t["station"] == "KBS")
+    assert kbs["url"] == kbs["home"] == "https://radio.kbs.co.kr/"
+    assert boards.HOMES["KBS"] == "https://radio.kbs.co.kr/"                          # 미리 로그인 탭도 이 화면

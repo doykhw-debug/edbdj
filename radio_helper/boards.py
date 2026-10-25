@@ -49,8 +49,10 @@ LAUNCHED_KEY = "boards.launched_at"
 LAUNCH_GAP_SECONDS = 60          # 하나 띄운 뒤 잠금을 잡을 때까지 다음 것을 띄우지 않는다
 SAME_NOTICE = 0.8                # 공지 원문이 이만큼 비슷하면 같은 공지 (Claude 가 옮겨 적은 글이 조금씩 달라도)
 SAME_THEME = 0.6                 # 원문이 없을 때 주제 한 문장으로 견줌
-HOMES = {"SBS": "https://www.sbs.co.kr", "MBC": "https://www.imbc.com", "KBS": "https://www.kbs.co.kr",
+HOMES = {"SBS": "https://www.sbs.co.kr", "MBC": "https://www.imbc.com", "KBS": "https://radio.kbs.co.kr/",
          "CBS": "https://www.cbs.co.kr/radio"}
+# 0.78 사용자 지정: 로그인 확인을 게시판 화면이 아닌 이 화면에서 (KBS 게시판 화면은 프로그램마다 모양이 달라 판단이 안 됨)
+LOGIN_PAGES = {"KBS": "https://radio.kbs.co.kr/"}
 LOGIN_WAIT_MINUTES = 20
 
 
@@ -843,6 +845,9 @@ def login_targets(conn) -> list[dict]:
         url = c["write_url"] or c["board_url"]
         if st and st not in out and url and autofill._allowed_real_url(url):
             out[st] = {"station": st, "url": url, "write": bool(c["write_url"]), "home": HOMES.get(st, "")}
+    for st, page in LOGIN_PAGES.items():
+        if st in out:
+            out[st] = {"station": st, "url": page, "write": False, "home": page}
     return [out[s] for s in stations.STATIONS if s in out]
 
 
