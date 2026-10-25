@@ -16,13 +16,13 @@ import os
 import subprocess
 import sys
 
-BROWSER_KEY = "boards.browser"        # auto(Aside 있으면 Aside) / aside / edge
+BROWSER_KEY = "boards.browser"        # auto(Aside CLI → 확장 새 탭) / cli / tab  (0.74: Edge·도우미 전용 창은 뺌)
 PATH_KEY = "boards.aside_path"        # 직접 적은 Aside 실행 파일 경로
 ERROR_KEY = "boards.aside_error"      # 마지막으로 Aside 를 열지 못한 까닭 (그때는 Edge 로 엶)
 LOGINS_KEY = "boards.logins"          # boards.LOGIN_KEY (방송국별 로그인 상태)
 FOUND_KEY = "boards.aside_found"      # 찾아 둔 경로 (화면을 열 때마다 다시 찾지 않게)
-CHOICES = {"auto": "자동 (확장이 연결되면 내 Aside 새 탭, 아니면 Edge)", "tab": "내 Aside 새 탭 (확장 연결 — 로그인 그대로)",
-           "aside": "도우미 전용 Aside 창 (따로 로그인)", "edge": "Edge"}
+CHOICES = {"auto": "자동 (Aside CLI, 안 되면 Aside 확장 새 탭)", "cli": "Aside CLI (aside repl — 내 Aside 로그인 그대로)",
+           "tab": "Aside 확장 새 탭 (확장 연결 — 로그인 그대로)"}   # 0.74 사용자 요청: Edge 보조 창 설정 뺌
 EXE_NAMES = ("aside.exe", "Aside.exe")
 
 
@@ -100,9 +100,9 @@ def settings(conn) -> dict:
 
 
 def chosen(conn, finder=None) -> str | None:
-    """도우미 전용 창(Playwright)을 Aside 로 열 경로: '도우미 전용 Aside 창'을 고른 경우만 (0.64 — 그 창이 뜨지 않는 PC 가
-    있어 '자동'은 확장이 연결되면 내 Aside 새 탭, 아니면 예전처럼 Edge)."""
-    return exe_path(conn, finder) if settings(conn)["choice"] == "aside" else None
+    """도우미 전용 창(Playwright)을 Aside 로 열 경로 — 0.74 부터 게시판 작업은 Aside CLI·확장으로만 하므로 쓰지 않음
+    (남은 Playwright 일: 공개 프로그램 화면 모으기·점검용 창)."""
+    return None
 
 
 def exe_path(conn, finder=None) -> str | None:
@@ -110,8 +110,6 @@ def exe_path(conn, finder=None) -> str | None:
     from . import db
 
     s = settings(conn)
-    if s["choice"] == "edge":
-        return None
     cached = db.get_setting(conn, FOUND_KEY) or ""
     path = (finder or find)(s["path"] or cached)
     if (path or "") != cached:

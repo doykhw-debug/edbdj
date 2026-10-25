@@ -15,7 +15,7 @@ from pathlib import Path
 
 from flask import Flask, abort, flash, g, redirect, render_template, request, send_from_directory, session, url_for
 
-from . import (__version__, aside, aside_records, boards, broadcast_seed, collect, db, evidence, gates, generator, notices, quiz, remote,
+from . import (__version__, aside, aside_cli, aside_records, boards, broadcast_seed, collect, db, evidence, gates, generator, notices, quiz, remote,
                repair, schedules, server, stations, tabbridge, updater)
 from .errors import error_page
 from .gates import STATUS_LABELS
@@ -80,6 +80,9 @@ def create_app(data_dir: str | None = None) -> Flask:
             db.log(conn, "post", f"코너 목록 정리: 게시판이 아닌 '글 하나' 주소 {gone}개를 지웠습니다 (0.63 코너 게시판 모으기가 잘못 넣은 것)")
     if not server.is_server():
         boards.enable_daily_once(conn)
+        if db.get_setting(conn, "meta.logins_074") != "1":     # 0.74: Edge 보조 창 시절의 로그인 표시는 내 Aside 와 달라 지움
+            db.set_setting(conn, "meta.logins_074", "1")
+            db.set_setting(conn, boards.LOGIN_KEY, "")
         if db.get_setting(conn, boards.ONAIR_ON_071) != "1":   # 0.71 사용자 요청: 지금 방송 프로그램 게시판 쓰기 켬
             db.set_setting(conn, boards.ONAIR_ON_071, "1")
             if db.get_setting(conn, boards.ONAIR_KEY, "1") != "1":
@@ -627,6 +630,8 @@ def create_app(data_dir: str | None = None) -> Flask:
                                        if stations.corner_station(r)),
                        "recent": g.conn.execute("SELECT * FROM events WHERE kind = 'post' ORDER BY id DESC LIMIT 6").fetchall(),
                        "aside": aside.describe(g.conn),
+                       "cli": aside_cli.saved_status(g.conn), "cli_saved": db.get_setting(g.conn, aside_cli.PATH_KEY) or "",
+                       "mode": board_mode_quick(g.conn),
                        "bridge": {"connected": tabbridge.connected(g.conn), "folder": str(tabbridge.extension_dir()),
                                   "tabs": tabbridge.use_tabs(g.conn),
                                   "last_ping": (datetime.fromtimestamp(tabbridge.last_ping(g.conn)).strftime("%m-%d %H:%M")
@@ -683,6 +688,27 @@ def create_app(data_dir: str | None = None) -> Flask:
         flash("Aside 기록을 가져왔습니다: " + aside_records.describe(summary))
         return redirect(url_for("corners") + "#aside")
 
+    def board_mode_quick(c) -> str | None:
+        """화면용: 마지막 확인 결과로만 (화면을 열 때마다 Aside 를 부르지 않음)."""
+        choice = aside.settings(c)["choice"]
+        if choice in ("auto", "cli") and aside_cli.saved_status(c).get("ok"):
+            return "cli"
+        return "tab" if choice in ("auto", "tab") and tabbridge.use_tabs(c) else None
+
+    @app.post("/corners/aside-cli")
+    def corners_aside_cli():
+        """Aside CLI 경로 저장 · 연결 확인 · Claude Code 에 Aside 스킬 설치 (사용자 요청 명령)."""
+        path = form("cli_path").strip().strip('"')
+        db.set_setting(g.conn, aside_cli.PATH_KEY, path)
+        if form("do") == "skills":
+            text = aside_cli.install_skills(g.conn)
+            db.log(g.conn, "post", text)
+            flash(text)
+        else:
+            st = aside_cli.probe(g.conn)
+            flash(("Aside CLI 연결됨 — " if st["ok"] else "Aside CLI 안 됨 — ") + st["detail"], "info" if st["ok"] else "warn")
+        return redirect(url_for("corners") + "#aside-cli")
+
     @app.post("/corners/bridge-folder")
     def corners_bridge_folder():
         """Aside 확장 폴더를 탐색기로 연다 (확장 로드할 때 고르기 쉽게)."""
@@ -734,8 +760,8 @@ def create_app(data_dir: str | None = None) -> Flask:
         if boards.paused(g.conn):
             return paused_back(url_for("corners") + "#daily")
         log_name = launch_module("radio_helper.boards", ["login"], "boards")
-        flash("도우미 브라우저 창이 뜹니다. 방송국 탭마다 직접 로그인하고 창을 닫으면 로그인 상태를 확인해 적습니다 "
-              f"(로그인 정보는 이 프로그램이 읽지 않고 도우미 브라우저에만 남습니다). (기록: {log_name})")
+        flash("내 Aside 에 방송국마다 새 탭을 엽니다. 로그인돼 있지 않은 곳만 Aside 에서 직접 로그인하고 '로그인 상태 확인'을 누르세요 "
+              f"(로그인 정보는 이 프로그램이 읽지 않습니다). (기록: {log_name})")
         return redirect(url_for("corners") + "#daily")
 
     @app.post("/bridge/ping")
@@ -762,23 +788,16 @@ def create_app(data_dir: str | None = None) -> Flask:
 
     @app.post("/corners/browser")
     def corners_browser():
-        """게시판 작업 브라우저: Aside(있으면) / Edge, Aside 경로를 직접 적기."""
+        """게시판 작업 방식: 자동(CLI → 확장) / Aside CLI / Aside 확장 새 탭 (0.74: Edge 없음), Aside 경로를 직접 적기."""
         choice = form("browser")
         db.set_setting(g.conn, aside.BROWSER_KEY, choice if choice in aside.CHOICES else "auto")
         path = form("aside_path").strip().strip('"')
         db.set_setting(g.conn, aside.PATH_KEY, path)
         db.set_setting(g.conn, aside.ERROR_KEY, "")
         found = aside.describe(g.conn)["found"]
-        if choice == "edge":
-            msg = "게시판 작업은 Edge(도우미 전용 창)로 합니다."
-        elif not found:
-            msg = "Aside 를 찾지 못했습니다" + (" (적은 경로에 Aside 가 없습니다)" if path else "") + " — 게시판 작업은 Edge 로 합니다."
-        elif choice == "aside":
-            msg = f"게시판 작업은 도우미 전용 Aside 창({found})으로 합니다. 처음 한 번은 '미리 로그인'으로 뜨는 창에서 로그인하세요."
-        else:
-            msg = (f"Aside({found})를 찾았습니다. " + ("확장이 연결돼 있어 내 Aside 새 탭으로 합니다."
-                                                     if tabbridge.connected(g.conn) else
-                                                     "아래 안내대로 확장을 한 번 넣으면 내 Aside 새 탭으로 합니다 (그 전에는 Edge)."))
+        msg = f"저장했습니다: {aside.CHOICES[aside.settings(g.conn)['choice']]}." + \
+            (f" Aside 브라우저: {found}" if found else " Aside 브라우저 경로를 찾지 못했습니다 (탭 열기·미리 로그인에 필요).") + \
+            " 'Aside 연결 확인'으로 CLI 가 되는지 보세요."
         flash(msg)
         return redirect(url_for("corners") + "#daily")
 

@@ -130,14 +130,20 @@ def test_board_run_uses_my_aside_tabs_when_connected(conn, monkeypatch):
     used = []
     monkeypatch.setattr(boards, "_run", lambda conn_, cid_, test, answerer, now, reader, poster, aw, sched, trigger:
                         used.append((reader, poster)) or "ok")
-    boards.run(conn, cid)
-    assert used[-1] == (boards.read_page, None)                                            # 연결 전: 예전처럼
+    monkeypatch.delenv("RADIO_HELPER_CHROMIUM", raising=False)
+    from radio_helper import aside_cli
+    cli = {"ok": False}
+    monkeypatch.setattr(aside_cli, "ready", lambda c: cli["ok"])
+    assert "Aside 연결 안 됨" in boards.run(conn, cid) and used == []                       # 0.74: Edge 로 하지 않음
     db.set_setting(conn, tabbridge.PING_KEY, str(__import__("time").time()))
     boards.run(conn, cid)
-    assert used[-1] == (tabbridge.read_page, tabbridge.post)                               # 연결되면 내 Aside 새 탭
-    db.set_setting(conn, "boards.browser", "edge")
+    assert used[-1] == (tabbridge.read_page, tabbridge.post)                               # 확장이 연결되면 내 Aside 새 탭
+    cli["ok"] = True
     boards.run(conn, cid)
-    assert used[-1] == (boards.read_page, None)                                            # Edge 를 고르면 예전처럼
+    assert used[-1] == (aside_cli.read_page, aside_cli.post)                               # CLI 가 되면 CLI 먼저
+    db.set_setting(conn, "boards.browser", "edge")                                         # 예전 'Edge' 설정은 '자동'으로
+    boards.run(conn, cid)
+    assert used[-1] == (aside_cli.read_page, aside_cli.post)
 
 
 def test_login_check_through_tabs(conn):

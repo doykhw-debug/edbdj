@@ -834,17 +834,18 @@ class Runner:
             message, source = exp["gorilla_line"].strip(), "user_line"
         if target == "board":
             message, source = (res.board_body or "").strip(), "ai"
-        elif song and message and len(message) + len(song) + 8 <= answerer_mod.STORY_LIMIT:
+        limit = config.chat_limit(self.conn, schedule["channel"], answerer_mod.STORY_LIMIT)   # 앱 입력칸이 받는 글자 수
+        if target != "board" and song and message and len(message) + len(song) + 8 <= limit:
             message = f"{message} (신청곡: {song})"
         if exp is None:
             message = ""
         warnings = story.message_checks(self.conn, message, exp, source, res.added_facts,
-                                        limit=2000 if target == "board" else None) if exp is not None else []
+                                        limit=2000 if target == "board" else limit) if exp is not None else []
         if exp is not None and target == "chat" and source == "ai" and warnings and \
                 config.get(self.conn, "live.story_approved") == "1":
             # 승인한(확인·고친) 경험이면 확인을 다시 받지 않는다: AI가 덧붙여 경고가 난 글 대신 승인한 글 그대로 보낸다
-            plain = story.approved_text(self.conn, exp, answerer_mod.STORY_LIMIT, song)
-            plain_warnings = story.message_checks(self.conn, plain, exp, "approved")
+            plain = story.approved_text(self.conn, exp, limit, song)
+            plain_warnings = story.message_checks(self.conn, plain, exp, "approved", limit=limit)
             if not story.has_block(plain_warnings):
                 message, source, warnings = plain, "approved", plain_warnings
         note = res.fit_reason if exp is not None else "주제에 맞는 실제 경험이 없음 — 직접 써서 보내거나 건너뛰세요"

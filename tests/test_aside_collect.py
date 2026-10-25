@@ -34,11 +34,11 @@ def test_chosen_respects_edge_and_caches(conn):
         return saved or ASIDE
     assert aside.exe_path(conn, finder) == ASIDE and db.get_setting(conn, aside.FOUND_KEY) == ASIDE
     assert aside.exe_path(conn, finder) == ASIDE and calls[-1] == ASIDE         # 다음부터는 찾아 둔 경로부터
-    assert aside.chosen(conn, finder) is None                                    # 0.64: '자동'은 도우미 Aside 창을 쓰지 않음
-    db.set_setting(conn, aside.BROWSER_KEY, "aside")
-    assert aside.chosen(conn, finder) == ASIDE
-    db.set_setting(conn, aside.BROWSER_KEY, "edge")
-    assert aside.chosen(conn, finder) is None and aside.exe_path(conn, finder) is None
+    for choice in ("auto", "aside", "edge"):                                     # 0.74: 도우미 전용 창·Edge 선택은 없음
+        db.set_setting(conn, aside.BROWSER_KEY, choice)
+        assert aside.chosen(conn, finder) is None and aside.settings(conn)["choice"] == "auto"
+        assert aside.exe_path(conn, finder) == ASIDE                            # 새 탭 열기용 Aside 경로는 늘 찾음
+    assert set(aside.CHOICES) == {"auto", "cli", "tab"}
 
 
 class FakeChromium:
@@ -52,7 +52,8 @@ class FakeChromium:
         return SimpleNamespace(pages=[SimpleNamespace(on=lambda *a: None)], new_page=None)
 
 
-def test_board_browser_opens_aside_profile_then_falls_back_to_edge(data_dir, monkeypatch):
+def test_board_browser_is_never_a_helper_aside_window(data_dir, monkeypatch):
+    """0.74: 게시판 작업은 Aside CLI·확장으로만 — Playwright 창(남은 일: 공개 화면 모으기·점검)은 Aside 를 띄우지 않는다."""
     conn = db.connect()
     db.init_db(conn)
     monkeypatch.setattr(autofill.sys, "platform", "win32")
@@ -60,40 +61,31 @@ def test_board_browser_opens_aside_profile_then_falls_back_to_edge(data_dir, mon
     monkeypatch.delenv("RADIO_HELPER_BROWSER_CHANNEL", raising=False)
     monkeypatch.setattr(autofill, "no_window", lambda: False)
     monkeypatch.setattr(aside, "find", lambda saved="", **kw: ASIDE)
+    db.set_setting(conn, aside.BROWSER_KEY, "aside")                               # 예전 설정이 남아 있어도
     p = SimpleNamespace(chromium=FakeChromium())
     autofill.launch_profile(p, headless=True)
-    assert p.chromium.calls[0][1] == {"headless": True, "channel": "msedge"}    # '자동'이고 확장 연결 전: Edge
-    db.set_setting(conn, aside.BROWSER_KEY, "aside")
-    db.set_setting(conn, "boards.logins", '{"SBS": {"ok": true}}')                   # Edge 프로필에서 로그인했던 기록
-    p = SimpleNamespace(chromium=FakeChromium())
-    autofill.launch_profile(p, headless=True)
-    assert db.get_setting(conn, "boards.logins") == ""                           # 새 Aside 프로필은 다시 로그인
-    from radio_helper import boards
-    assert boards.LOGIN_KEY == aside.LOGINS_KEY
-    path, kw = p.chromium.calls[0]
-    assert kw == {"executable_path": ASIDE, "headless": True} and path.endswith("browser_profile_aside")
-
-    p = SimpleNamespace(chromium=FakeChromium(fail_aside=True))
-    autofill.launch_profile(p, headless=True)
-    assert p.chromium.calls[1][1] == {"headless": True, "channel": "msedge"}    # 안 열리면 Edge
-    assert "Aside 를 열지 못해 Edge 로 엶 — RuntimeError: Browser closed unexpectedly" in \
-        db.get_setting(conn, aside.ERROR_KEY)
-
-    db.set_setting(conn, aside.BROWSER_KEY, "edge")
-    p = SimpleNamespace(chromium=FakeChromium())
-    autofill.launch_profile(p, headless=False)
-    assert p.chromium.calls == [(str(autofill.profile_dir()), {"headless": False, "channel": "msedge"})]
+    assert "executable_path" not in p.chromium.calls[0][1]
     conn.close()
 
 
 def test_corners_page_browser_setting(client, conn, monkeypatch):
     monkeypatch.setattr(aside, "find", lambda saved="", **kw: saved or None)
     html = client.get("/corners").get_data(as_text=True)
-    assert "Aside 못 찾음 → Edge" in html and "코너 게시판 지금 모으기" in html
+    assert "Aside 연결 안 됨 — 게시판 작업 안 함" in html and "코너 게시판 지금 모으기" in html
+    assert 'value="edge"' not in html and "Edge 보조 창은 쓰지 않습니다" in html          # 0.74: Edge 선택 없음
     r = client.post("/corners/browser", data={"csrf_token": csrf(client, "/corners"), "browser": "auto",
                                               "aside_path": f'"{ASIDE}"'}, follow_redirects=True)
-    assert f"Aside({ASIDE})를 찾았습니다" in r.get_data(as_text=True) and "확장을 한 번 넣으면" in r.get_data(as_text=True)
+    assert f"Aside 브라우저: {ASIDE}" in r.get_data(as_text=True)
     assert db.get_setting(conn, aside.PATH_KEY) == ASIDE
+    from radio_helper import aside_cli
+    monkeypatch.setattr(aside_cli, "probe", lambda c: {"ok": True, "detail": "연결됨 — 내 Aside(로그인 그대로)로"})
+    r = client.post("/corners/aside-cli", data={"csrf_token": csrf(client, "/corners"), "do": "check",
+                                                "cli_path": r"C:\x\aside.exe"}, follow_redirects=True)
+    assert "Aside CLI 연결됨" in r.get_data(as_text=True) and db.get_setting(conn, aside_cli.PATH_KEY) == r"C:\x\aside.exe"
+    monkeypatch.setattr(aside_cli, "install_skills", lambda c: "aside skills install --target claude-code → 종료 코드 0: ok")
+    r = client.post("/corners/aside-cli", data={"csrf_token": csrf(client, "/corners"), "do": "skills",
+                                                "cli_path": ""}, follow_redirects=True)
+    assert "종료 코드 0" in r.get_data(as_text=True)
 
 
 # ── 코너 게시판 모으기 ────────────────────────────────────────────────

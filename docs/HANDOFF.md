@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-24, 0.73 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-25, 0.74 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -24,6 +24,7 @@
 | 0.71 | 확장이 연결돼 있을 때만 새 탭(아니면 도우미 Edge 창) — 로그인 확인 '응답 없음' 해결. 지금 방송 게시판 쓰기 켬·기본 '방송 중이면 바로'(듣기 안 켜도, 상시·올린 게시판도 다른 날은 씀), 상태 줄(boards.onair_status) |
 | 0.72 | GPT 사용량: Codex 모델 기본 gpt-6-luna(Codex 목록에 gpt-4.1-mini 없음, 예전 비움 = gpt-6.1-sol), 빠른 모드 끔·짧은 기본 지시(model_instructions_file), 오늘 사용량·실제 모델 표시(quizbot.gpt_usage) |
 | 0.73 | 게시판 작업 정지(채팅만): boards.paused / set_paused (잠금 잡은 프로세스 끝냄, 탭 작업 접음), 모든 게시판 경로·관련 화면 단추가 확인. GPT 모델 목록(answerer.GPT_MODELS·CHATGPT_MODELS)+직접 입력 |
+| 0.74 | 게시판은 Aside 로만: aside_cli.py (`aside repl` 스크립트로 읽기·쓰기·로그인 확인, Aside CLI 1.26 API — gstack 문서 기준), 안 되면 확장, Edge 보조 창 뺌. 채팅 입력: 붙여넣기 뒤 기다림·입력칸 읽어 확인·유니코드 직접 입력·잘림 글자 수 기억 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).
@@ -34,6 +35,9 @@
 - 공지 정리(NOTICE_SCHEMA)에 `entry`(write/comment/external)·`limit_unit`(chars/bytes) 추가.
 
 ## 사용자 PC 에서 아직 확인 못 한 것 (다음에 확인받을 것)
+0. **0.74 (가장 먼저)**: Aside CLI 가 윈도우에 있는지·경로 ('Aside 연결 확인'). 참고한 문서(gstack)는 Aside 를 macOS 용으로 적었음 —
+   윈도우 CLI 의 이름·위치·`repl` 동작은 미확인. 안 되면 사용자가 보낸 `aside --help` 결과로 맞출 것.
+   mini·레인보우 채팅: 입력칸 글자를 UI 자동화로 읽을 수 있는지(못 읽으면 예전처럼 확인 없이 보냄).
 0. **0.72**: 설정 화면 '오늘 GPT 사용량'에 찍히는 실제 모델·토큰 (gpt-6-luna 가 이 ChatGPT 계정에서 되는지, 줄었는지).
    Codex 옵션(features.fast_mode·include_*·model_instructions_file)은 codex-cli 0.164 가 받는 것만 확인함 — 실제 응답 품질 미확인.
 0. **0.71**: 확장 연결(마지막 신호 시각), 연결 전 Edge 창 로그인 확인, '지금 방송 게시판 쓰기' 상태 줄이 실제로 쓰기까지 가는지.
@@ -61,6 +65,8 @@
 - `radio_helper/quizbot/claude_cli.py` · `codex_cli.py` — 구독 프로그램 실행 (로그인 정보는 다루지 않음)
 - `radio_helper/boards.py` — 코너 게시판 공지 읽기·판단·입력·등록, 매일 확인·지금 방송·로그인
 - `radio_helper/aside_records.py` — Aside 기록 가져오기·Aside 규칙(block_reason·board_mention)
+- `radio_helper/aside_cli.py` — Aside CLI(aside repl)로 게시판 읽기·쓰기·로그인 확인 (0.74, 기본)
 - `radio_helper/tabbridge.py` · `aside.py` — 내 Aside 새 탭 확장 다리 · Aside 찾기
+- `tests/e2e/fake_aside.js` — 시험용 가짜 aside CLI (Node+Playwright, `RADIO_HELPER_E2E=1 NODE_PATH=$(npm root -g) pytest tests/test_aside_cli.py`)
 - `radio_helper/collect.py` · `broadcast_seed.py/.json` — 게시판 모으기 · 기본 편성표·게시판
 - `radio_helper/quizbot/runner.py` · `lanes.py` · `appaudio.py` · `power.py` · `clues.py` — 듣기·동시 청취·앱 소리·절전 막기·끊김 원인

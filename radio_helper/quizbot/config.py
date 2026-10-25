@@ -208,6 +208,16 @@ NEW_CHANNELS = ("CBS 음악FM=#9390", "CBS 표준FM=")   # 0.55 에 기본 목�
 AUTO_EBS = "EBS FM=#1045"                             # 0.55 가 저절로 더했던 줄
 
 
+def chat_limit(conn: sqlite3.Connection, channel: str | None, default: int = 200) -> int:
+    """채팅 사연 글자 수: 그 채널 채팅 앱 입력칸이 더 적게 받는다고 알아낸 수가 있으면 그것 (0.74), 아니면 default."""
+    app = chat_app(conn, channel) or "gorilla"
+    try:
+        learned = int(db.get_setting(conn, f"{app}.input_limit") or 0)
+    except ValueError:
+        learned = 0
+    return min(default, learned) if learned >= 20 else default
+
+
 def broadcaster_of(channel: str | None) -> str:
     """채널 → 방송국 (SBS·MBC·KBS·CBS). 모르는 채널은 채널 이름 그대로."""
     name = (channel or "").strip()

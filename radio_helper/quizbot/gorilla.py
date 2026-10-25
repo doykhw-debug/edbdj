@@ -257,6 +257,9 @@ MOUSE_DOWN_UP = {False: (0x0002, 0x0004), True: (0x0008, 0x0010)}   # 왼쪽 누
 # 앱마다 입력 방식 (0.69). CBS 레인보우(Flutter)는 입력칸을 한 번 누르면 커서가 들어가지 않아 붙여넣기가 안 되고,
 # 빈 입력칸에 커서가 머물거나 빈 글을 보내면 '채팅을 입력하세요' 확인 창이 떠 [확인]을 누르기 전까지 다음 전송이 모두 막혔다
 # (사용자 확인: 매번 전송 실패). → 남은 확인 창 닫기(Esc) → 입력칸 두 번 클릭 → 바로 붙여넣기 → 전송 → 확인 창이 뜨면 닫기.
+PASTE_SETTLE_SECONDS = 0.6   # 붙여넣은 뒤 기다림 (0.74) — 레인보우(Flutter)·웹 기반 앱은 붙여넣기를 조금 늦게 처리해,
+                             # 바로 전송을 누르면 빈 칸이 전송됐음 ('채팅을 입력하세요' 확인 창)
+CLIPBOARD_TRIES = 10         # 다른 프로그램이 클립보드를 잡고 있으면 잠깐씩 다시 시도
 DOUBLE_CLICK_INPUT = {"rainbow"}
 DISMISS_DIALOG = {"rainbow"}
 
@@ -287,6 +290,70 @@ def click_at(x: int, y: int, user32=None, sleep=time.sleep, clicks: int = 1) -> 
         user32.mouse_event(down, 0, 0, 0, 0)
         sleep(0.03)
         user32.mouse_event(up, 0, 0, 0, 0)
+
+
+def flat_text(text: str) -> str:
+    """채팅은 한 줄: 줄바꿈을 띄어쓰기로 (한 줄 입력칸에서 잘리거나 Enter 로 먼저 전송되지 않게)."""
+    return re.sub(r"\s*\n\s*", " ", text or "").strip()
+
+
+def focused_value() -> tuple[str | None, str]:
+    """지금 키보드 초점이 있는 화면 요소(입력칸)의 글자와 설명 (UI 자동화). 글자를 못 읽으면 (None, 설명)."""
+    try:
+        from pywinauto.controls.uiawrapper import UIAWrapper
+        from pywinauto.uia_defines import IUIA
+        from pywinauto.uia_element_info import UIAElementInfo
+
+        info = UIAElementInfo(IUIA().iuia.GetFocusedElement())
+        what = f"{info.control_type or '?'} '{(info.name or '')[:20]}'"
+        try:
+            return UIAWrapper(info).iface_value.CurrentValue or "", what
+        except Exception:
+            return None, what
+    except Exception:
+        return None, ""
+
+
+def type_unicode(text: str, send=None, sleep=time.sleep, gap: float = 0.01) -> None:
+    """글자를 한 자씩 유니코드로 친다 (붙여넣기가 안 먹는 앱용). 한글 입력기 상태와 상관없이 그 글자 그대로 들어간다."""
+    if send is None:
+        import ctypes
+        from ctypes import wintypes
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
+                        ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+        class _U(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT), ("pad", ctypes.c_byte * 32)]
+
+        class INPUT(ctypes.Structure):
+            _anonymous_ = ("u",)
+            _fields_ = [("type", wintypes.DWORD), ("u", _U)]
+
+        def send(unit: int, up: bool) -> None:
+            inp = INPUT(type=1, ki=KEYBDINPUT(0, unit, 0x0004 | (0x0002 if up else 0), 0, 0))   # KEYEVENTF_UNICODE
+            ctypes.windll.user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+    data = text.encode("utf-16-le")
+    for i in range(0, len(data), 2):
+        unit = int.from_bytes(data[i:i + 2], "little")
+        send(unit, False)
+        send(unit, True)
+        sleep(gap)
+
+
+def remember_limit(app: str, chars: int) -> None:
+    """앱 입력칸이 받는 글자 수를 적어 둔다 (다음 사연은 그 안에서 만듦)."""
+    try:
+        from .. import db
+
+        conn = db.connect()
+        try:
+            db.set_setting(conn, f"{app}.input_limit", str(chars))
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
 
 def _user32():
@@ -1162,7 +1229,14 @@ class Gorilla:
         import win32clipboard
         import win32con
 
-        win32clipboard.OpenClipboard()
+        for n in range(CLIPBOARD_TRIES):
+            try:
+                win32clipboard.OpenClipboard()
+                break
+            except Exception:
+                if n == CLIPBOARD_TRIES - 1:
+                    raise GorillaError("클립보드를 다른 프로그램이 잡고 있어 붙여넣지 못했습니다 (클립보드 관리 프로그램 확인).")
+                time.sleep(0.1)
         try:
             if text is None:
                 try:
@@ -1244,34 +1318,73 @@ class Gorilla:
 
         self._check_front(w)
         self._clipboard(text)
-        send_keys("^a{BACKSPACE}^v", pause=0.05)
+        send_keys("^a{BACKSPACE}^v", pause=0.08)
+
+    def _read_input(self, edit) -> tuple[str | None, str]:
+        """입력칸 글자: 찾은 입력칸(uia)이면 그것, 위치 클릭이면 지금 커서가 있는 칸 (못 읽으면 None)."""
+        if edit is not None:
+            return self._value(edit), "찾은 입력칸"
+        return focused_value()
+
+    def _check_filled(self, text: str, got: str | None) -> bool:
+        """입력칸에 글이 다 들어갔는지. 앱이 일부만 받았으면(글자 수 제한) 그 수를 적고 보내지 않는다."""
+        if got is None or text in got:
+            return True
+        part = got.strip()
+        if part and len(part) < len(text) and text.startswith(part):
+            remember_limit(self.cfg.app, len(part))
+            raise GorillaError(f"{self.cfg.label} 입력칸이 {len(part)}자까지만 받아 글({len(text)}자)이 잘려 보내지 않았습니다. "
+                               f"다음 사연부터 {len(part)}자 안에서 만듭니다.")
+        return False
+
+    def _fill(self, w, point: tuple[int, int], text: str, edit=None) -> None:
+        """입력칸을 눌러 붙여넣고, 정말 들어갔는지 읽어 본다 (0.74). 안 들어갔으면 한 글자씩 직접 치고,
+        그래도 안 되면 전송을 누르지 않는다 (빈 칸을 보내 '채팅을 입력하세요' 창이 뜨지 않게)."""
+        from pywinauto.keyboard import send_keys
+
+        self._click(w, point, "입력칸", clicks=self._input_clicks())
+        time.sleep(0.3)
+        self._paste(w, text)
+        time.sleep(PASTE_SETTLE_SECONDS)
+        got, where = self._read_input(edit)
+        if self._check_filled(text, got):
+            return
+        self._click(w, point, "입력칸", clicks=self._input_clicks())   # 붙여넣기가 안 들어감 → 한 글자씩
+        time.sleep(0.3)
+        self._check_front(w)
+        send_keys("^a{BACKSPACE}", pause=0.08)
+        type_unicode(text)
+        time.sleep(PASTE_SETTLE_SECONDS)
+        got2, where = self._read_input(edit)
+        if self._check_filled(text, got2):
+            self.fixes.append("붙여넣기가 안 들어가 한 글자씩 입력함")
+            return
+        if edit is not None and self.cfg.app == "gorilla":     # 고릴라: 예전처럼 입력칸 값을 바로 넣어 봄
+            try:
+                edit.set_edit_text(text)
+            except Exception:
+                pass
+            if text in (self._value(edit) or ""):
+                return
+        raise GorillaError(f"{self.cfg.label} 입력칸에 글자가 들어가지 않아 전송을 누르지 않았습니다 (붙여넣기·직접 입력 모두, "
+                           f"지금 커서 자리: {where or '모름'}, 읽은 글: '{(got2 or got or '')[:20]}'). "
+                           "입력칸 위치를 다시 지정하거나 앱 입력칸을 한 번 직접 눌러 보세요.")
 
     def _put_text(self, w, text: str):
         """입력칸에 글자를 넣고 입력칸 객체(uia) 또는 None(coords)을 돌려준다.
-        앱이 키 입력으로 글자를 인식하도록 실제 클릭 후 붙여넣기를 먼저 쓴다."""
+        앱이 키 입력으로 글자를 인식하도록 실제 클릭 후 붙여넣기를 먼저 쓰고, 들어갔는지 확인한다."""
         if self.cfg.input_mode in ("coords", "screen"):
             if not self._has_point("input"):
                 raise GorillaError("입력칸 위치가 지정되지 않았습니다. '① 입력칸 영역 지정'을 하세요.")
             self._check_layout(w)
             self._dismiss_dialog(w)
-            self._click(w, self._target_point(w, "input"), "입력칸", clicks=self._input_clicks())
-            time.sleep(0.2)
-            self._paste(w, text)
+            self._fill(w, self._target_point(w, "input"), text)
             return None
         edit = self._find_input(w)
         self._check_point(w, self._center(edit), "입력칸")
         self._dismiss_dialog(w)
-        click_at(*self._center(edit), clicks=self._input_clicks())   # (pywinauto click_input 은 다른 모니터에서 주 모니터 가장자리를 누름)
-        time.sleep(0.2)
-        self._paste(w, text)
-        time.sleep(0.2)
-        if text not in (self._value(edit) or ""):
-            try:
-                edit.set_edit_text(text)
-            except Exception:
-                pass
-        if text not in (self._value(edit) or ""):
-            raise GorillaError("입력칸에 글자를 넣지 못했습니다. '입력칸 위치 지정' 방식을 써 보세요.")
+        # (pywinauto click_input 은 다른 모니터에서 주 모니터 가장자리를 누름 → click_at)
+        self._fill(w, self._center(edit), text, edit=edit)
         return edit
 
     def _press_send(self, w) -> None:
@@ -1417,6 +1530,7 @@ class Gorilla:
     def send_test(self, text: str) -> tuple[SendResult, str]:
         """설정 확인용으로 실제로 한 번 보낸다. 누르기 직전·보낸 직후 창을 찍어 둔다. 오클릭 방지로 보내지 못하면
         그때 화면에 누를 자리(빨강·초록 원)를 표시해 찍는다. 사진은 결과의 shots 로도 돌려준다 (증거 사진)."""
+        text = flat_text(text)
         shots, notes = [], []
         self.fixes = []
 
@@ -1471,6 +1585,7 @@ class Gorilla:
             return None
 
     def send(self, text: str) -> SendResult:
+        text = flat_text(text)
         shots = []
         self.fixes = []
 

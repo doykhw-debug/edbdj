@@ -419,10 +419,18 @@ def run(conn, cid: int, test: bool | None = None, answerer=None, now: datetime |
         allow_window = False
     trigger = trigger or ("scheduled" if scheduled else "manual")
     try:
-        if reader is read_page and poster is None and tabs_on(conn):   # 0.64: 내 Aside 새 탭 (로그인 그대로)
-            from . import tabbridge
+        if reader is read_page and poster is None:     # 0.74: 내 Aside (CLI → 확장 새 탭), Edge 보조 창은 쓰지 않음
+            mode = board_mode(conn)
+            if mode == "cli":
+                from . import aside_cli
 
-            reader, poster = tabbridge.read_page, tabbridge.post
+                reader, poster = aside_cli.read_page, aside_cli.post
+            elif mode == "tab":
+                from . import tabbridge
+
+                reader, poster = tabbridge.read_page, tabbridge.post
+            elif not os.environ.get("RADIO_HELPER_CHROMIUM"):   # (시험·개발용 크로미움을 지정했을 때만 예전 창 방식)
+                return finish(conn, cid, "하지 않음 — " + NO_ASIDE)
         with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
             return _run(conn, cid, test, answerer, now, reader, poster, allow_window, scheduled, trigger)
     except autofill.AutofillError as e:     # 다른 게시판 작업이 오래 끝나지 않음
@@ -910,6 +918,26 @@ def tabs_on(conn) -> bool:
         return False
 
 
+NO_ASIDE = ("Aside 연결 안 됨 — 코너 화면 '브라우저'에서 'Aside 연결 확인'을 누르세요 (Aside 를 켜 두고 CLI 또는 확장 연결). "
+            "Edge 보조 창은 쓰지 않습니다")
+
+
+def board_mode(conn) -> str | None:
+    """게시판 작업을 무엇으로 할지 (0.74, Edge 없음): cli = Aside CLI(aside repl) / tab = Aside 확장 새 탭 / None = 못 함."""
+    from . import aside, aside_cli
+
+    choice = aside.settings(conn)["choice"]
+    if choice in ("auto", "cli"):
+        try:
+            if aside_cli.ready(conn):
+                return "cli"
+        except Exception:
+            pass
+        if choice == "cli":
+            return None
+    return "tab" if tabs_on(conn) else None
+
+
 def check_logins_tabs(conn, targets: list[dict], say=print, reader=None) -> dict:
     """내 Aside 새 탭으로 방송국마다 글쓰기(없으면 게시판) 화면을 열어 로그인 여부를 본다."""
     from . import tabbridge
@@ -940,9 +968,7 @@ def _tab_read(conn, url: str) -> dict:
 
 
 def check_logins(conn, say=print) -> dict:
-    """방송국마다 창 없이 열어 로그인이 살아 있는지 확인해 적어 둔다."""
-    from playwright.sync_api import sync_playwright
-
+    """방송국마다 내 Aside 로 열어 로그인이 살아 있는지 확인해 적어 둔다 (CLI → 확장 새 탭, Edge 는 쓰지 않음)."""
     from . import autofill
 
     if paused(conn):
@@ -952,64 +978,43 @@ def check_logins(conn, say=print) -> dict:
     if not targets:
         say("확인할 코너가 없습니다.")
         return logins(conn)
-    if tabs_on(conn):
+    mode = board_mode(conn)
+    if mode == "cli":                        # 0.74: 내 Aside 로 (로그인 그대로)
+        from . import aside_cli
+
+        with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
+            for t in targets:
+                ok, why = aside_cli.check_login(conn, t["url"])
+                mark_login(conn, t["station"], ok, why)
+                say(f"{t['station']}: {why}")
+        return logins(conn)
+    if mode == "tab":
         with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
             return check_logins_tabs(conn, targets, say)
-    with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
-        with sync_playwright() as p:
-            ctx, _page = autofill.launch_profile(p, headless=True)
-            try:
-                return _check(conn, ctx, targets, say)
-            finally:
-                ctx.close()
+    for t in targets:                        # Edge 보조 창으로 확인하지 않는다 (그 창은 로그인이 따로라 늘 '로그인 필요')
+        mark_login(conn, t["station"], None, NO_ASIDE)
+    say(NO_ASIDE)
+    return logins(conn)
 
 
 def open_login(conn, say=print, minutes: int = LOGIN_WAIT_MINUTES) -> dict:
-    """미리 로그인: 도우미 브라우저 창에 방송국마다 탭을 열어 두고, 사용자가 직접 로그인한 뒤 창을 닫으면 확인한다.
-    로그인 정보는 이 프로그램이 읽지 않고 도우미 브라우저 프로필에만 남는다 (다음부터 창 없이 등록)."""
-    from playwright.sync_api import sync_playwright
-
-    from . import autofill
-
+    """미리 로그인: 내 Aside 에 방송국마다 새 탭을 열어 둔다 — 사용자가 Aside 에서 직접 로그인 (0.74: Edge 보조 창은 뺌).
+    로그인 정보는 이 프로그램이 읽지 않는다."""
     targets = login_targets(conn)
     if not targets:
         say("코너가 없어 열 곳이 없습니다. 먼저 코너를 추가하세요.")
         return logins(conn)
-    if tabs_on(conn):                       # 내 Aside 에 방송국마다 새 탭 (이미 로그인돼 있으면 그대로)
-        from . import tabbridge
+    from . import tabbridge
 
+    try:
         for t in targets:
             tabbridge.open_tab(t["home"] or t["url"])
-        say(f"내 Aside 에 새 탭({', '.join(t['station'] for t in targets)})을 열었습니다. 로그인돼 있지 않은 곳만 로그인하세요.")
+    except Exception as e:
+        say(f"Aside 에 탭을 열지 못했습니다: {str(e)[:120]}")
         return logins(conn)
-    with autofill.input_lock(BOARD_LOCK, wait_s=autofill.POST_LOCK_WAIT_SECONDS):
-        with sync_playwright() as p:
-            ctx, page = autofill.launch_profile(p, headless=False)
-            for i, t in enumerate(targets):
-                tab = page if i == 0 else ctx.new_page()
-                try:
-                    tab.goto(t["url"])
-                except Exception:
-                    pass
-            say(f"뜬 브라우저 창의 탭({', '.join(t['station'] for t in targets)})마다 직접 로그인하고, 다 되면 창을 닫으세요 "
-                f"({minutes}분 기다림).")
-            deadline = time.time() + minutes * 60
-            while time.time() < deadline:
-                try:
-                    if not ctx.pages:
-                        break
-                except Exception:
-                    break
-                time.sleep(1)
-            try:
-                ctx.close()
-            except Exception:
-                pass
-            ctx, _page = autofill.launch_profile(p, headless=True)
-            try:
-                return _check(conn, ctx, targets, say)
-            finally:
-                ctx.close()
+    say(f"내 Aside 에 새 탭({', '.join(t['station'] for t in targets)})을 열었습니다. 로그인돼 있지 않은 곳만 Aside 에서 직접 "
+        "로그인하세요 (아이디·비밀번호는 이 프로그램이 읽지 않음). 끝나면 '로그인 상태 확인'.")
+    return logins(conn)
 
 
 def _time(corner) -> tuple[int, int]:
