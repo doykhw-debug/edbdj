@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -95,7 +96,10 @@ def resend_wrong_holds(conn, since: str) -> dict:
     db.log(conn, "quizbot", f"못 보낸 정답 {out['quizzes']}건 · 사연 {out['stories']}건 · 게시판에만 둔 사연 "
                             f"{out['board_to_chat']}건을 채팅으로 다시 보냅니다 ('문자로만' 판단 무시)")
     return out
-SEND_LOCK_WAIT = 60       # 보내기 전 화면·마우스 차례를 기다리는 시간 (동시 청취: 다른 칸이 보내는 중일 수 있음)
+SEND_LOCK_WAIT = 300      # 보내기 전 화면·마우스 차례를 기다리는 시간 (0.79: 4개 방송사가 한꺼번에 내도 순서대로 다 보내게)
+QUEUE_DIR = "input_queue" # 차례 줄: 먼저 온 전송부터 하나씩 (동시 청취의 여러 청취기가 같은 줄을 씀)
+QUEUE_STALE_SECONDS = 600 # 이보다 오래된 줄 표(꺼진 청취기 등)는 지운다
+TURN_GAP_SECONDS = 0.8    # 한 방송사 입력이 끝나고 다음 방송사로 넘어가기 전 쉬는 시간
 REFIND_LOCK_WAIT = 3      # 창 다시 찾기는 차례가 비어 있을 때만 (보내는 중이면 다음에)
 
 
@@ -590,7 +594,11 @@ class Runner:
         if not config.get(self.conn, f"{app}.chat_rect"):
             return
         try:
-            data = sender.chat_image(save_as=f"{app}_chat")
+            try:                              # 확인 창 닫기(클릭)는 화면·마우스 차례가 비어 있을 때만 (0.79)
+                with self.input_turn(0):
+                    data = sender.chat_image(save_as=f"{app}_chat")
+            except LockBusy:                  # 다른 방송사가 입력 중 → 찍기만 (누르지 않음)
+                data = sender.chat_image(save_as=f"{app}_chat", click_ok=False)
         except Exception as e:
             if not self._shot_error:
                 self._shot_error = True
@@ -1356,25 +1364,60 @@ def board_corner(conn: sqlite3.Connection, program: str, hint: str = ""):
     return rows[0]
 
 
+def _queue_dir():
+    path = db.data_dir() / QUEUE_DIR
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def _first_in_line(ticket) -> bool:
+    """줄의 맨 앞이 이 표인지 (꺼진 청취기·오래된 표는 지우고 본다)."""
+    from ..autofill import pid_alive
+
+    live = []
+    for t in _queue_dir().iterdir():
+        try:
+            stamp, pid = t.name.split("_")[:2]
+            if time.time() - float(stamp) > QUEUE_STALE_SECONDS or not pid_alive(int(pid)):
+                t.unlink(missing_ok=True)
+                continue
+        except (ValueError, OSError):
+            continue
+        live.append(t.name)
+    return not live or sorted(live)[0] == ticket.name
+
+
 @contextmanager
 def shared_input_lock(wait_seconds: int = SEND_LOCK_WAIT):
-    """웹 입력 도구와 같은 잠금. 다른 입력 작업이 돌고 있으면 잠깐 기다린다."""
+    """웹 입력 도구와 같은 잠금 + 차례 줄 (0.79): 4개 방송사가 거의 같은 때 정답·사연을 내도 먼저 온 것부터 하나씩,
+    한 방송사 입력이 끝나야 다음 방송사로 넘어간다. 기다릴 시간이 0 이면 지금 비어 있을 때만 (줄을 서지 않음)."""
+    import secrets as _secrets
+
     from ..autofill import AutofillError, input_lock
 
     deadline = time.monotonic() + wait_seconds
-    while True:
-        cm = input_lock()
-        try:
-            cm.__enter__()
-            break
-        except AutofillError:
-            if time.monotonic() > deadline:
-                raise
-            time.sleep(1)
+    ticket = _queue_dir() / f"{time.time():.6f}_{os.getpid()}_{_secrets.token_hex(3)}"
+    ticket.write_text("", encoding="ascii")
+    cm = None
     try:
-        yield
+        while True:
+            if _first_in_line(ticket):
+                cm = input_lock()
+                try:
+                    cm.__enter__()
+                    break
+                except AutofillError:
+                    cm = None
+            if time.monotonic() >= deadline:
+                raise AutofillError("화면·마우스 차례를 기다리다 시간이 지났습니다 (다른 방송사 입력이 길어짐)")
+            time.sleep(0.3)
+        try:
+            yield
+        finally:
+            cm.__exit__(None, None, None)
+            time.sleep(TURN_GAP_SECONDS)      # 앞 방송사 창이 자리 잡은 뒤 다음 방송사로
     finally:
-        cm.__exit__(None, None, None)
+        ticket.unlink(missing_ok=True)
 
 
 def make_transcriber(conn: sqlite3.Connection, model: str, program: str):

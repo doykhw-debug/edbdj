@@ -1558,7 +1558,7 @@ class Gorilla:
             points.append((self._target_point(w, "send"), "#22c55e"))
         return points
 
-    def chat_image(self, max_side: int = 900, save_as: str | None = None) -> bytes | None:
+    def chat_image(self, max_side: int = 900, save_as: str | None = None, click_ok: bool = True) -> bytes | None:
         """채팅 목록 영역을 찍어 JPEG 로 돌려준다 (읽기만 함, 창을 앞으로 가져오지 않음).
         영역을 지정하지 않았거나 창을 찾지 못하면 None."""
         screen = parse_rect(self.cfg.chat_screen)
@@ -1581,7 +1581,7 @@ class Gorilla:
             area = (rl + int(rw * frac[0]), rt + int(rh * frac[1]), rl + int(rw * frac[2]), rt + int(rh * frac[3]))
             by_window = self._region() is None
         try:                                      # 0.77: 찍을 때 확인 창이 떠 있으면 '확인'으로 닫고 찍는다
-            if self.cfg.app in DIALOG_APPS:
+            if self.cfg.app in DIALOG_APPS and click_ok:
                 self.close_dialog(w)
         except Exception:
             pass
