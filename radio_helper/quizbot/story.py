@@ -200,14 +200,12 @@ def decide(conn: sqlite3.Connection, post, schedule, now: datetime, limit_per_ho
     warnings = json.loads(post["warnings"] or "[]")
     if has_block(warnings):
         reasons.append("검사에서 막힌 항목이 있음")
-    if post["gorilla_accepted"] == "no" and route != "sms":
-        reasons.append("진행자가 고릴라가 아닌 다른 방법(문자 등)으로 받는다고 함 — '문자로 보내기'를 누르면 보냄")
+    # 0.76: 응모 방법 판단('문자로만' 등)으로 막지 않는다 — 문자로만 받는 방송은 없음, 무조건 채팅
     if not post["approved"]:
         def allowed(key):
             return schedule is not None and key in schedule.keys() and bool(schedule[key])
 
-        gorilla_ok = route == "sms" or post["gorilla_accepted"] == "yes" or allowed("gorilla_confirmed")
-        auto_ok = gorilla_ok and (
+        auto_ok = (
             (post["source"] == "user_line" and allowed("story_auto_user_line"))
             # 승인한(확인·고친) 경험 글 그대로: 덧붙인 내용이 없으니 '사연 자동 전송'이 켜져 있으면 바로 보낸다
             or (post["source"] == "approved" and allowed("story_auto_ai") and not has_block(warnings))

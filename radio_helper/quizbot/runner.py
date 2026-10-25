@@ -56,6 +56,45 @@ GORILLA_HOLD = app_hold("gorilla")
 APP_HOLDS = [app_hold(a) for a in config.CHAT_APPS]
 SMS_HOLD = "대기: 휴대폰(USB)이 연결되지 않음 — 연결되면 보냄"
 HELD_RETRY_MINUTES = 20  # 이보다 오래된 보류 글은 늦었으므로 자동으로 보내지 않는다
+# 0.76: 예전에 '문자로만 받는다·고릴라 응모 미확인·게시판에만'으로 막았던 보류 (실제로는 모두 채팅으로 받는 구간이었음)
+WRONG_HOLD_LIKE = ("보류:%문자%", "보류:%고릴라 응모%", "보류:%게시판용 글%", "게시판용 — 원고 검토함%")
+
+
+def resend_wrong_holds(conn, since: str) -> dict:
+    """since 뒤에 그 판단으로 막혔던 정답·사연을 채팅으로 다시 보내게 한다 (사용자가 누름 — 승인한 것으로 봄).
+    게시판에만 두었던 사연은 채팅용 줄을 새로 만들어 보낸다 (게시판 원고는 그대로). 몇 건인지 돌려준다."""
+    like = " OR ".join("decision LIKE ?" for _ in WRONG_HOLD_LIKE)
+    out = {"quizzes": 0, "stories": 0, "board_to_chat": 0}
+    note = "다시 보내기 — '문자로만' 판단은 무시하고 채팅으로 (0.76)"
+    cur = conn.execute(f"UPDATE quizzes SET approved = 1, decision = ?, updated_at = ? WHERE entry_status = 'pending' "
+                       f"AND kind = 'new' AND created_at >= ? AND ({like})", (note, db.now(), since, *WRONG_HOLD_LIKE))
+    out["quizzes"] = cur.rowcount
+    cur = conn.execute(f"UPDATE story_posts SET approved = 1, decision = ?, updated_at = ? WHERE status = 'pending' "
+                       f"AND COALESCE(target, 'chat') = 'chat' AND created_at >= ? AND ({like})",
+                       (note, db.now(), since, *WRONG_HOLD_LIKE))
+    out["stories"] = cur.rowcount
+    for b in conn.execute(f"SELECT * FROM story_posts WHERE status = 'pending' AND target = 'board' AND created_at >= ? "
+                          f"AND experience_id IS NOT NULL AND ({like})", (since, *WRONG_HOLD_LIKE)).fetchall():
+        if conn.execute("SELECT 1 FROM story_posts WHERE target = 'chat' AND (note = ? OR (draft_id IS NOT NULL AND "
+                        "draft_id = ?))", (f"게시판 사연 #{b['id']}을 채팅에도", b["draft_id"])).fetchone():
+            continue                                        # 이 게시판 사연의 채팅 줄이 이미 있음
+        exp = conn.execute("SELECT * FROM experiences WHERE id = ?", (b["experience_id"],)).fetchone()
+        if exp is None:
+            continue
+        text = story.approved_text(conn, exp, config.chat_limit(conn, b["channel"], answerer_mod.STORY_LIMIT), b["song"] or "")
+        conn.execute(
+            """INSERT INTO story_posts (schedule_id, channel, program, broadcast_date, topic, experience_id, message, source,
+                   gorilla_accepted, deadline, warnings, excerpt, note, target, board_title, draft_id, song, approved,
+                   decision, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, '[]', ?, ?, 'chat', ?, ?, ?, 1, ?, ?, ?)""",
+            (b["schedule_id"], b["channel"], b["program"], b["broadcast_date"], b["topic"], b["experience_id"], text,
+             b["gorilla_accepted"], b["deadline"], b["excerpt"], f"게시판 사연 #{b['id']}을 채팅에도", b["board_title"],
+             b["draft_id"], b["song"], note, db.now(), db.now()))
+        out["board_to_chat"] += 1
+    conn.commit()
+    db.log(conn, "quizbot", f"못 보낸 정답 {out['quizzes']}건 · 사연 {out['stories']}건 · 게시판에만 둔 사연 "
+                            f"{out['board_to_chat']}건을 채팅으로 다시 보냅니다 ('문자로만' 판단 무시)")
+    return out
 SEND_LOCK_WAIT = 60       # 보내기 전 화면·마우스 차례를 기다리는 시간 (동시 청취: 다른 칸이 보내는 중일 수 있음)
 REFIND_LOCK_WAIT = 3      # 창 다시 찾기는 차례가 비어 있을 때만 (보내는 중이면 다음에)
 
@@ -159,12 +198,8 @@ def decide(conn: sqlite3.Connection, q: sqlite3.Row, schedule: sqlite3.Row | Non
                 reasons.append(f"기발한 정도 {q['wit_score'] or 0:.2f} < 기준 {min_wit:.2f}")
         elif (q["confidence"] or 0) < schedule["min_confidence"] and not always_send(conn, q["answer"]):
             reasons.append(f"확신도 {q['confidence']:.2f} < 기준 {schedule['min_confidence']:.2f}")
-        if route == "sms":
-            pass
-        elif q["gorilla_accepted"] == "no":
-            reasons.append("진행자가 고릴라가 아닌 다른 방법(문자 등)으로 받는다고 함 — '문자로 보내기'를 누르면 보냄")
-        elif q["gorilla_accepted"] != "yes" and not (schedule and schedule["gorilla_confirmed"]):
-            reasons.append("고릴라 응모 인정 여부 미확인")
+        # 0.76 사용자 확인: '문자로만 받는다'고 판단한 구간은 모두 실제로는 채팅으로 받는 구간이었고, 문자로만 받는
+        # 방송은 없음 → 응모 방법 판단(gorilla_accepted)으로 막지 않고 무조건 채팅으로 보낸다
     limit = config.get_int(conn, "quizbot.max_sends_per_hour")
     since = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     # 채널마다 센다 (동시 청취로 여러 채널을 들어도 한 채널의 퀴즈가 다른 채널 상한을 쓰지 않게)
@@ -740,14 +775,17 @@ class Runner:
         채팅 앱은 창을 찾았다는 판단과 상관없이 다시 시도한다 (판단이 틀릴 수 있고, 막힌 전송은 보내지 않은 것이므로)."""
         holds = [SMS_HOLD] + APP_HOLDS
         marks = ",".join("?" * len(holds))
+        # 0.76: 예전 판단('문자로만' 등)으로 막힌 최근 글도 다시 (이제 그 판단으로는 막지 않으므로 보내짐)
+        wrong = " OR ".join("decision LIKE ?" for _ in WRONG_HOLD_LIKE[:3])
         # created_at 은 db.now()(실제 시각)로 남으므로 같은 기준으로 비교한다
         since = (datetime.now() - timedelta(minutes=HELD_RETRY_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
         for table, status_col, send in (("quizzes", "entry_status", self.try_send),
                                         ("story_posts", "status", self.try_send_story)):
+            board = " AND COALESCE(target, 'chat') = 'chat'" if table == "story_posts" else ""
             rows = self.conn.execute(
-                f"SELECT id, schedule_id FROM {table} WHERE {status_col} = 'pending' AND approved = 0 "
-                f"AND (decision IN ({marks}) OR decision LIKE ?) AND created_at >= ?",
-                (*holds, RETRY_PREFIX + "%", since)).fetchall()
+                f"SELECT id, schedule_id FROM {table} WHERE {status_col} = 'pending' AND approved = 0{board} "
+                f"AND (decision IN ({marks}) OR decision LIKE ? OR {wrong}) AND created_at >= ?",
+                (*holds, RETRY_PREFIX + "%", *WRONG_HOLD_LIKE[:3], since)).fetchall()
             for r in rows:   # (다시 시도 간격·20분 상한은 deliver 에서)
                 send(r["id"], self._schedule(schedule, r["schedule_id"]))
 
@@ -824,7 +862,8 @@ class Runner:
         exp = None
         if res.experience_id in {e["id"] for e in exps}:
             exp = self.conn.execute("SELECT * FROM experiences WHERE id = ?", (res.experience_id,)).fetchone()
-        target = "board" if res.board_only else "chat"
+        # 0.76 사용자 요청: '게시판에 올려 달라'는 사연도 채팅에 먼저 올리고, 그다음 게시판에도 올린다
+        board_too = bool(res.board_only)
         song = (res.song or "").strip()
         if song and config.get(self.conn, "live.song_free") != "1" and exp is not None and \
                 song != (exp["song"] or "").strip() and song != (db.get_profile(self.conn).get("song") or "").strip():
@@ -832,53 +871,75 @@ class Runner:
         message, source = (res.message or "").strip(), "ai"
         if exp is not None and res.use_user_line and (exp["gorilla_line"] or "").strip():
             message, source = exp["gorilla_line"].strip(), "user_line"
-        if target == "board":
-            message, source = (res.board_body or "").strip(), "ai"
         limit = config.chat_limit(self.conn, schedule["channel"], answerer_mod.STORY_LIMIT)   # 앱 입력칸이 받는 글자 수
-        if target != "board" and song and message and len(message) + len(song) + 8 <= limit:
+        if exp is not None and not message and board_too:       # 게시판 글만 만들었으면 채팅에는 승인한 경험 글 그대로
+            message, source = story.approved_text(self.conn, exp, limit, song), "approved"
+        elif song and message and len(message) + len(song) + 8 <= limit:
             message = f"{message} (신청곡: {song})"
         if exp is None:
             message = ""
         warnings = story.message_checks(self.conn, message, exp, source, res.added_facts,
-                                        limit=2000 if target == "board" else limit) if exp is not None else []
-        if exp is not None and target == "chat" and source == "ai" and warnings and \
-                config.get(self.conn, "live.story_approved") == "1":
+                                        limit=limit) if exp is not None else []
+        if exp is not None and source == "ai" and warnings and config.get(self.conn, "live.story_approved") == "1":
             # 승인한(확인·고친) 경험이면 확인을 다시 받지 않는다: AI가 덧붙여 경고가 난 글 대신 승인한 글 그대로 보낸다
             plain = story.approved_text(self.conn, exp, limit, song)
             plain_warnings = story.message_checks(self.conn, plain, exp, "approved", limit=limit)
             if not story.has_block(plain_warnings):
                 message, source, warnings = plain, "approved", plain_warnings
         note = res.fit_reason if exp is not None else "주제에 맞는 실제 경험이 없음 — 직접 써서 보내거나 건너뛰세요"
-        draft_id = self.make_board_draft(program, exp, res.board_title, message, song,
+        board_body = (res.board_body or "").strip() or message
+        # 채팅 글과 게시판 원고는 같은 경험 한 번 (원고 번호를 함께 적어 두면 같은 경험 검사에서 서로를 빼고 본다)
+        draft_id = self.make_board_draft(program, exp, res.board_title, board_body, song,
                                          hint=f"{res.topic}\n{transcript[-1500:]}") \
-            if target == "board" and exp is not None and message else None
+            if board_too and exp is not None and board_body else None
+
+        def add(target: str, text: str, src: str, warns: list) -> int:
+            cur = self.conn.execute(
+                """INSERT INTO story_posts (schedule_id, channel, program, broadcast_date, topic, experience_id, message, source,
+                       gorilla_accepted, deadline, warnings, excerpt, note, target, board_title, draft_id, song, chat_shots,
+                       created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (schedule["id"], self._channel_of(schedule), program, w.broadcast_date, res.topic.strip(),
+                 exp["id"] if exp is not None else None, text, src, res.gorilla_accepted, res.deadline_hint or None,
+                 json.dumps(warns, ensure_ascii=False), transcript[-2000:], note, target, res.board_title or None,
+                 draft_id, song or None, len(images), db.now(), db.now()))
+            self.conn.commit()
+            return cur.lastrowid
+
+        pid = add("chat", message, source, warnings)
+        db.log(self.conn, "quizbot", f"{program} 사연 주제 감지 #{pid}: {res.topic[:40]} → "
+                                     + (f"경험 #{exp['id']} 사용" if exp is not None else "맞는 경험 없음")
+                                     + (" · 게시판 요청 → 채팅 먼저, 그다음 게시판" if board_too else "")
+                                     + (f" · 채팅창 {len(images)}장 함께 분석" if images else ""))
+        if self.try_send_story(pid, schedule) is None:
+            self.deps.notify(f"사연 주제 '{res.topic[:30]}' — 확인 대기")
+        if board_too:
+            self.board_after_chat(pid, draft_id, board_body, res.topic)
+        return pid
+
+    def board_after_chat(self, chat_pid: int, draft_id: int | None, body: str, topic: str) -> int | None:
+        """채팅에 먼저 올린 사연을 게시판에도 (게시판용 사연 줄을 따로 두고 원고를 자동 등록)."""
+        chat = self.conn.execute("SELECT * FROM story_posts WHERE id = ?", (chat_pid,)).fetchone()
         cur = self.conn.execute(
             """INSERT INTO story_posts (schedule_id, channel, program, broadcast_date, topic, experience_id, message, source,
                    gorilla_accepted, deadline, warnings, excerpt, note, target, board_title, draft_id, song, chat_shots,
                    created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (schedule["id"], self._channel_of(schedule), program, w.broadcast_date, res.topic.strip(), exp["id"] if exp is not None else None,
-             message, source, res.gorilla_accepted, res.deadline_hint or None,
-             json.dumps(warnings, ensure_ascii=False), transcript[-2000:], note, target, res.board_title or None,
-             draft_id, song or None, len(images), db.now(), db.now()))
+               SELECT schedule_id, channel, program, broadcast_date, topic, experience_id, ?, 'ai', gorilla_accepted, deadline,
+                      '[]', excerpt, ?, 'board', board_title, ?, song, chat_shots, ?, ? FROM story_posts WHERE id = ?""",
+            (body, f"채팅 사연 #{chat_pid} 다음 게시판", draft_id, db.now(), db.now(), chat_pid))
         self.conn.commit()
-        pid = cur.lastrowid
-        db.log(self.conn, "quizbot", f"{program} 사연 주제 감지 #{pid}: {res.topic[:40]} → "
-                                     + (f"경험 #{exp['id']} 사용" if exp is not None else "맞는 경험 없음")
-                                     + (" · 게시판에만 받음" if target == "board" else "")
-                                     + (f" · 채팅창 {len(images)}장 함께 분석" if images else ""))
-        if target == "board":
-            if draft_id and config.get(self.conn, "live.board_auto") == "1" and self.auto_board(pid, draft_id):
-                return pid
-            if self.conn.execute("SELECT decision FROM story_posts WHERE id = ?", (pid,)).fetchone()[0] is None:
-                self._hold("story_posts", pid, (f"게시판용 — 원고 검토함 #{draft_id}에서 확인하고 게시판에 입력하세요 (등록은 직접)"
-                                                if draft_id else "게시판용 — 이 프로그램의 게시판(코너)을 몰라 원고를 만들지 못함. "
-                                                                 "코너 화면에서 게시판을 추가하세요"))
-            self.deps.notify(f"게시판 사연 '{res.topic[:30]}' — 원고 검토함 확인")
-            return pid
-        if self.try_send_story(pid, schedule) is None:
-            self.deps.notify(f"사연 주제 '{res.topic[:30]}' — 확인 대기")
-        return pid
+        bid = cur.lastrowid
+        if chat is None or chat["experience_id"] is None:
+            self._hold("story_posts", bid, "게시판용 — 맞는 경험이 없어 게시판에 올리지 않음")
+            return bid
+        if draft_id and config.get(self.conn, "live.board_auto") == "1" and self.auto_board(bid, draft_id):
+            return bid
+        if self.conn.execute("SELECT decision FROM story_posts WHERE id = ?", (bid,)).fetchone()[0] is None:
+            self._hold("story_posts", bid, (f"게시판용 — 원고 검토함 #{draft_id}에서 확인하고 게시판에 입력하세요 (등록은 직접)"
+                                            if draft_id else "게시판용 — 이 프로그램의 게시판(코너)을 몰라 원고를 만들지 못함. "
+                                                             "코너 화면에서 게시판을 추가하세요"))
+        self.deps.notify(f"게시판 사연 '{topic[:30]}' — 채팅에 먼저 보내고 게시판은 원고 검토함 확인")
+        return bid
 
     # ── DJ 한마디 → 신청곡 ───────────────────────────────────────
     def dj_song(self, session, w: Window, slot: str | None, since: datetime) -> None:
@@ -1104,14 +1165,7 @@ class Runner:
     def try_send(self, qid: int, schedule) -> str | None:
         q = self.conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
         route = self.route_of(q)
-        if route == "app" and q["gorilla_accepted"] == "no" and not q["route"] and \
-                config.get(self.conn, "live.sms_fallback") == "1" and config.sms_number(self.conn, q["channel"]):
-            # 진행자가 앱 채팅이 아닌 문자로만 받는다고 함 → 사용자가 켠 '문자로 자동 전송'(유료)으로 보낸다
-            route = "sms"
-            self.conn.execute("UPDATE quizzes SET route = 'sms', updated_at = ? WHERE id = ?", (db.now(), qid))
-            self.conn.commit()
-            q = self.conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
-            db.log(self.conn, "quizbot", f"퀴즈 #{qid}: 진행자가 문자로만 받는다고 해서 문자로 보냄 (설정: 문자로 자동 전송)")
+        # (0.76: '문자로만 받는다'는 판단으로 문자로 바꾸지 않는다 — 그런 방송은 없음, 늘 채팅. 문자는 사용자가 고를 때만)
         reasons = decide(self.conn, q, schedule, self.deps.now(), route)
         if reasons:
             self._hold("quizzes", qid, "보류: " + " / ".join(reasons))

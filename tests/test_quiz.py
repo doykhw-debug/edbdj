@@ -34,7 +34,7 @@ def test_hold_reasons(conn):
     qid, _ = quiz.add_or_bump(conn, base(gorilla_accepted="unknown", deadline=""))
     q = conn.execute("SELECT * FROM quizzes WHERE id = ?", (qid,)).fetchone()
     reasons = " ".join(quiz.hold_reasons(q))
-    assert "고릴라 응모" in reasons and "마감" in reasons and "정답 후보" in reasons
+    assert "고릴라 응모" not in reasons and "마감" in reasons and "정답 후보" in reasons   # 0.76: 응모 방법으로 막지 않음
 
     conn.execute("UPDATE quizzes SET gorilla_accepted='yes', deadline='9시', answer='사과', answer_verified=1")
     conn.commit()

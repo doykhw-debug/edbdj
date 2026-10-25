@@ -55,8 +55,6 @@ def hold_reasons(q, stopped: bool = False) -> list[str]:
         reasons.append("문제 내용이 없습니다.")
     if not (q["deadline"] or "").strip():
         reasons.append("응모 마감을 확인하지 못했습니다.")
-    if q["gorilla_accepted"] != "yes":
-        reasons.append("이 퀴즈가 고릴라 응모로 인정되는지 확인하지 못했습니다.")
     if not (q["answer"] or "").strip():
         reasons.append("정답 후보가 없습니다.")
     elif not q["answer_verified"]:

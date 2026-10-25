@@ -2,6 +2,10 @@
 {% block title %}퀴즈 · 라디오 참여 도우미{% endblock %}
 {% block content %}
 <h1>퀴즈 기록</h1>
+<form method="post" action="{{ url_for('quizbot_resend_held') }}" class="actions" style="margin:0 0 10px">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="next" value="/quizzes">
+  <button class="secondary">오늘 못 보낸 정답·사연 채팅으로 다시 보내기</button>
+  <span class="hint">'문자로만 받는다'·'게시판에만'으로 막혔던 것 — 문자로만 받는 방송은 없어 모두 채팅으로 보냅니다 (게시판 요청은 채팅 먼저, 그다음 게시판)</span></form>
 
 {% if report %}
 <details class="panel" id="listen-check" {{ 'open' if report | selectattr('notes') | list }}>

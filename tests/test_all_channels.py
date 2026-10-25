@@ -150,26 +150,26 @@ def test_unscheduled_duplicates_only_last_three_hours(conn):
 QUIZ = {3: "오늘의 퀴즈 철수가 좋아하는 과일 정답은 문자 8000번으로 보내주세요"}
 
 
-def sms_only_runner(conn, phone, **flags):
+def sms_only_runner(conn, phone, gor=None, **flags):
     start_live(conn, channel="MBC FM4U", **flags)
-    r, _ = live_runner(conn, QUIZ, ScriptAnswerer([analysis(gorilla_accepted="no")]), FakeGorilla(), n=10)
+    r, _ = live_runner(conn, QUIZ, ScriptAnswerer([analysis(gorilla_accepted="no")]), gor or FakeGorilla(), n=10)
     r.deps.sms = phone
     return r
 
 
-def test_sms_only_quiz_held_unless_user_turned_on_sms(conn):
-    phone = FakePhone()
-    sms_only_runner(conn, phone).run_live()
+def test_sms_only_judgment_is_ignored_and_sent_by_chat(conn):
+    # 0.76 사용자 확인: '문자로만 받는다'고 판단한 구간은 모두 실제로는 채팅으로 받는 구간 — 문자로만 받는 방송은 없음
+    phone, gor = FakePhone(), FakeGorilla()
+    sms_only_runner(conn, phone, gor).run_live()
     q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
-    assert phone.sent == [] and "문자 등" in q["decision"]                         # 유료라 저절로 바꾸지 않음
+    assert phone.sent == [] and gor.sent and "사과" in gor.sent[0] and q["entry_status"] == "entered"
 
 
-def test_sms_only_quiz_sent_by_text_when_turned_on(conn):
-    phone = FakePhone()
-    sms_only_runner(conn, phone, sms_fallback="1").run_live()
+def test_sms_only_judgment_does_not_switch_to_paid_text(conn):
+    phone, gor = FakePhone(), FakeGorilla()
+    sms_only_runner(conn, phone, gor, sms_fallback="1").run_live()             # '문자로 자동 전송'을 켜 두어도
     q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
-    assert phone.sent and phone.sent[0][0] == "#8000" and "사과" in phone.sent[0][1]
-    assert (q["route"], q["sent_via"]) == ("sms", "sms")
+    assert phone.sent == [] and gor.sent and (q["route"] or "app") != "sms"
 
 
 # ── 화면 ──────────────────────────────────────────────────────────────

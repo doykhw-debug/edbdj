@@ -2,6 +2,10 @@
 {% block title %}사연 · 라디오 참여 도우미{% endblock %}
 {% block content %}
 <h1>사연 <span class="muted">앱 채팅(고릴라·mini·콩·레인보우) · 문자 · 게시판 사연</span></h1>
+<form method="post" action="{{ url_for('quizbot_resend_held') }}" class="actions" style="margin:0 0 10px">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="next" value="/stories">
+  <button class="secondary">오늘 못 보낸 정답·사연 채팅으로 다시 보내기</button>
+  <span class="hint">'문자로만 받는다'·'게시판에만'으로 막혔던 것 — 문자로만 받는 방송은 없어 모두 채팅으로 보냅니다 (게시판 요청은 채팅 먼저, 그다음 게시판)</span></form>
 
 <div class="grid" style="margin-bottom:16px">
   <a class="stat" href="{{ url_for('experiences') }}"><span class="muted">실제 경험</span><b>{{ counts.experiences }}</b><span class="muted">사실 확인 {{ counts.confirmed }}건 · 사연은 이것으로만 씀</span></a>

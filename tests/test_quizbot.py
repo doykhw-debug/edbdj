@@ -287,7 +287,7 @@ def test_held_when_unsure_then_sent_after_approval(conn):
     run_one_window(conn, r, clock)
     q = auto_quizzes(conn)[0]
     assert sender.sent == [] and q["entry_status"] == "pending"
-    assert "확신도" in q["decision"] and "고릴라 응모 인정 여부 미확인" in q["decision"]
+    assert "확신도" in q["decision"] and "고릴라" not in q["decision"]                  # 0.76: 응모 방법으로는 막지 않음
 
     # 사용자가 화면에서 답을 고쳐 승인 → 실행기가 보낸다
     conn.execute("UPDATE quizzes SET approved = 1, answer = '바나나' WHERE id = ?", (q["id"],))
@@ -304,15 +304,14 @@ def test_manual_mode_never_auto_sends(conn):
     assert sender.sent == [] and "자동 전송이 꺼져" in auto_quizzes(conn)[0]["decision"]
 
 
-def test_gorilla_confirmed_allows_unknown_channel_but_not_no(conn):
-    add_schedule(conn, gorilla_confirmed=1)
+def test_entry_method_judgment_never_blocks_chat(conn):
+    # 0.76 사용자 확인: '문자로만 받는다'(no)·'모름'(unknown) 판단 구간도 실제로는 모두 채팅으로 받음 → 무조건 채팅
+    add_schedule(conn, gorilla_confirmed=0)
     r, clock, _a, sender = make_runner(conn, {2: "오늘의 퀴즈", 20: "두 번째 퀴즈 문제 나갑니다"}, [
         analysis(gorilla_accepted="unknown"),
         analysis(question="영희가 좋아하는 색은?", answer="파랑", gorilla_accepted="no")])
     run_one_window(conn, r, clock)
-    assert sender.sent == ["사과"]
-    second = auto_quizzes(conn)[1]
-    assert second["entry_status"] == "pending" and "다른 방법" in second["decision"]
+    assert sender.sent == ["사과", "파랑"]
 
 
 def test_send_error_marks_unknown_and_never_resends(conn):

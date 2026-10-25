@@ -72,7 +72,7 @@
       <label class="inline"><input type="checkbox" name="song_free" value="1" {{ 'checked' if options.song_free }}> 신청곡 알아서 고르기 <span class="hint">(주제·분위기에 맞는 곡, 승인 없이)</span></label>
       <label class="inline"><input type="checkbox" name="dj_song" value="1" {{ 'checked' if options.dj_song }}> DJ 한마디 확인 → 신청곡 보내기 <span class="hint">(프로그램마다 한 번, 신청곡을 청하면 오늘 날씨·이슈에 맞는 곡을 한 번 이상)</span></label>
       <label class="inline"><input type="checkbox" name="chat_consensus" value="1" {{ 'checked' if options.chat_consensus }}> 채팅 공통 답 채택 <span class="hint">(채팅에서 같은 답이 3개 이상이면 그 답 + 어울리는 이유로 보냄)</span></label>
-      <label class="inline"><input type="checkbox" name="sms_fallback" value="1" {{ 'checked' if options.sms_fallback }}> 문자로만 받는 퀴즈는 문자로 자동 전송 <span class="hint">(MBC #8000·KBS #8910 등, 건당 약 50원 — 휴대폰 연결 필요)</span></label>
+      <input type="hidden" name="sms_fallback" value="{{ '1' if options.sms_fallback else '' }}"><span class="hint">정답·사연은 언제나 채팅으로 보냅니다 (0.76 — '문자로만 받는' 방송은 없어 문자 자동 전환은 쓰지 않음, 문자는 퀴즈·사연 화면에서 직접 고를 때만)</span>
       <label class="inline"><input type="checkbox" name="gift" value="1" {{ 'checked' if options.gift }}> 선물 정보 기록</label>
       <label class="inline"><input type="checkbox" name="witty" value="1" {{ 'checked' if options.witty }}> 기발한 오답 섞기 <span class="hint">(웃긴 포인트가 있을 때만)</span></label>
       <label class="inline"><input type="checkbox" name="captions" value="1" {{ 'checked' if options.captions }}> 자막 창 띄우기</label>
@@ -244,6 +244,9 @@
       <td class="muted">{{ u.decision }}</td></tr>
     {% endfor %}
   </table></div>
+  <form method="post" action="{{ url_for('quizbot_resend_held') }}" class="actions" style="margin:6px 0">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="next" value="/">
+    <button title="'문자로만 받는다'·'고릴라 응모 미확인'·'게시판에만'으로 막혔던 오늘의 정답·사연을 채팅으로 보냅니다 (문자로만 받는 방송은 없음)">오늘 못 보낸 정답·사연 채팅으로 다시 보내기</button></form>
   <p class="hint"><a href="{{ url_for('quizzes') }}">퀴즈</a> · <a href="{{ url_for('stories') }}">사연</a> 화면에서 하나씩 확인하고 직접 보낼 수 있습니다.</p>
 </div>
 {% endif %}

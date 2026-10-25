@@ -729,6 +729,20 @@ def create_app(data_dir: str | None = None) -> Flask:
         flash(boards.PAUSE_TEXT + " — 게시판을 열지 않습니다. 다시 하려면 '게시판 작업 다시 켜기'를 누르세요.", "warn")
         return redirect(url)
 
+    @app.post("/quizbot/resend-held")
+    def quizbot_resend_held():
+        """'문자로만 받는다'·'게시판에만' 판단으로 못 보낸 오늘의 정답·사연을 채팅으로 다시 보낸다 (0.76, 사용자가 누름)."""
+        from .quizbot import runner as runner_mod
+
+        hours = form("hours")
+        since = (datetime.now() - timedelta(hours=int(hours))).strftime("%Y-%m-%d %H:%M:%S") if hours.isdigit() else \
+            datetime.now().strftime("%Y-%m-%d 00:00:00")
+        got = runner_mod.resend_wrong_holds(g.conn, since)
+        total = got["quizzes"] + got["stories"] + got["board_to_chat"]
+        flash(f"채팅으로 다시 보냅니다: 정답 {got['quizzes']}건 · 사연 {got['stories']}건 · 게시판에만 둔 사연 {got['board_to_chat']}건"
+              + (" — 듣기 실행기가 켜져 있으면 바로 보냅니다." if total else " (다시 보낼 것이 없습니다)"))
+        return redirect(form("next") if form("next").startswith("/") and not form("next").startswith("//") else url_for("home"))
+
     @app.post("/boards/pause")
     def boards_pause():
         """게시판 읽기·쓰기 정지 / 다시 켜기 (채팅 퀴즈·사연은 그대로)."""

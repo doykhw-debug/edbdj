@@ -151,25 +151,27 @@ def runner_start():
     return MON_0700 + timedelta(minutes=30)   # 김영철의 파워FM 시간 (게시판 '사연과 신청곡' 코너가 있음)
 
 
-def test_board_only_story_becomes_board_draft(conn):
+def test_board_request_goes_to_chat_first_then_board(conn):
+    # 0.76 사용자 요청: '게시판에 올려 달라'는 사연도 채팅에 1차로 올리고, 그다음 게시판에도
     eid = make_experience(conn, story="첫 출근 날 실수로 사장님 커피를 마셨다", highlight="", ending="", quotes="",
                           quote_kind="none")
     sender = run_story(conn, story_for(eid, board_only=True, board_title="첫 출근 날의 커피",
                                        board_body="첫 출근 날 실수로 사장님 커피를 마셨습니다."))
-    post = conn.execute("SELECT * FROM story_posts").fetchone()
-    assert sender.sent == [] and post["target"] == "board" and post["draft_id"]
-    draft = conn.execute("SELECT * FROM drafts WHERE id = ?", (post["draft_id"],)).fetchone()
-    assert (draft["title"], draft["status"], draft["source"]) == ("첫 출근 날의 커피", "draft", "pasted")
-    assert "원고 검토함" in post["decision"]
+    chat, board = conn.execute("SELECT * FROM story_posts ORDER BY id").fetchall()
+    assert sender.sent == ["첫 출근 날 실수로 사장님 커피를 마셨어요"] and chat["target"] == "chat"
+    assert chat["status"] in ("entered", "posted") and board["target"] == "board"
+    assert board["draft_id"] and board["draft_id"] == chat["draft_id"] and "#%d" % chat["id"] in board["note"]
+    draft = conn.execute("SELECT * FROM drafts WHERE id = ?", (board["draft_id"],)).fetchone()
+    assert draft["title"] == "첫 출근 날의 커피" and "커피" in draft["body"]
 
 
-def test_board_only_without_board_known(conn):
+def test_board_request_without_board_known_still_chats(conn):
     conn.execute("DELETE FROM corners")
     conn.commit()
     eid = make_experience(conn)
-    run_story(conn, story_for(eid, board_only=True, board_body="본문"))
-    post = conn.execute("SELECT * FROM story_posts").fetchone()
-    assert post["draft_id"] is None and "코너" in post["decision"]
+    sender = run_story(conn, story_for(eid, board_only=True, board_body="본문"))
+    chat, board = conn.execute("SELECT * FROM story_posts ORDER BY id").fetchall()
+    assert sender.sent and board["draft_id"] is None and "코너" in board["decision"]
 
 
 def test_song_only_from_experience(conn):

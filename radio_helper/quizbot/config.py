@@ -44,7 +44,7 @@ DEFAULTS = {
     "live.auto_story": "1",               # 사연: 검사를 모두 통과한 초안은 자동 전송
     "live.gift": "1",                     # 선물 정보 기록
     "live.witty": "1",                    # 퀴즈에 기발한 오답 섞기
-    "live.sms_fallback": "0",             # 진행자가 앱이 아닌 문자로만 받는 퀴즈는 문자로 자동 전송 (건당 약 50원, 켜야 함)
+    "live.sms_fallback": "0",             # (0.76 부터 쓰지 않음 — 문자로만 받는 방송이 없어 늘 채팅)
     "live.song_free": "1",                # 신청곡: 경험에 적힌 곡이 없거나 안 맞으면 상황에 맞는 곡을 알아서 고름
     "live.multi": "0",                    # 동시 청취: 보조 채널(live.lanes)도 함께 듣기 (lanes.py)
     "live.device": "",                    # 주 채널 녹음 장치 (비우면 기본 스피커)

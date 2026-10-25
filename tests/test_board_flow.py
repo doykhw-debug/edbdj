@@ -62,12 +62,12 @@ def test_board_story_whole_flow(client, conn, app, monkeypatch):
     pytest.importorskip("playwright")
     monkeypatch.setenv("RADIO_HELPER_CHROMIUM", CHROMIUM)
 
-    # 1) 진행자가 '게시판에만' → 원고 검토함에 원고 (채팅으로는 보내지 않음)
+    # 1) 진행자가 '게시판에' → 채팅에 먼저 보내고(0.76), 게시판은 원고 검토함에 원고
     eid = make_experience(conn, story="첫 출근 날 실수로 사장님 커피를 마셨다", highlight="", ending="", quotes="",
                           quote_kind="none")
     sender = run_story(conn, story_for(eid, board_only=True, board_title=TITLE, board_body=BODY))
-    post = conn.execute("SELECT * FROM story_posts").fetchone()
-    assert sender.sent == [] and post["target"] == "board"
+    post = conn.execute("SELECT * FROM story_posts WHERE target = 'board'").fetchone()
+    assert sender.sent == ["첫 출근 날 실수로 사장님 커피를 마셨어요"] and post["target"] == "board"
     did = post["draft_id"]
     draft = conn.execute("SELECT * FROM drafts WHERE id = ?", (did,)).fetchone()
     corner_id = draft["corner_id"]
@@ -135,7 +135,7 @@ def test_board_story_whole_flow(client, conn, app, monkeypatch):
                                                    "won": "unknown", "prize_received": "unknown"})
     assert conn.execute("SELECT post_status FROM submissions").fetchone()[0] == "posted"
     sent = client.get("/stories/sent").get_data(as_text=True)
-    assert TITLE in sent and "게시판" in sent and "SBS 1" in sent
+    assert TITLE in sent and "게시판" in sent and "SBS 2" in sent                       # 0.76: 채팅 1 + 게시판 1
 
     # 7) 같은 경험은 SBS(게시판·채팅 모두)에 다시 쓰지 않고, 다른 방송국에는 쓸 수 있음
     assert eid not in {e["id"] for e in story.candidate_experiences(conn, "SBS")}

@@ -181,7 +181,7 @@ STORY_SCHEMA = {
         "added_facts": {"type": "array", "items": {"type": "string"},
                         "description": "경험 재료에 없는데 글에 넣은 내용. 원칙상 비어 있어야 한다"},
         "fit_reason": {"type": "string"},
-        "board_only": {"type": "boolean", "description": "진행자가 '게시판에만'·'홈페이지 게시판으로만' 받는다고 했으면 true"},
+        "board_only": {"type": "boolean", "description": "진행자가 게시판·홈페이지 게시판에 올려 달라고 했으면 true (채팅 먼저, 그다음 게시판)"},
         "board_title": {"type": "string", "description": "board_only 일 때 게시판 글 제목, 아니면 빈 문자열"},
         "board_body": {"type": "string", "description": "board_only 일 때 게시판 사연 본문, 아니면 빈 문자열"},
         "song": {"type": "string", "description": "신청곡 '가수 - 제목'. 경험·정보의 곡이 주제에 맞으면 그것, 아니면 상황에 맞는 실제 곡. 받지 않으면 빈 문자열"},
@@ -213,9 +213,9 @@ STORY_SYSTEM = f"""당신은 라디오(SBS·MBC·KBS·CBS 등) 녹취를 듣고,
 - 재료에 없는 내용을 넣었다면 added_facts 에 빠짐없이 적습니다.
 
 보내는 곳:
-- 기본은 앱 채팅(공감로그 등)입니다. message 는 채팅용 짧은 글입니다.
-- 진행자가 '게시판에만', '홈페이지 게시판으로만' 받는다고 하면 board_only 를 true 로 하고,
-  board_title(20자 이내)과 board_body(공백 포함 300~800자, 같은 원칙: 재료에 있는 사실만)를 씁니다.
+- 언제나 앱 채팅(공감로그 등)으로 보냅니다. message 는 채팅용 짧은 글이며 늘 씁니다 (문자로만 받는 방송은 없습니다).
+- 진행자가 '게시판에(도)', '홈페이지 게시판으로' 올려 달라고 하면 board_only 를 true 로 하고 — 채팅에 먼저 보낸 뒤 게시판에도 올립니다 —
+  message 와 함께 board_title(20자 이내)과 board_body(공백 포함 300~800자, 같은 원칙: 재료에 있는 사실만)를 씁니다.
 - 신청곡: 진행자가 신청곡도 받거나 신청곡을 곁들이는 코너면 song 에 '가수 - 제목' 하나를 씁니다.
   경험이나 보내는 사람 정보에 적힌 신청곡이 주제에 맞으면 그것을, 아니면 오늘 주제·사연 분위기·프로그램·시간대·계절에
   어울리는 실제로 있는 노래를 직접 고릅니다 (가수와 제목이 정확한 곡만, 확실하지 않으면 다른 곡). 같은 날 같은 곡을 반복하지 않습니다.

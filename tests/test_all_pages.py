@@ -27,7 +27,7 @@ def fill(client, conn, monkeypatch):
                  lambda: test_story_gift_import.test_gifts_recorded_by_channel_and_merged(conn),
                  lambda: test_story_gift_import.test_story_waits_for_confirmation_then_sends(conn),
                  lambda: test_story_gift_import.test_no_fitting_experience_records_topic_for_manual(conn),
-                 lambda: test_witty_chat.test_board_only_story_becomes_board_draft(conn),
+                 lambda: test_witty_chat.test_board_request_goes_to_chat_first_then_board(conn),
                  lambda: test_witty_chat.test_low_confidence_quiz_sends_witty_answer(conn),
                  lambda: test_sound_stop.test_cut_after_send_is_logged_with_last_action_and_speaker_change(conn)):
         try:
