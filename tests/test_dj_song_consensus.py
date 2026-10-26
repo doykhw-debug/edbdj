@@ -32,24 +32,24 @@ def test_chat_answers_are_grouped_and_three_wins():
     assert QuizAnalysis.from_json(json.dumps(analysis())).chat_answers == []   # 예전 결과(필드 없음)도 읽힘
 
 
-def test_adopt_consensus_message_has_keyword_and_reason():
+def test_adopt_consensus_message_is_answer_only():
     a = QuizAnalysis.from_json(json.dumps(analysis(
         answer="배", confidence=0.4, formatted_message="#퀴즈 배", witty_answer="배꼽", witty_point="말장난",
         wit_score=0.9, chat_answers=[{"keyword": "사과", "count": 4}], consensus_reason="가을 하면 사과죠")))
     runner.adopt_consensus(a, a.consensus())
     assert (a.answer, a.confidence, a.witty_answer) == ("사과", 0.85, "")
-    assert a.formatted_message == "#퀴즈 사과 — 가을 하면 사과죠"           # 진행자 형식은 지키고 이유를 붙임
-    assert "4개" in a.from_chat and "녹취로는 '배'" in a.from_chat
+    assert a.formatted_message == "#퀴즈 사과"                              # 진행자 형식은 지키고 이유는 붙이지 않음 (0.84)
+    assert "4개" in a.from_chat and "녹취로는 '배'" in a.from_chat and "가을 하면 사과죠" in a.from_chat   # 이유는 기록에만
 
 
-def test_live_quiz_sends_chat_consensus_with_reason(conn):
+def test_live_quiz_sends_chat_consensus_answer_only(conn):
     start_live(conn)
     sender = FakeGorilla()
     res = analysis(answer="배", confidence=0.5, chat_answers=[{"keyword": "사과", "count": 3}],
                    consensus_reason="빨갛고 아삭한 가을 과일이라서요")
     r, _ = live_runner(conn, {3: "오늘의 퀴즈 철수가 좋아하는 과일은 정답은 고릴라로"}, ScriptAnswerer([res]), sender, n=12)
     r.run_live()
-    assert sender.sent == ["사과 — 빨갛고 아삭한 가을 과일이라서요"]
+    assert sender.sent == ["사과"]                                         # 답 사유는 보내지 않음 (0.84 사용자 요청)
     q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
     assert q["answer"] == "사과" and "채팅 공통 답 '사과' 3개" in q["note"]
 

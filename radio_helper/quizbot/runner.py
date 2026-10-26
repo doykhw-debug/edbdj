@@ -159,7 +159,8 @@ class Deps:
 
 # ── 판단 ────────────────────────────────────────────────────────────
 def adopt_consensus(res: QuizAnalysis, agreed: dict) -> QuizAnalysis:
-    """채팅에서 같은 답이 3개 이상 겹치면 그 답을 정답으로 채택하고, 보낼 글은 '답 — 어울리는 이유'로 (기발한 오답은 쓰지 않음)."""
+    """채팅에서 같은 답이 3개 이상 겹치면 그 답을 정답으로 채택한다 (기발한 오답은 쓰지 않음).
+    0.84 사용자 요청: 보낼 글에 답 사유('…라는 답이 가장 많이 보여요')를 붙이지 않는다 — 사유는 기록에만."""
     keyword, count = agreed["keyword"], agreed["count"]
     heard = res.answer
     reason = (res.consensus_reason or "").strip()
@@ -168,9 +169,10 @@ def adopt_consensus(res: QuizAnalysis, agreed: dict) -> QuizAnalysis:
     res.answer = keyword
     res.confidence = max(res.confidence, 0.85)
     res.witty_answer, res.witty_point, res.wit_score = "", "", 0.0
-    res.formatted_message = (f"{base} — {reason}" if reason else base)[:150]
+    res.formatted_message = base[:150]
     res.from_chat = (f"채팅 공통 답 '{keyword}' {count}개 → 정답으로 채택"
-                     + (f" (녹취로는 '{heard}')" if heard and heard != keyword else ""))
+                     + (f" (녹취로는 '{heard}')" if heard and heard != keyword else "")
+                     + (f" · 이유: {reason}" if reason else ""))
     return res
 
 

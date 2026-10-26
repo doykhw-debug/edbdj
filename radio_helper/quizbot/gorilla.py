@@ -321,11 +321,35 @@ def find_dialog_button(img, frame: tuple[int, int, int, int]) -> tuple[int, int]
         bw, bh = max(xs) - min(xs) + step, max(ys) - min(ys) + step
         area = len(blob) * step * step
         if area >= 600 and 30 <= bw <= 320 and 20 <= bh <= 130 and area / (bw * bh) >= 0.5 and \
-                (best is None or area > best[0]):
+                in_white_box(px, w, h, min(xs), max(xs), min(ys), max(ys) + step) and (best is None or area > best[0]):
             best = (area, (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2)
     if best is None:
         return None
     return frame[0] + best[1], frame[1] + best[2]
+
+
+def in_white_box(px, w: int, h: int, left: int, right: int, top: int, bottom: int) -> bool:
+    """보라색 덩어리가 확인 창(흰 상자) 안에 있는지 (0.84). 확인 창은 둘레가 어둡게 가려져 흰 부분이 창 가장자리까지
+    이어지지 않는다. 내가 보낸 글의 보라색 말풍선은 어두운 채팅 바탕 위에 있거나(바로 위아래가 희지 않음),
+    밝은 바탕이면 흰 부분이 창 가장자리까지 이어져 걸리지 않는다 (0.84 실제 사례: 보낸 글 말풍선을 확인 창으로 보고
+    '못 보냄' → 같은 답을 다시 보냄)."""
+    def light(x, y):
+        r, g, b = px[x, y][:3]
+        return min(r, g, b) >= 225
+
+    cx = (left + right) // 2
+    for y in (top - 6, top - 14, bottom + 6, bottom + 14):
+        if not (0 <= y < h) or not light(cx, y):
+            continue
+        a = cx
+        while a - 2 >= 0 and light(a - 2, y):
+            a -= 2
+        b = cx
+        while b + 2 < w and light(b + 2, y):
+            b += 2
+        if a > w * 0.03 and b < w * 0.97 and b - a >= (right - left) * 1.5:
+            return True
+    return False
 
 
 def click_at(x: int, y: int, user32=None, sleep=time.sleep, clicks: int = 1) -> None:
@@ -1469,6 +1493,7 @@ class Gorilla:
         self._wait(PASTE_SETTLE_SECONDS)
         got, where = self._read_input(edit)
         if self._check_filled(text, got):
+            self._verified = got is not None
             return
         self._click(w, point, "입력칸", clicks=self._input_clicks())   # 붙여넣기가 안 들어감 → 한 글자씩
         self._wait(0.3)
@@ -1478,6 +1503,7 @@ class Gorilla:
         self._wait(PASTE_SETTLE_SECONDS)
         got2, where = self._read_input(edit)
         if self._check_filled(text, got2):
+            self._verified = got2 is not None
             self.fixes.append("붙여넣기가 안 들어가 한 글자씩 입력함")
             return
         if edit is not None and self.cfg.app == "gorilla":     # 고릴라: 예전처럼 입력칸 값을 바로 넣어 봄
@@ -1502,14 +1528,18 @@ class Gorilla:
         (사진도 못 찍으면 확인할 길이 없어 예전처럼 들어간 것으로 본다)."""
         got, where = self._read_input(edit)
         if got is not None:
-            return self._check_filled(text, got), where
+            ok = self._check_filled(text, got)
+            self._verified = ok
+            return ok, where
         try:
             after = grab_region(box)
         except Exception:
             return True, where
         if before is None or after is None:
             return True, where
-        return region_changed(before, after), where
+        ok = region_changed(before, after)
+        self._verified = ok
+        return ok, where
 
     def _click_twice(self, w, point: tuple[int, int]) -> None:
         """입력칸을 간격 두고 두 번 클릭 (두 번째 클릭으로 확실히 커서). 레인보우는 첫 클릭을 예전처럼 더블클릭으로
@@ -1839,6 +1869,7 @@ class Gorilla:
             self.fixes.append(f"글이 길어 {self.cfg.label} 입력칸 한 칸({limit}자)에 맞게 줄임")
         self._refound = False
         self._filled = None                              # 지난번 입력칸 사진은 쓰지 않음
+        self._verified = False                           # 등록 전에 입력칸에 글이 든 것을 실제로 확인했는지 (0.84)
 
         def run(w):
             label = f"보내지 못했을 때 {self.cfg.label} 창"
@@ -1848,12 +1879,15 @@ class Gorilla:
                 time.sleep(1.5)
                 label = f"보낸 뒤 {self.cfg.label} 창"
                 if self.close_dialog(w):          # 빈 칸이 전송돼 확인 창이 뜸 = 보내지 못함 → 닫고 다음에 다시
+                    if self._verified:            # 0.84: 등록 전에 입력칸에 글이 든 것을 확인했으면 보내진 것 — 다시 보내지 않음
+                        return SendResult("unknown", f"{self.cfg.label} 등록 뒤 확인 창이 보여 닫았지만, 등록 전에 입력칸에 글이 "
+                                                     "든 것을 확인해 보내진 것으로 보고 다시 보내지 않습니다")
                     return SendResult("failed", f"{self.cfg.label} 입력칸이 비어 '메시지를 작성해주세요' 창이 떠서 닫았습니다 "
                                                 "— 보내지 못해 잠시 뒤 다시 보냅니다")
                 if self._enter_retry(w, edit, text):     # 보내기 클릭이 안 됨 → 엔터로 다시 (0.82)
-                    if self.close_dialog(w):
-                        return SendResult("failed", f"{self.cfg.label} 엔터로 다시 보냈더니 '메시지를 작성해주세요' 창이 떠서 "
-                                                    "닫았습니다 — 잠시 뒤 다시 보냅니다")
+                    if self.close_dialog(w):              # 엔터가 빈 칸에 눌림 = 보내기 클릭으로 이미 보내졌음 (0.84)
+                        return SendResult("entered", f"{self.cfg.label} 보내기 클릭으로 이미 보내진 것으로 보입니다 "
+                                                     "(엔터가 빈 칸에 눌려 뜬 확인 창은 닫음) — 다시 보내지 않습니다")
                     if self._text_left(edit, text):
                         return SendResult("failed", f"{self.cfg.label} 보내기 클릭·엔터 모두 안 돼 입력칸에 글이 남아 있습니다 "
                                                     "— 잠시 뒤 다시 보냅니다 (전송 버튼 위치를 확인해 보세요)")

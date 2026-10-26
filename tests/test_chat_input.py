@@ -390,3 +390,61 @@ def test_story_prompt_tells_rainbow_limit():
 
     msg = answerer.build_story_message("아침", "녹취", {"chat_limit": 60}, [])
     assert "60자 이내" in msg and "60자" not in answerer.build_story_message("아침", "녹취", {}, [])
+
+
+# ── 0.84: 같은 답을 두 번 보냄 (사용자 화면 사진) — 내가 보낸 보라색 말풍선을 '확인' 창으로 잘못 보고 '못 보냄' → 다시 보냄 ──
+def bubble_window(light_bg: bool, size=(640, 950)):
+    """mini 창 흉내: 확인 창 없이, 가운데에 내가 보낸 글의 보라색 말풍선(흰 글씨 줄)만."""
+    from PIL import Image, ImageDraw
+
+    w, h = size
+    img = Image.new("RGB", size, (250, 250, 252) if light_bg else (20, 28, 48))
+    d = ImageDraw.Draw(img)
+    d.rectangle((150, 420, 450, 490), fill=(123, 69, 207))                    # 말풍선 300×70
+    for y in (435, 460):
+        d.rectangle((165, y, 420, y + 8), fill=(255, 255, 255))                # 글자 줄
+    d.rectangle((w - 80, h - 60, w - 1, h - 1), fill=(123, 69, 207))          # 등록
+    return img
+
+
+def test_own_purple_bubble_is_not_the_confirm_dialog():
+    frame = (1000, 0, 1640, 950)
+    assert gorilla.find_dialog_button(bubble_window(light_bg=True), frame) is None
+    assert gorilla.find_dialog_button(bubble_window(light_bg=False), frame) is None
+    assert near(gorilla.find_dialog_button(mini_window(), frame), (1340, 502))   # 진짜 확인 창은 그대로 찾음
+
+
+def test_dialog_after_verified_paste_is_not_resent(mini_box, desk, monkeypatch):
+    """등록 전에 입력칸에 글이 든 것을 확인했는데 등록 뒤 확인 창이 보이면, 보내진 것으로 보고 다시 보내지 않는다."""
+    state = {"sent": False}
+    monkeypatch.setattr(gorilla, "window_image", lambda h: mini_window(dialog=state["sent"]))
+
+    def click(x, y, clicks=1):
+        desk.clicks.append((x, y) if clicks == 1 else (x, y, clicks))
+        if (x, y) == SEND_POINT:
+            mini_box.value, state["sent"] = "", True
+    monkeypatch.setattr(gorilla, "click_at", click)
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    monkeypatch.setattr(g, "_with_focus", lambda fn: fn(Win()))
+    monkeypatch.setattr(g, "evidence_image", lambda w: None)
+    r = g.send("2번")
+    assert r.status == "unknown" and "다시 보내지 않습니다" in r.detail
+
+
+def test_enter_on_empty_box_means_click_already_sent(mini_box, desk, monkeypatch):
+    """보내기 클릭 뒤 글이 남은 것처럼 보여 엔터를 눌렀는데 확인 창이 뜨면 = 클릭으로 이미 보내졌음 → 다시 보내지 않음."""
+    state = {"enter": False}
+    monkeypatch.setattr(gorilla, "window_image", lambda h: mini_window(dialog=state["enter"]))
+    monkeypatch.setattr(gorilla.Gorilla, "_text_left", lambda self, edit, text: not state["enter"])
+
+    def keys(k, pause=None):
+        desk.keys.append(k)
+        mini_box.keys(k)
+        if k == "{ENTER}":
+            state["enter"] = True
+    sys.modules["pywinauto.keyboard"].send_keys = keys
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    monkeypatch.setattr(g, "_with_focus", lambda fn: fn(Win()))
+    monkeypatch.setattr(g, "evidence_image", lambda w: None)
+    r = g.send("2번")
+    assert r.status == "entered" and "이미 보내진" in r.detail
