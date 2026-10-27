@@ -110,6 +110,8 @@ class LockBusy(RuntimeError):
 
 RETRY_PREFIX = "대기: 전송 못 함 — 1분마다 다시 시도"   # 채팅 앱 전송이 누르기 전에 막힘 (보내지 않았으므로 다시 보내도 안전)
 RETRY_SECONDS = 60
+SEND_RETRIES = 2          # 0.85 사용자 요청: 같은 글이 여러 번 가지 않게 다시 보내기는 2번까지 (처음 1번 + 다시 2번)
+RETRY_STOP = f"보류: 다시 보내기를 {SEND_RETRIES}번 했지만 보내지 못함 — 같은 글이 여러 번 가지 않게 멈춤 (확인 후 직접 보내기)"
 CONSENSUS_MIN = 3         # 채팅에서 같은 답이 이만큼 겹치면 그 답을 정답으로 채택
 DJ_WAIT_SECONDS = 120     # 프로그램이 바뀐 뒤 DJ 한마디가 새로 바뀔 때까지 기다리는 시간
 DJ_RETRY_MINUTES = 10     # DJ 한마디를 못 읽었으면 이 간격으로 다시
@@ -1004,6 +1006,8 @@ class Runner:
             return   # 이 프로그램에 오늘 신청곡을 이미 보냄
         if any(r["status"] == "pending" for r in rows):
             return   # 보내는 중 (전송 못 하면 1분마다 다시 시도)
+        if len(rows) > SEND_RETRIES:
+            return   # 0.85: 오늘 이 프로그램 신청곡은 처음 + 다시 2번까지만
         last = tried.get(("song", slot))
         if last and (now - last).total_seconds() < SONG_RETRY_MINUTES * 60:
             return
@@ -1310,6 +1314,13 @@ class Runner:
                                    db.now(), item_id))
                 self.conn.commit()
                 return None
+        tries = self.conn.execute(f"SELECT send_tries FROM {table} WHERE id = ?", (item_id,)).fetchone()[0] or 0
+        if tries > SEND_RETRIES:      # 처음 1번 + 다시 2번 = 3번 해 봤으면 그만 (0.85)
+            self.conn.execute(f"UPDATE {table} SET approved = 0, decision = ?, updated_at = ? WHERE id = ?",
+                              (RETRY_STOP, db.now(), item_id))
+            self.conn.commit()
+            db.log(self.conn, "quizbot", f"{label}: 다시 보내기를 {SEND_RETRIES}번 했지만 보내지 못해 멈춤 (확인 후 직접 보내기)")
+            return None
         retried[key] = now
         if not (text or "").strip():                 # 0.80: 빈 글은 붙여넣지 않는다 (붙여넣어도 앱이 '메시지를 작성해주세요')
             self._hold(table, item_id, "보류: 보낼 글이 비어 있음 — 빈 글은 보내지 않음")
@@ -1324,7 +1335,7 @@ class Runner:
         sent_text = ", send_text = ?" if table == "quizzes" else ""
         claimed = self.conn.execute(
             f"UPDATE {table} SET {status_col} = 'unknown', sent_at = ?, sent_via = ?, decision = ?{sent_text}, "
-            f"updated_at = ? WHERE id = ? AND {status_col} = 'pending'",
+            f"send_tries = send_tries + 1, updated_at = ? WHERE id = ? AND {status_col} = 'pending'",
             (db.now(), "sms" if route == "sms" else app, how, *((text,) if sent_text else ()), db.now(), item_id))
         self.conn.commit()
         if claimed.rowcount == 0:

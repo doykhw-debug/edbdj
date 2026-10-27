@@ -489,6 +489,7 @@ _ADDED_COLUMNS = {
         ("wit_score", "REAL"),
         ("fun_welcome", "INTEGER NOT NULL DEFAULT 0"),  # 진행자가 재밌는 오답도 환영한다고 함
         ("chat_shots", "INTEGER NOT NULL DEFAULT 0"),   # 분석에 함께 쓴 채팅창 사진 수
+        ("send_tries", "INTEGER NOT NULL DEFAULT 0"),   # 보내기를 해 본 횟수 (0.85: 처음 + 다시 2번까지)
     ],
     "story_posts": [
         ("channel", "TEXT"),
@@ -499,6 +500,7 @@ _ADDED_COLUMNS = {
         ("draft_id", "INTEGER"),                        # 게시판용이면 원고 검토함의 원고
         ("song", "TEXT"),
         ("chat_shots", "INTEGER NOT NULL DEFAULT 0"),
+        ("send_tries", "INTEGER NOT NULL DEFAULT 0"),
     ],
 }
 

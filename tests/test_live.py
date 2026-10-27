@@ -205,6 +205,29 @@ def test_quiz_retried_every_minute_when_gorilla_really_missing(conn):
     assert len(msgs) == 1                                        # 실패 알림은 한 번만
 
 
+def test_retry_stops_after_two_retries(conn):
+    """0.85 사용자 요청: 같은 글이 여러 번 가지 않게 처음 1번 + 다시 2번까지만 해 보고 멈춘다 (20분을 기다리지 않음)."""
+    start_live(conn)
+    sender = FakeGorilla(running=False)
+    r, _ = live_runner(conn, {3: "오늘의 퀴즈 정답은 고릴라로"}, ScriptAnswerer([analysis()]), sender, n=60)
+    r.run_live()
+    q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
+    assert len(sender.tried) == 1 + runner.SEND_RETRIES and q["send_tries"] == 3
+    assert q["decision"] == runner.RETRY_STOP and not q["approved"] and q["entry_status"] == "pending"
+
+
+def test_user_send_after_stop_gets_fresh_tries(client, conn):
+    from conftest import csrf
+
+    start_live(conn)
+    sender = FakeGorilla(running=False)
+    r, _ = live_runner(conn, {3: "오늘의 퀴즈 정답은 고릴라로"}, ScriptAnswerer([analysis()]), sender, n=60)
+    r.run_live()
+    qid = conn.execute("SELECT id FROM quizzes WHERE source = 'auto'").fetchone()[0]
+    client.post(f"/quizbot/quizzes/{qid}/approve", data={"csrf_token": csrf(client, "/quizbot"), "answer": "사과"})
+    assert conn.execute("SELECT send_tries FROM quizzes WHERE id = ?", (qid,)).fetchone()[0] == 0
+
+
 def test_quiz_sent_even_when_window_check_says_missing(conn):
     """실제 사례: 창 찾기 판단은 '못 찾음'이었지만 표시한 자리로는 보낼 수 있었다 → 보류하지 않고 바로 보냄."""
     start_live(conn)

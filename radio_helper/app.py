@@ -1757,7 +1757,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         kind = "witty" if send_text and q["witty_answer"] and q["witty_answer"] in send_text else "correct"
         g.conn.execute(
             "UPDATE quizzes SET answer = ?, send_text = ?, route = ?, answer_kind = ?, approved = 1, kind = 'new', "
-            "entry_status = 'pending', decision = '승인됨 — 실행기가 곧 보냄', updated_at = ? WHERE id = ?",
+            "entry_status = 'pending', decision = '승인됨 — 실행기가 곧 보냄', send_tries = 0, updated_at = ? WHERE id = ?",
             (answer, send_text, route, kind, db.now(), qid))
         g.conn.commit()
         db.log(g.conn, "quizbot", f"퀴즈 #{qid} 보내기 승인 (사용자): {answer}")
@@ -1812,8 +1812,8 @@ def create_app(data_dir: str | None = None) -> Flask:
             flash("위 문제를 고친 뒤 다시 보내기를 누르세요.", "error")
             return redirect(url_for(back_to("stories")))
         route = form("route") if form("route") in qconfig.ROUTES else None
-        g.conn.execute("UPDATE story_posts SET approved = 1, status = 'pending', route = ?, decision = ?, updated_at = ? "
-                       "WHERE id = ?", (route, "승인됨 — 실행기가 곧 보냄", db.now(), pid))
+        g.conn.execute("UPDATE story_posts SET approved = 1, status = 'pending', route = ?, decision = ?, send_tries = 0, "
+                       "updated_at = ? WHERE id = ?", (route, "승인됨 — 실행기가 곧 보냄", db.now(), pid))
         g.conn.commit()
         db.log(g.conn, "quizbot", f"사연 #{pid} 보내기 승인 (사용자)")
         flash("승인했습니다. 실행기가 고릴라로 보냅니다." if qconfig.runner_alive(g.conn)
