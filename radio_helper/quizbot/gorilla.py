@@ -1032,10 +1032,8 @@ class Gorilla:
         """옮겨진 채팅 창: 그 앱의 보이는 창 중 지정할 때와 크기가 같은 것 (자리가 가장 가까운 것). 창은 건드리지 않는다."""
         saved = self._saved_window()
         same = [w for w in app_windows(proc) if w["visible"] and not w["iconic"] and same_size(saved, w["normal"])]
-        if not same:
-            return None
-        if saved:
-            same.sort(key=lambda w: abs(w["normal"][0] - saved[0]) + abs(w["normal"][1] - saved[1]))
+        if len(same) != 1:
+            return None   # 0.86: 같은 크기 창이 여럿이면(플레이어·공감로그 등) 어림해 고르지 않는다 — 엉뚱한 창을 눌렀음
         return same[0]["hwnd"]
 
     def _is_app(self, info: dict) -> bool:
@@ -1428,8 +1426,11 @@ class Gorilla:
         return True
 
     def _fresh_point(self, w, target: str) -> tuple[int, int]:
-        """누를 자리: 확인 창을 닫은 뒤에는 화면 요소로 입력칸·등록 단추를 새로 찾아 그 자리 (못 찾으면 저장한 자리)."""
-        if getattr(self, "_refound", False):
+        """누를 자리: 위치를 정해 둔 방식(위치 클릭·모니터 기준)이면 언제나 그 자리 (0.86 — 확인 창을 닫은 뒤 화면 요소로
+        '마지막 입력칸·등록 단추'를 어림해 누르다 엉뚱한 곳을 눌렀음. 확인 창을 닫아도 입력칸·등록 단추 자리는 그대로).
+        화면 요소 방식(uia)일 때만 확인 창을 닫은 뒤 화면 요소로 새로 찾는다."""
+        mode = self.cfg.input_mode if target == "input" else self.cfg.send_mode
+        if getattr(self, "_refound", False) and mode not in ("coords", "screen"):
             try:
                 if target == "input":
                     return self._center(self._find_input(w))

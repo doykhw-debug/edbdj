@@ -448,3 +448,24 @@ def test_enter_on_empty_box_means_click_already_sent(mini_box, desk, monkeypatch
     monkeypatch.setattr(g, "evidence_image", lambda w: None)
     r = g.send("2번")
     assert r.status == "entered" and "이미 보내진" in r.detail
+
+
+# ── 0.86: 입력칸·전송 버튼·채팅 창 자리를 잘못 찾던 문제 — 정해 둔 자리를 어림한 자리로 바꾸지 않음 ──────────
+def test_closed_dialog_keeps_saved_points(desk, monkeypatch):
+    """확인 창을 닫은 뒤에도 위치 클릭 방식이면 화면 요소로 '마지막 입력칸·등록 단추'를 어림하지 않고 정해 둔 자리를 누른다."""
+    g = coords_gorilla(app="mini", process_name="mbc mini.exe")
+    g._refound = True
+    w = Win()
+    w.descendants = lambda control_type=None: (_ for _ in ()).throw(AssertionError("화면 요소로 찾으면 안 됨"))
+    assert g._fresh_point(w, "input") == (1320, 902) and g._fresh_point(w, "send") == (1576, 902)
+
+
+def test_moved_window_not_guessed_among_same_size_windows(monkeypatch):
+    g = coords_gorilla(app="gorilla", input_mode="screen", send_mode="screen", input_point="1300,900",
+                       send_point="1600,900", point_window="1000,0,1640,950")
+    two = [{"hwnd": 1, "visible": True, "iconic": False, "normal": (0, 0, 640, 950)},
+           {"hwnd": 2, "visible": True, "iconic": False, "normal": (700, 0, 1340, 950)}]
+    monkeypatch.setattr(gorilla, "app_windows", lambda proc: two)
+    assert g._moved_window("gorealra.exe") is None                                  # 둘 중 어림해 고르지 않음
+    monkeypatch.setattr(gorilla, "app_windows", lambda proc: two[1:])
+    assert g._moved_window("gorealra.exe") == 2                                     # 하나뿐이면 그 창

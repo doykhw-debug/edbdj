@@ -198,7 +198,21 @@ def test_auto_refind_every_five_minutes_saves_app_keys(conn):
     assert config.get(conn, "kong.send_point") and "자동 다시 찾기" in logs[0]
     assert not desk.fronts and not desk.photos                     # 듣는 중에는 창을 앞으로 가져오거나 찍지 않음
     assert finder.auto(conn, "kong", now=1100.0, desk=desk, log=logs.append) is None
-    assert finder.auto(conn, "kong", now=1400.0, desk=desk, log=logs.append) is not None
+    # 0.86: 자리를 한 번 정해 두면(이제 저장됨) 듣는 중 자동 다시 찾기로 덮어쓰지 않는다
+    assert finder.auto(conn, "kong", now=1400.0, desk=desk, log=logs.append) is None
+
+
+def test_auto_refind_never_overwrites_user_points(conn):
+    """실제 사례 (0.86): 듣는 중 창을 잠깐 못 찾으면 화면 요소·알려진 배치로 어림한 자리가 사용자가 정한
+    입력칸·전송 버튼·채팅 목록 자리를 덮어써 엉뚱한 곳을 눌렀음 → 정해 둔 자리가 있으면 다시 찾지 않음."""
+    for k, v in {"kong.input_mode": "screen", "kong.send_mode": "screen", "kong.input_point": "1500,800",
+                 "kong.send_point": "1700,800", "kong.chat_screen": "1300,100,1900,700"}.items():
+        db.set_setting(conn, k, v)
+    desk = FakeDesk(KONG)
+    assert finder.auto(conn, "kong", now=1000.0, desk=desk) is None
+    assert config.get(conn, "kong.input_point") == "1500,800" and config.get(conn, "kong.send_point") == "1700,800"
+    assert config.get(conn, "kong.chat_screen") == "1300,100,1900,700"
+    assert not desk.fronts and not desk.clicks                # 창을 앞으로 가져오거나 누르지 않음
 
 
 def test_runner_refinds_chat_and_reloads_sender(conn):

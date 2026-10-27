@@ -546,10 +546,26 @@ def running(conn, app: str, desk: Desk | None = None) -> bool:
     return bool(pick_app(app, windows, config.get(conn, f"{app}.process_name"))[1])
 
 
+def has_saved_points(conn, app: str) -> bool:
+    """사용자가 입력칸·전송 버튼 자리를 이미 정해 두었는지 (모니터 기준 또는 창 안 비율)."""
+    from .gorilla import Gorilla
+
+    try:
+        g = Gorilla(config.GorillaConfig.load(conn, app))
+        return g._has_point("input") and g._has_point("send")
+    except Exception:
+        return False
+
+
 def auto(conn, app: str, now: float | None = None, desk: Desk | None = None, log=None) -> dict | None:
-    """듣는 중 채팅 창을 못 찾을 때: 5분에 한 번까지 Claude 없이 다시 찾아 저장한다. 한 일(보고서) 또는 None."""
+    """듣는 중 채팅 창을 못 찾을 때: 5분에 한 번까지 Claude 없이 다시 찾아 저장한다. 한 일(보고서) 또는 None.
+    0.86: 입력칸·전송 버튼 자리를 이미 정해 두었으면 다시 찾지 않는다 — 화면 요소·알려진 배치로 어림한 자리가
+    사용자가 정한 자리를 덮어써 엉뚱한 곳(채팅 목록·입력칸·전송 버튼)을 누르고 찍었고, 창을 앞으로 가져오고
+    채팅 열기 단추를 누르기도 했다 (채팅 창은 고정값으로 두고 건드리지 않음). 다시 찾기는 화면의 '원버튼 찾기'로."""
     from .. import db
 
+    if has_saved_points(conn, app):
+        return None
     now = now if now is not None else time.time()
     key = f"{app}.auto_found_at"
     try:

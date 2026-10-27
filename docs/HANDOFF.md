@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-27, 0.85 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-27, 0.86 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -36,6 +36,7 @@
 | 0.83 | 레인보우: 글이 입력칸 한 칸을 넘으면 전송 안 됨(사용자 화면 사진) → config.APP_CHAT_LIMITS rainbow 60 (chat_limit 에 반영), config.fit_text(신청곡 꼬리 → 뒤 문장부터 뺌), runner.analyze_story 가 profile["chat_limit"] 로 AI에 알림(build_story_message), 제한 넘는 글은 막지 않고 줄임, Gorilla.send 도 레인보우 긴 글을 줄여 보냄. 60은 화면 사진으로 어림한 값(한 줄 17자 안팎×4줄) |
 | 0.84 | 두 번 전송 원인: find_dialog_button 이 내가 보낸 보라색 말풍선을 확인 단추로 봄 → in_white_box(흰 상자 안·창 가장자리까지 이어지지 않음)일 때만. Gorilla._verified(등록 전 입력칸 글 확인) 이면 등록 뒤 확인 창이 보여도 unknown(다시 안 보냄), 엔터 뒤 확인 창 = entered. adopt_consensus 는 답만 보냄(사유는 from_chat 기록), answerer 프롬프트에 formatted_message 에 사유 금지 |
 | 0.85 | 다시 보내기 2번까지: quizzes·story_posts.send_tries (deliver 의 claim 때 +1, 3번이면 RETRY_STOP 보류·approved=0), 사용자 승인(보내기) 때 send_tries=0, 신청곡은 프로그램·날짜당 줄 3개까지. runner.SEND_RETRIES |
+| 0.86 | 자리 잘못 찾음: finder.auto(듣는 중 다시 찾기)가 정해 둔 자리를 UIA·템플릿 어림으로 덮어씀 → has_saved_points 면 아무것도 안 함. Gorilla._fresh_point 는 coords/screen 이면 언제나 저장한 자리(확인 창 닫은 뒤 UIA 어림 없앰). _moved_window 는 같은 크기 창이 하나일 때만 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).
