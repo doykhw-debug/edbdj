@@ -270,8 +270,36 @@ SLOW_APPS = {"mini": 2.0, "rainbow": 2.0}
 # 안 됐으면 복사·붙여넣기부터 다시 (최대 PASTE_TRIES 번). 0.81: CBS 레인보우도 같은 방식 (사용자 요청)
 PASTE_CHECK_APPS = {"mini", "rainbow"}
 PASTE_CHECK_SECONDS = 2.0
+READABLE_FOCUS = re.compile(r"(Edit|Document)\b")   # 글을 읽어도 되는 초점 (입력칸)
+KNOWN_MARGIN = 15         # 알려진 배치 네모에서 이만큼 벗어난 것까지는 정해 둔 자리를 그대로 누른다 (창 테두리 오차)
 PASTE_TRIES = 3
 CLICK_GAP_SECONDS = 0.6
+
+
+# 알려진 화면 배치 (0.87 — 사용자가 보낸 화면 사진으로 맞춤: mini 1250×897, 콩 1197×789, 고릴라 1274×900, 레인보우 414×758).
+# 채팅 부분 네모 안의 비율 (왼·위·오른·아래). finder.TEMPLATES 와 같은 값.
+WIDE_RATIO = 1.2
+
+
+def known_box(app: str | None, target: str, frame) -> tuple[int, int, int, int] | None:
+    """지금 채팅 창(frame) 안에서 그 앱의 입력칸·전송 버튼 네모 (순수 계산). 배치를 모르거나 채팅이 닫힌 모양이면 None."""
+    from .finder import TEMPLATES
+
+    t = TEMPLATES.get(app or "")
+    if t is None or target not in t:
+        return None
+    left, top, right, bottom = (int(v) for v in frame)
+    w, h = right - left, bottom - top
+    if w < 100 or h < 100:
+        return None
+    if app == "gorilla":
+        if w > h * WIDE_RATIO:                     # 플레이어와 공감로그가 한 창 → 오른쪽 공감로그 부분
+            left = left + int(w * t["combined_split"])
+    elif app in ("kong", "mini") and w < h * WIDE_RATIO:
+        return None                                # 채팅이 닫힌(좁은) 창 — 배치를 모름
+    fx0, fy0, fx1, fy1 = t[target]
+    cw = right - left
+    return left + int(cw * fx0), top + int(h * fy0), left + int(cw * fx1), top + int(h * fy1)
 
 
 def grab_region(box: tuple[int, int, int, int]):
@@ -1165,13 +1193,35 @@ class Gorilla:
         return fx is not None and fy is not None
 
     def _target_point(self, w, target: str) -> tuple[int, int]:
-        """입력칸(input)·전송 버튼(send)을 누를 화면 좌표: 모니터 기준이면 저장한 자리 그대로, 아니면 창 안 비율."""
+        """입력칸(input)·전송 버튼(send)을 누를 화면 좌표: 모니터 기준이면 저장한 자리 그대로, 아니면 창 안 비율.
+        0.87: 그 자리가 지금 창의 알려진 배치(사용자 화면 사진으로 잰 입력칸·전송 버튼 네모)를 벗어나면 알려진 자리를 누른다."""
         point = self._screen_point(target)
         if point is not None:
-            return follow_point(point, self._saved_window(), self._frame(w))   # 사용자가 옮긴 창을 따라감
-        if target == "input":
-            return self._point(w, self.cfg.input_x, self.cfg.input_y)
-        return self._point(w, self.cfg.send_x, self.cfg.send_y)
+            point = follow_point(point, self._saved_window(), self._frame(w))   # 사용자가 옮긴 창을 따라감
+        elif target == "input":
+            point = self._point(w, self.cfg.input_x, self.cfg.input_y)
+        else:
+            point = self._point(w, self.cfg.send_x, self.cfg.send_y)
+        return self._known_fix(w, target, point)
+
+    def _known_fix(self, w, target: str, point: tuple[int, int]) -> tuple[int, int]:
+        """정해 둔 자리가 알려진 배치의 입력칸·전송 버튼 네모(조금 넓혀서) 밖이면 그 네모 가운데 (0.87 실제 사례: 콩·레인보우에서
+        '보내기 클릭이 안 돼 엔터로 다시 보냄 → 클릭·엔터 모두 안 돼' — 예전 자동 다시 찾기가 덮어쓴 엉뚱한 자리를 누름)."""
+        try:
+            box = known_box(self.cfg.app, target, self._frame(w))
+        except Exception:
+            box = None
+        if box is None:
+            return point
+        m = KNOWN_MARGIN
+        if box[0] - m <= point[0] <= box[2] + m and box[1] - m <= point[1] <= box[3] + m:
+            return point
+        fixed = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
+        note = (f"정해 둔 {'입력칸' if target == 'input' else '전송 버튼'} 자리({point[0]}, {point[1]})가 "
+                f"{self.cfg.label} 화면 배치와 달라 알려진 자리({fixed[0]}, {fixed[1]})를 누름")
+        if note not in getattr(self, "fixes", []):
+            self.fixes = getattr(self, "fixes", []) + [note]
+        return fixed
 
     def _point(self, w, fx: float, fy: float) -> tuple[int, int]:
         """저장한 위치(비율) → 지금 누를 화면 좌표. 창 기준이면 가장자리에 붙은 입력칸·전송 버튼을 따라간다."""
@@ -1470,7 +1520,12 @@ class Gorilla:
         """입력칸 글자: 찾은 입력칸(uia)이면 그것, 위치 클릭이면 지금 커서가 있는 칸 (못 읽으면 None)."""
         if edit is not None:
             return self._value(edit), "찾은 입력칸"
-        return focused_value()
+        got, what = focused_value()
+        if got is not None and not READABLE_FOCUS.match(what or ""):
+            # 0.87 실제 사례 (레인보우): 초점이 화면 전체(Pane)에 있어 그 값 ''을 입력칸 글로 읽고 '안 들어감'으로 판단 →
+            # 붙여넣기가 됐어도 등록을 누르지 않았음. 입력칸(Edit·Document)이 아니면 못 읽은 것으로 보고 사진으로 확인한다.
+            return None, what
+        return got, what
 
     def _check_filled(self, text: str, got: str | None) -> bool:
         """입력칸에 글이 다 들어갔는지. 앱이 일부만 받았으면(글자 수 제한) 그 수를 적고 보내지 않는다."""

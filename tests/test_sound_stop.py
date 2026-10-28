@@ -68,6 +68,7 @@ def desk(monkeypatch):
     monkeypatch.setattr(gorilla.Gorilla, "_clipboard", staticmethod(lambda text=None: text))
     monkeypatch.setattr(gorilla, "FRONT_WAIT_SECONDS", 0.2)
     monkeypatch.setattr(gorilla.time, "sleep", lambda s: None)
+    monkeypatch.setattr(gorilla, "known_box", lambda *a: None)   # 알려진 배치 바로잡기는 따로 시험 (test_chat_input)
     return state
 
 

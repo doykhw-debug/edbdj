@@ -110,7 +110,7 @@ class LockBusy(RuntimeError):
 
 RETRY_PREFIX = "대기: 전송 못 함 — 1분마다 다시 시도"   # 채팅 앱 전송이 누르기 전에 막힘 (보내지 않았으므로 다시 보내도 안전)
 RETRY_SECONDS = 60
-SEND_RETRIES = 2          # 0.85 사용자 요청: 같은 글이 여러 번 가지 않게 다시 보내기는 2번까지 (처음 1번 + 다시 2번)
+SEND_RETRIES = 5          # 다시 보내기 횟수 (처음 1번 + 다시 N번). 0.85 에 2번 → 0.87 사용자 요청 5번
 RETRY_STOP = f"보류: 다시 보내기를 {SEND_RETRIES}번 했지만 보내지 못함 — 같은 글이 여러 번 가지 않게 멈춤 (확인 후 직접 보내기)"
 CONSENSUS_MIN = 3         # 채팅에서 같은 답이 이만큼 겹치면 그 답을 정답으로 채택
 DJ_WAIT_SECONDS = 120     # 프로그램이 바뀐 뒤 DJ 한마디가 새로 바뀔 때까지 기다리는 시간
@@ -160,6 +160,23 @@ class Deps:
 
 
 # ── 판단 ────────────────────────────────────────────────────────────
+def consensus_fits(res: QuizAnalysis, keyword: str) -> bool:
+    """채팅 공통 답이 이 문제의 답이 될 수 있는지 (0.87 실제 사례: 박명수의 라디오쇼에서 청취자들이 '도전'(2단계 도전)을
+    많이 써서 O/X·보기 문제 셋 모두 '도전'을 정답으로 채택했음). 보기가 있으면 보기 중 하나(또는 'N번')여야 한다."""
+    options = [o for o in (res.options or []) if (o or "").strip()]
+    if not options:
+        return True
+    key = quiz.normalize_question(keyword)
+    num = re.fullmatch(r"\s*(\d+)\s*번?\s*", keyword or "")
+    if num:
+        return 1 <= int(num.group(1)) <= len(options)
+    for o in options:
+        opt = quiz.normalize_question(o)
+        if key and opt and (key == opt or (len(key) >= 2 and key in opt) or (len(opt) >= 2 and opt in key)):
+            return True
+    return False
+
+
 def adopt_consensus(res: QuizAnalysis, agreed: dict) -> QuizAnalysis:
     """채팅에서 같은 답이 3개 이상 겹치면 그 답을 정답으로 채택한다 (기발한 오답은 쓰지 않음).
     0.84 사용자 요청: 보낼 글에 답 사유('…라는 답이 가장 많이 보여요')를 붙이지 않는다 — 사유는 기록에만."""
@@ -681,8 +698,10 @@ class Runner:
             return None
         if res.kind in ("new_question", "reannouncement") and config.get(self.conn, "live.chat_consensus") == "1":
             agreed = res.consensus(CONSENSUS_MIN) if hasattr(res, "consensus") else None
-            if agreed:
+            if agreed and consensus_fits(res, agreed["keyword"]):
                 adopt_consensus(res, agreed)
+            elif agreed:
+                res.reasoning_note = ((res.reasoning_note or "") + f" / 채팅 공통 답 '{agreed['keyword']}'은 보기에 없어 쓰지 않음").strip(" /")
         dup = find_duplicate(known, res) if res.kind in ("reannouncement", "new_question", "answer_reveal") else None
         if res.kind == "answer_reveal":
             if dup:
@@ -1314,10 +1333,12 @@ class Runner:
                                    db.now(), item_id))
                 self.conn.commit()
                 return None
-        tries = self.conn.execute(f"SELECT send_tries FROM {table} WHERE id = ?", (item_id,)).fetchone()[0] or 0
-        if tries > SEND_RETRIES:      # 처음 1번 + 다시 2번 = 3번 해 봤으면 그만 (0.85)
+        row = self.conn.execute(f"SELECT send_tries, decision FROM {table} WHERE id = ?", (item_id,)).fetchone()
+        tries = row[0] or 0
+        if tries > SEND_RETRIES:      # 처음 1번 + 다시 N번 해 봤으면 그만 (0.85) — 마지막 못 보낸 까닭은 남긴다 (0.87)
+            last = (row[1] or "")[len(RETRY_PREFIX):].strip(" ()") if (row[1] or "").startswith(RETRY_PREFIX) else ""
             self.conn.execute(f"UPDATE {table} SET approved = 0, decision = ?, updated_at = ? WHERE id = ?",
-                              (RETRY_STOP, db.now(), item_id))
+                              (RETRY_STOP + (f" — 마지막: {last[:160]}" if last else ""), db.now(), item_id))
             self.conn.commit()
             db.log(self.conn, "quizbot", f"{label}: 다시 보내기를 {SEND_RETRIES}번 했지만 보내지 못해 멈춤 (확인 후 직접 보내기)")
             return None

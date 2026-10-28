@@ -225,3 +225,13 @@ def test_wrong_artist_is_corrected(conn):
     r.run_live()
     assert app.sent == ["쌀쌀한 가을밤이네요. 아이유 - 가을 아침 신청합니다"]
     assert conn.execute("SELECT song FROM story_posts WHERE source = 'song'").fetchone()[0] == "아이유 - 가을 아침"
+
+
+def test_chat_consensus_must_be_one_of_the_options():
+    """0.87 실제 사례: 청취자들이 '도전'을 많이 써서 O/X·보기 문제 모두 '도전'을 정답으로 채택했음."""
+    ox = QuizAnalysis(options=["O", "X"], answer="X")
+    assert not runner.consensus_fits(ox, "도전") and runner.consensus_fits(ox, "X")
+    market = QuizAnalysis(options=["남대문시장", "국제시장", "틈새시장"])
+    assert runner.consensus_fits(market, "남대문") and runner.consensus_fits(market, "2번")
+    assert not runner.consensus_fits(market, "5번") and not runner.consensus_fits(market, "도전")
+    assert runner.consensus_fits(QuizAnalysis(), "작사")                         # 보기가 없으면 따지지 않음

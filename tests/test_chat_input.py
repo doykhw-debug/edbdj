@@ -469,3 +469,46 @@ def test_moved_window_not_guessed_among_same_size_windows(monkeypatch):
     assert g._moved_window("gorealra.exe") is None                                  # 둘 중 어림해 고르지 않음
     monkeypatch.setattr(gorilla, "app_windows", lambda proc: two[1:])
     assert g._moved_window("gorealra.exe") == 2                                     # 하나뿐이면 그 창
+
+
+# ── 0.87: 전송 버튼 찾기 재점검 — 사용자 화면 사진(네 앱)으로 맞춘 알려진 배치로 정해 둔 자리를 확인 ─────────────
+@pytest.mark.parametrize("app,size,inp,send", [
+    ("mini", (1250, 897), (900, 854), (1206, 856)),        # 'mini 메시지 작성' / 보라 '등록'
+    ("kong", (1197, 789), (891, 686), (1127, 750)),        # '내용 입력하기' / '보내기'
+    ("gorilla", (1274, 900), (955, 857), (1217, 857)),     # 플레이어+공감로그 한 화면: '공감로그 글쓰기' / 파란 '전송'
+    ("rainbow", (414, 758), (198, 516), (390, 516)),       # '채팅을 입력하세요' / 파란 종이비행기
+])
+def test_known_boxes_match_user_screens(app, size, inp, send):
+    frame = (0, 0) + size
+    for target, want in (("input", inp), ("send", send)):
+        box = gorilla.known_box(app, target, frame)
+        assert box[0] <= want[0] <= box[2] and box[1] <= want[1] <= box[3]
+
+
+def test_known_box_unknown_shapes():
+    assert gorilla.known_box("kong", "send", (0, 0, 420, 840)) is None        # 채팅이 닫힌 좁은 콩 창
+    assert gorilla.known_box("gorilla", "send", (0, 0, 634, 949))[0] > 500     # 따로 뜬 공감로그 창은 창 전체 기준
+    assert gorilla.known_box(None, "send", (0, 0, 800, 600)) is None
+
+
+def test_wrong_saved_send_point_is_corrected(desk, monkeypatch):
+    """실제 사례: 콩 '보내기 클릭이 안 돼 엔터로 다시 → 클릭·엔터 모두 안 돼' — 저장된 전송 자리가 엉뚱함 → 알려진 자리를 누름."""
+    monkeypatch.setattr(gorilla, "known_box", _real_known_box)
+    g = coords_gorilla(app="kong", process_name="kong.exe", window_size="1197,789",
+                       input_x=0.745, input_y=0.87, send_x=0.5, send_y=0.3)          # 전송 자리가 채팅 목록 한가운데
+    w = Win((0, 0, 1197, 789))
+    assert g._target_point(w, "input") == (891, 686)                                # 맞는 자리는 그대로
+    x, y = g._target_point(w, "send")
+    assert 1083 <= x <= 1171 and 727 <= y <= 773 and "알려진 자리" in g.fixes[-1]
+
+
+def test_flutter_pane_focus_is_not_read_as_empty_input(monkeypatch):
+    """실제 사례 (레인보우): '지금 커서 자리: Pane' — 화면 전체의 빈 값을 입력칸 글로 읽어 붙여넣기가 됐어도 안 됐다고 봄."""
+    g = rainbow()
+    monkeypatch.setattr(gorilla, "focused_value", lambda: ("", "Pane ''"))
+    assert g._read_input(None) == (None, "Pane ''")
+    monkeypatch.setattr(gorilla, "focused_value", lambda: ("정답", "Edit '채팅'"))
+    assert g._read_input(None) == ("정답", "Edit '채팅'")
+
+
+_real_known_box = gorilla.known_box
