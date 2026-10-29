@@ -27,7 +27,8 @@
 <div class="panel table-wrap">
   <h2>앱마다 듣고 보내는 곳</h2>
   <p class="muted">'LDPlayer'로 정한 앱은 그 창으로 듣고 보냅니다. 소리는 그 창의 프로그램 소리만 받아서 다른 방송과 섞이지 않습니다.
-    LDPlayer 방송국 6곳은 <b>채팅으로만</b> 보냅니다 — 게시판 찾기·쓰기는 하지 않고, 진행자가 게시판에 올려 달라고 해도 채팅으로만 보냅니다.</p>
+    창 번호를 고르지 않으면 <b>창 이름</b>(예: 'YTN 라디오', 'EBS 반디')으로 찾고, 화면 사진으로 자리를 정하지 않으면
+    보내 주신 화면으로 잰 <b>알려진 자리</b>를 누릅니다 (6곳). LDPlayer 방송국 6곳은 <b>채팅으로만</b> 보냅니다 — 게시판 찾기·쓰기는 하지 않고, 진행자가 게시판에 올려 달라고 해도 채팅으로만 보냅니다.</p>
   <table>
     <tr><th>앱 (방송국)</th><th>쓰는 곳</th><th>LDPlayer 창 번호</th><th>앱 패키지 (자동으로 켜기, 비워도 됨)</th><th>자리</th></tr>
     {% for r in rows %}
@@ -36,12 +37,12 @@
       <td><select name="{{ r.app }}_platform">
         <option value="pc" {{ 'selected' if r.platform == 'pc' }}>PC 앱</option>
         <option value="ldplayer" {{ 'selected' if r.platform == 'ldplayer' }}>LDPlayer</option></select></td>
-      <td><select name="{{ r.app }}_index"><option value="">(정하지 않음)</option>
+      <td><select name="{{ r.app }}_index"><option value="">{{ ('창 이름으로: ' ~ r.matched.index ~ '번 ' ~ r.matched.title) if r.matched else '(정하지 않음)' }}</option>
         {% for i in instances %}<option value="{{ i.index }}" {{ 'selected' if r.cfg.index == i.index }}>{{ i.index }} · {{ i.title }}</option>{% endfor %}
         {% if r.cfg.index is not none and r.cfg.index not in instances|map(attribute='index')|list %}<option value="{{ r.cfg.index }}" selected>{{ r.cfg.index }} (지금 없음)</option>{% endif %}
       </select></td>
       <td><input type="text" name="{{ r.app }}_package" value="{{ r.cfg.package }}" placeholder="예: com.회사.앱"></td>
-      <td>{% if r.platform == 'ldplayer' %}<span class="badge {{ 'ok' if r.ready else 'warn' }}">{{ '정함' if r.ready else '정해야 함' }}</span>{% else %}<span class="muted">PC 앱 설정</span>{% endif %}</td>
+      <td>{% if r.platform == 'ldplayer' %}<span class="badge {{ 'ok' if r.ready else 'warn' }}">{{ ('정함' if r.cfg.input and r.cfg.send else '알려진 자리') if r.ready else '정해야 함' }}</span>{% else %}<span class="muted">PC 앱 설정</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </table>

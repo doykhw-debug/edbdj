@@ -601,10 +601,16 @@ def ld_process(conn, app: str, sessions: list[dict] | None = None, procs: dict |
     from . import ldplayer
 
     raw = (config.get(conn, f"{app}.ld_index") or "").strip()
-    if not raw.isdigit():
-        raise RuntimeError(f"{config.app_label(app)}: 몇 번 LDPlayer 창인지 정하지 않아 소리를 받을 수 없습니다 ('LDPlayer 설정')")
     con = con or ldplayer.console(conn)
-    return ldplayer.audio_process(con, int(raw), audio_sessions() if sessions is None else sessions,
+    if raw.isdigit():
+        index = int(raw)
+    else:                                   # 0.90: 창 이름(앱 이름)으로 찾음
+        found = ldplayer.match_instance(app, con.instances())
+        if found is None:
+            raise RuntimeError(f"{config.app_label(app)}: 몇 번 LDPlayer 창인지 몰라 소리를 받을 수 없습니다 "
+                               "(창 이름을 앱 이름으로 바꾸거나 'LDPlayer 설정'에서 창 번호)")
+        index = found["index"]
+    return ldplayer.audio_process(con, index, audio_sessions() if sessions is None else sessions,
                                   processes() if procs is None else procs)
 
 

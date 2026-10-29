@@ -2255,9 +2255,11 @@ def create_app(data_dir: str | None = None) -> Flask:
         rows = []
         for key, meta in qconfig.CHAT_APPS.items():
             cfg = ldplayer.LdConfig.load(g.conn, key)
+            matched = ldplayer.match_instance(key, instances) if cfg.index is None else None   # 0.90: 창 이름으로
             rows.append({"app": key, "label": meta["label"], "station": meta["station"], "kind": meta.get("kind", "chat"),
-                         "platform": qconfig.platform(g.conn, key), "cfg": cfg,
-                         "ready": cfg.index is not None and cfg.input is not None and cfg.send is not None})
+                         "platform": qconfig.platform(g.conn, key), "cfg": cfg, "matched": matched,
+                         "ready": (cfg.index is not None or matched is not None)
+                         and ((cfg.input is not None and cfg.send is not None) or key in ldplayer.LD_LAYOUTS)})
         shot = None
         if app_:
             f = db.data_dir() / "inspect" / f"ld_{app_}.png"

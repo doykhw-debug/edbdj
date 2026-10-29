@@ -16,6 +16,7 @@ ldconsole 명령 (LDPlayer 9): list2 · launch · runapp · action --key call.in
 from __future__ import annotations
 
 import io
+import ntpath
 import os
 import subprocess
 import time
@@ -28,6 +29,24 @@ from .gorilla import SendResult, flat_text, region_changed, to_jpeg
 CONSOLE_PATHS = (r"C:\LDPlayer\LDPlayer9\ldconsole.exe", r"D:\LDPlayer\LDPlayer9\ldconsole.exe",
                  r"C:\Program Files\LDPlayer\LDPlayer9\ldconsole.exe", r"C:\LDPlayer\LDPlayer4.0\ldconsole.exe",
                  r"D:\LDPlayer\LDPlayer4.0\ldconsole.exe")
+# 0.90: 사용자 창 제목이 'LDPlayer 14.0.32.0' — 설치 폴더 이름을 몰라 흔한 위치 아래를 모두 찾는다
+CONSOLE_ROOTS = (r"C:\LDPlayer", r"D:\LDPlayer", r"E:\LDPlayer", r"C:\Program Files\LDPlayer",
+                 r"C:\Program Files (x86)\LDPlayer", r"C:\Program Files\ldplayer9box")
+CONSOLE_NAMES = ("ldconsole.exe", "dnconsole.exe")
+
+# 0.90 사용자가 보낸 LDPlayer 6창 화면 사진(9:16)으로 잰 자리 — 안드로이드 화면 대비 비율 (x, y) / 채팅 목록 (왼·위·오른·아래).
+# 화면 사진을 눌러 자리를 정하지 않았으면 이 자리를 쓴다 (정하면 그 자리가 우선).
+LD_LAYOUTS = {
+    "ifm": {"input": (0.38, 0.945), "send": (0.87, 0.945), "chat": (0.0, 0.24, 1.0, 0.89)},     # '…채팅 내용을 입력하세요' · 파란 '글쓰기'
+    "ytn": {"input": (0.52, 0.965), "send": (0.965, 0.965), "chat": (0.0, 0.60, 1.0, 0.91)},    # '채팅을 입력해주세요(200자이내)' · 종이비행기
+    "bandi": {"input": (0.38, 0.945), "send": (0.84, 0.945), "chat": (0.0, 0.10, 1.0, 0.84)},   # 반디톡 입력칸 · 파란 '등록'
+    "kfn": {"input": (0.42, 0.775), "send": (0.82, 0.775), "chat": (0.0, 0.10, 1.0, 0.72)},     # '메시지를 입력해 주세요.' · 노란 화살표
+    "cpbc": {"input": (0.40, 0.89), "send": (0.915, 0.89), "chat": (0.0, 0.40, 1.0, 0.86)},     # 빵톡 '메세지를 입력하세요' · 화살표
+    "febc": {"input": (0.45, 0.85), "send": (0.92, 0.85), "chat": (0.0, 0.58, 1.0, 0.81)},      # '실시간 채팅에 참여해 보세요' · 화살표
+}
+# 창 이름으로 그 앱의 LDPlayer 창 찾기 (사용자는 창 이름을 앱 이름으로 바꿔 둠: '경인방송 iFM', 'YTN 라디오' …)
+TITLE_HINTS = {"ifm": ("ifm", "경인"), "ytn": ("ytn",), "bandi": ("반디", "bandi", "ebs"), "kfn": ("kfn", "별사탕", "국방"),
+               "cpbc": ("cpbc", "빵"), "febc": ("극동", "febc")}
 TYPE_TRIES = 3           # 글 넣기를 다시 하는 횟수 (처음 포함)
 CLEAR_KEYS = 120         # 입력칸에 남은 글 지우기: 끝으로 → 지우기 키 이만큼
 INPUT_BOX = (0.35, 45)   # 입력칸 확인 네모: 입력칸 자리 좌우로 화면 너비의 이 비율, 위아래로 이 픽셀
@@ -38,12 +57,43 @@ class LdError(RuntimeError):
     pass
 
 
-def find_console(saved: str = "", exists=os.path.isfile) -> str | None:
-    """ldconsole.exe 위치: 저장한 것 → 흔한 설치 위치."""
+def find_console(saved: str = "", exists=os.path.isfile, glob=None) -> str | None:
+    """ldconsole.exe 위치: 저장한 것 → 흔한 설치 위치 → 흔한 폴더 아래 (LDPlayer9·LDPlayer14 등 어느 폴더든)."""
     for path in ([saved.strip()] if saved and saved.strip() else []) + list(CONSOLE_PATHS):
         if exists(path):
             return path
+    if glob is None:
+        import glob as glob_mod
+
+        glob = glob_mod.glob
+    for root in CONSOLE_ROOTS:
+        for name in CONSOLE_NAMES:
+            for path in sorted(glob(ntpath.join(root, name)) + glob(ntpath.join(root, "*", name)), reverse=True):
+                if exists(path):
+                    return path
     return None
+
+
+def match_instance(app: str, instances: list[dict]) -> dict | None:
+    """창 이름으로 그 앱의 LDPlayer 창 (딱 하나일 때만)."""
+    hints = TITLE_HINTS.get(app, ())
+    hits = [i for i in instances if any(h in (i.get("title") or "").lower() for h in hints)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def layout_point(app: str, target: str, size: tuple[int, int] | None) -> tuple[int, int] | None:
+    """알려진 자리(비율) → 그 화면 크기의 픽셀."""
+    lay = LD_LAYOUTS.get(app, {}).get(target)
+    if lay is None or not size:
+        return None
+    return int(lay[0] * size[0]), int(lay[1] * size[1])
+
+
+def layout_box(app: str, size: tuple[int, int] | None) -> tuple[int, int, int, int] | None:
+    lay = LD_LAYOUTS.get(app, {}).get("chat")
+    if lay is None or not size:
+        return None
+    return int(lay[0] * size[0]), int(lay[1] * size[1]), int(lay[2] * size[0]), int(lay[3] * size[1])
 
 
 def parse_list2(text: str) -> list[dict]:
@@ -225,15 +275,30 @@ class LdSender:
         return self.make_console()
 
     def _ready(self) -> tuple[Console, int]:
-        if self.cfg.index is None:
-            raise LdError(f"{self.cfg.label}: 몇 번 LDPlayer 창에서 켰는지 정하지 않았습니다 ('LDPlayer 설정'에서 창 번호를 고르세요)")
         con = self._console()
+        if self.cfg.index is None:                 # 0.90: 창 이름(앱 이름)으로 찾음
+            found = match_instance(self.cfg.app, con.instances())
+            if found is None:
+                raise LdError(f"{self.cfg.label}: 몇 번 LDPlayer 창인지 모릅니다 — 창 이름을 앱 이름으로 바꾸거나 "
+                              "'LDPlayer 설정'에서 창 번호를 고르세요")
+            self.cfg.index = found["index"]
+            self._size = found.get("size")
         inst = con.instance(self.cfg.index)
         if inst is None:
             raise LdError(f"{self.cfg.label}: LDPlayer {self.cfg.index}번 창이 없습니다 (다중 실행기에서 번호를 확인하세요)")
         if not inst["started"]:
             raise LdError(f"{self.cfg.label}: LDPlayer {self.cfg.index}번 창이 꺼져 있습니다 — 켜고 {self.cfg.label} 앱을 열어 두세요")
+        self._size = inst.get("size") or getattr(self, "_size", None)
         return con, self.cfg.index
+
+    def _points(self, size) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+        """입력칸·전송 버튼: 화면 사진을 눌러 정한 자리, 없으면 알려진 자리 (화면 크기로 환산)."""
+        size = size or getattr(self, "_size", None)
+        inp = self.cfg.input or layout_point(self.cfg.app, "input", size)
+        snd = self.cfg.send or layout_point(self.cfg.app, "send", size)
+        if (inp, snd) != (self.cfg.input, self.cfg.send) and inp and snd:
+            self.fixes.append(f"정해 둔 자리가 없어 {self.cfg.label} 알려진 자리({inp[0]},{inp[1]} / {snd[0]},{snd[1]})를 누름")
+        return inp, snd
 
     def is_running(self) -> bool:
         try:
@@ -285,14 +350,15 @@ class LdSender:
 
     def _send(self, text: str, shots: list) -> SendResult:
         con, index = self._ready()
-        if self.cfg.input is None or self.cfg.send is None:
-            raise LdError(f"{self.cfg.label}: 입력칸·전송 버튼 자리를 정하지 않았습니다 ('LDPlayer 설정'에서 화면 사진을 눌러 정하세요)")
         label = self.cfg.label
         before = self._shot(con, index)
-        box = input_box(before.size, self.cfg.input) if before is not None else None
+        inp, snd = self._points(before.size if before is not None else None)
+        if inp is None or snd is None:
+            raise LdError(f"{label}: 입력칸·전송 버튼 자리를 정하지 않았습니다 ('LDPlayer 설정'에서 화면 사진을 눌러 정하세요)")
+        box = input_box(before.size, inp) if before is not None else None
         filled, verified = None, False
         for n in range(1, TYPE_TRIES + 1):
-            con.tap(index, self.cfg.input)
+            con.tap(index, inp)
             self.sleep(0.6)
             con.clear(index)
             self.sleep(0.3)
@@ -313,11 +379,11 @@ class LdSender:
                 shots.append((f"보내지 못했을 때 {label} 화면", self._evidence(filled)))
             raise LdError(f"{label} 입력칸에 글이 들어가지 않아 전송을 누르지 않았습니다 (글 넣기 {TYPE_TRIES}번) — "
                           "입력칸 자리를 다시 정하거나 LDPlayer 의 글자 입력을 확인하세요")
-        con.tap(index, self.cfg.send)
+        con.tap(index, snd)
         self.sleep(1.5)
         after = self._shot(con, index)
         if verified and self._changed(filled, after, box) is False:      # 전송을 눌렀는데 입력칸이 그대로
-            con.tap(index, self.cfg.input)
+            con.tap(index, inp)
             self.sleep(0.4)
             con.keys(index, KEY_ENTER)
             self.sleep(1.5)
@@ -349,8 +415,9 @@ class LdSender:
         img = self._shot(con, index)
         if img is None:
             return None
-        if self.cfg.chat:
-            img = self._crop(img, self.cfg.chat) or img
+        chat = self.cfg.chat or layout_box(self.cfg.app, img.size)
+        if chat:
+            img = self._crop(img, chat) or img
         self._save(img, save_as)
         return to_jpeg(img, max_side)
 

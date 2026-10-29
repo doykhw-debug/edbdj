@@ -99,8 +99,8 @@ def test_touch_and_enter_both_fail_is_retried_later(conn):
 def test_player_off_or_unset(conn):
     assert sender(FakeConsole(started=False)).send("정답").status == "failed"
     assert not sender(FakeConsole(started=False)).is_running() and sender(FakeConsole()).is_running()
-    s = ldplayer.LdSender(ldplayer.LdConfig(app="bandi", index=0), make_console=FakeConsole, sleep=lambda s: None)
-    assert "자리를 정하지 않았습니다" in s.send("정답").detail
+    s = ldplayer.LdSender(ldplayer.LdConfig(app="kong", index=0), make_console=FakeConsole, sleep=lambda s: None)
+    assert "자리를 정하지 않았습니다" in s.send("정답").detail                        # 알려진 자리가 없는 앱
     assert sender(FakeConsole()).send("  ").status == "failed"                   # 빈 글은 넣지 않음
 
 
@@ -260,3 +260,77 @@ def test_chat_only_stations_skip_boards(conn, monkeypatch):
     assert [x["channel"] for x in boards.onair_now(conn, datetime.now())] == ["MBC FM4U"]   # 게시판 쓰기: 채팅만 방송국 뺌
     found = [p["channel"] for p in collect.start_pages(conn)]
     assert "MBC FM4U" in found and "YTN 라디오" not in found                                 # 게시판 찾기에서도 뺌
+
+
+# ── 0.90: 사용자 LDPlayer 6창 화면으로 잰 알려진 자리 · 창 이름으로 창 찾기 · ldconsole 위치 찾기 ──────────────
+USER_TITLES = ["경인방송 iFM", "YTN 라디오", "EBS 반디", "KFN Radio 별사탕", "cpbc빵", "극동방송"]
+
+
+def test_match_instance_by_window_title():
+    insts = [{"index": n, "title": t, "started": True} for n, t in enumerate(USER_TITLES)]
+    got = {app: ldplayer.match_instance(app, insts)["index"] for app in config.LD_APPS}
+    assert got == {"ifm": 0, "ytn": 1, "bandi": 2, "kfn": 3, "cpbc": 4, "febc": 5}
+    assert ldplayer.match_instance("ytn", insts + [{"index": 9, "title": "YTN 두번째"}]) is None   # 둘이면 어림하지 않음
+    assert ldplayer.match_instance("gorilla", insts) is None
+
+
+def test_known_layouts_cover_six_apps():
+    assert sorted(ldplayer.LD_LAYOUTS) == sorted(config.LD_APPS)
+    for app, lay in ldplayer.LD_LAYOUTS.items():
+        (ix, iy), (sx, sy) = lay["input"], lay["send"]
+        assert sx > ix and abs(sy - iy) < 0.02 and 0.7 <= iy <= 0.98            # 전송은 입력칸 오른쪽 같은 줄, 화면 아래쪽
+        assert ldplayer.layout_point(app, "send", (900, 1600)) == (int(sx * 900), int(sy * 1600))
+    assert ldplayer.layout_point("gorilla", "send", (900, 1600)) is None
+
+
+class TitledConsole(FakeConsole):
+    """창 이름이 앱 이름인 LDPlayer 3번 창 (자리는 정하지 않음 → 알려진 자리를 누름)."""
+
+    def __init__(self, app, **kw):
+        super().__init__(**kw)
+        self.app = app
+        self.send_at = ldplayer.layout_point(app, "send", (900, 1600))
+
+    def instances(self):
+        return [{"index": 3, "title": "YTN 라디오", "started": self.started, "pid": 1, "vbox_pid": 2, "size": (900, 1600)}]
+
+    def tap(self, index, point):
+        self.log.append(("tap", tuple(point)))
+        if tuple(point) == self.send_at and self.text:
+            self.sent.append(self.text)
+            self.text = ""
+
+    def screenshot(self, index):
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGB", (900, 1600), (255, 255, 255))
+        if self.text:
+            x, y = ldplayer.layout_point(self.app, "input", (900, 1600))
+            ImageDraw.Draw(img).rectangle((x - 150, y - 12, x + 150, y + 12), fill=(20, 20, 20))
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+
+
+def test_send_with_known_layout_and_title_match(conn):
+    con = TitledConsole("ytn")
+    s = ldplayer.LdSender(ldplayer.LdConfig(app="ytn"), make_console=lambda: con, sleep=lambda s: None)
+    r = s.send("정답은 사과")
+    assert r.status == "entered" and con.sent == ["정답은 사과"] and s.cfg.index == 3
+    assert "알려진 자리" in r.detail and ("tap", ldplayer.layout_point("ytn", "input", (900, 1600))) in con.log
+
+
+def test_find_console_any_ldplayer_folder():
+    fake = r"C:\LDPlayer\LDPlayer14\ldconsole.exe"
+    glob = lambda pattern: [fake] if pattern.endswith(r"*\ldconsole.exe") and pattern.startswith(r"C:\LDPlayer") else []
+    assert ldplayer.find_console("", exists=lambda p: p == fake, glob=glob) == fake
+
+
+def test_setup_page_shows_title_match(client, conn, monkeypatch):
+    class Six(FakeConsole):
+        def instances(self):
+            return [{"index": n, "title": t, "started": True, "pid": 0, "vbox_pid": 0} for n, t in enumerate(USER_TITLES)]
+
+    monkeypatch.setattr(ldplayer, "console", lambda c=None, run=None: Six())
+    html = client.get("/ldplayer").get_data(as_text=True)
+    assert "창 이름으로: 1번 YTN 라디오" in html and "알려진 자리" in html
