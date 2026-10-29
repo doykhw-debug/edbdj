@@ -1248,7 +1248,8 @@ class Runner:
     def refind_chat(self, channel: str | None) -> bool:
         """채팅 창을 못 찾을 때(닫힘·옮겨짐): 5분에 한 번까지 다시 찾아 저장하고 전송 도구 설정을 새로 읽는다."""
         app = config.chat_app(self.conn, channel)
-        if app is None or self.deps.refind is None or config.route(self.conn) != "app":
+        if app is None or self.deps.refind is None or config.route(self.conn) != "app" \
+                or config.platform(self.conn, app) == "ldplayer":    # LDPlayer 앱은 창 번호로 찾음 (다시 찾기 없음)
             return False
         try:
             # 창을 앞으로 가져오고 누를 수 있으므로 다른 청취기(동시 청취)가 보내는 동안에는 하지 않는다 (잠금, 잠깐만 기다림)
@@ -1262,7 +1263,7 @@ class Runner:
         if not report or not report.get("settings"):
             return False
         sender = self.chat_sender(app)
-        if hasattr(sender, "cfg"):
+        if hasattr(sender, "cfg") and not hasattr(sender, "screen_png"):     # PC 앱 도구만 (LDPlayer 도구는 아님)
             sender.cfg = config.GorillaConfig.load(self.conn, app)
         return self.chat_ok(channel)
 
@@ -1363,7 +1364,7 @@ class Runner:
             return None   # 다른 청취기(동시 청취)가 먼저 가져가 보내는 중 — 두 번 보내지 않는다
         if route != "sms":
             cfg = getattr(self.chat_sender(app), "cfg", None)
-            how_clicked = "" if cfg is None else \
+            how_clicked = "" if cfg is None else " (LDPlayer)" if not hasattr(cfg, "input_mode") else \
                 " (위치 클릭)" if {"coords", "screen"} & {cfg.input_mode, cfg.send_mode} else " (화면 요소)"
             self.touch(f"{config.app_label(app)} 채팅 전송{how_clicked}")
         try:
@@ -1485,7 +1486,7 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
     device, note = gpu.choose_device(conn, config.get(conn, "quizbot.whisper_device"))
     tr = WhisperTranscriber(lanes.stt_model(conn, model, device), program, device, beam_size=config.whisper_beam(conn, device),
                             overlap_seconds=config.get_int(conn, "quizbot.stt_overlap"),
-                            hints=stt_hints(conn, program))
+                            hints=stt_hints(conn, program), compute_type=lanes.stt_compute(conn, device))
     tr.device_note = note
     return tr
 
@@ -1500,7 +1501,7 @@ def lane_item(conn: sqlite3.Connection, lane: str) -> dict:
 def build_real_deps(conn: sqlite3.Connection, lane: str = "") -> Deps:
     """윈도우에서 실제로 쓰는 구성. lane: 동시 청취의 칸 (주 채널은 "")."""
     from ..app import launch_autofill
-    from . import clues, finder
+    from . import clues, finder, ldplayer
     from .answerer import make as make_answerer
     from .gorilla import Gorilla
     from .sms import AdbSms
@@ -1520,7 +1521,7 @@ def build_real_deps(conn: sqlite3.Connection, lane: str = "") -> Deps:
         transcriber_factory=lambda model, program: make_transcriber(conn, model, program),
         answerer=make_answerer(conn),
         sender=Gorilla(config.GorillaConfig.load(conn, "gorilla")),
-        chat_senders={app: Gorilla(config.GorillaConfig.load(conn, app)) for app in config.CHAT_APPS},
+        chat_senders={app: ldplayer.sender_for(conn, app) for app in config.CHAT_APPS},   # 0.88: LDPlayer 앱은 ADB 로
         sms=AdbSms.from_settings(conn),
         lock=shared_input_lock,
         launch_board=lambda draft_id: launch_autofill(["--draft", str(draft_id), "--mode", "post"]),

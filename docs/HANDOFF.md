@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-28, 0.87 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-29, 0.88 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -38,6 +38,7 @@
 | 0.85 | 다시 보내기 2번까지: quizzes·story_posts.send_tries (deliver 의 claim 때 +1, 3번이면 RETRY_STOP 보류·approved=0), 사용자 승인(보내기) 때 send_tries=0, 신청곡은 프로그램·날짜당 줄 3개까지. runner.SEND_RETRIES |
 | 0.86 | 자리 잘못 찾음: finder.auto(듣는 중 다시 찾기)가 정해 둔 자리를 UIA·템플릿 어림으로 덮어씀 → has_saved_points 면 아무것도 안 함. Gorilla._fresh_point 는 coords/screen 이면 언제나 저장한 자리(확인 창 닫은 뒤 UIA 어림 없앰). _moved_window 는 같은 크기 창이 하나일 때만 |
 | 0.87 | 전송 재점검: gorilla.known_box(앱 배치 = finder.TEMPLATES, 사용자 화면 사진 4장으로 확인) + Gorilla._known_fix — 정해 둔 자리가 배치 네모(±15px) 밖이면 네모 가운데. _read_input 은 초점이 Edit/Document 일 때만 글을 믿음(레인보우 Pane). SEND_RETRIES 5, 멈출 때 마지막 까닭. runner.consensus_fits: 보기가 있으면 채팅 공통 답이 보기 중 하나일 때만 |
+| 0.88 | LDPlayer: config.LD_APPS(bandi·ytn·kfn·cpbc·febc·ifm·gugak·btn·arirang, TBS 뺌) → CHAT_APPS, `{app}.platform` pc/ldplayer, `{app}.ld_index/ld_input/ld_send/ld_chat/ld_package`. quizbot/ldplayer.py: Console(ldconsole list2·adb shell input tap/keyevent·action call.input·screencap pull), LdSender(send·chat_image·send_test), sender_for, audio_process(그 창 pid·vbox pid 아래 소리 길). appaudio.ld_process. /ldplayer 화면(사진 클릭으로 자리). lanes.MAX_LANES 10, stt_compute(7칸↑ int8_float16). config.add_ld_channels(meta.channels_088). 실제 LDPlayer 미확인 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).

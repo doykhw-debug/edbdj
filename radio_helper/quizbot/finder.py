@@ -564,7 +564,7 @@ def auto(conn, app: str, now: float | None = None, desk: Desk | None = None, log
     채팅 열기 단추를 누르기도 했다 (채팅 창은 고정값으로 두고 건드리지 않음). 다시 찾기는 화면의 '원버튼 찾기'로."""
     from .. import db
 
-    if has_saved_points(conn, app):
+    if app not in APP_HINTS or has_saved_points(conn, app):     # LDPlayer 앱은 창 번호로 찾는다
         return None
     now = now if now is not None else time.time()
     key = f"{app}.auto_found_at"

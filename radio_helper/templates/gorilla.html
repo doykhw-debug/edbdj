@@ -7,6 +7,7 @@
   {% for key, meta in apps.items() %}
   <a class="btn {{ '' if key == app else 'secondary' }}" href="{{ url_for('gorilla', app=key) }}">{{ meta.label }} <span style="font-weight:400">({{ meta.station }})</span></a>
   {% endfor %}
+  <a class="btn secondary" href="{{ url_for('ldplayer_page') }}">LDPlayer 앱 (EBS·YTN·국방·cpbc·극동·iFM·국악·BTN·아리랑)</a>
   <a class="btn secondary" href="{{ url_for('sms_page') }}">휴대폰 문자</a>
 </div>
 

@@ -249,7 +249,7 @@ def cmd_find(conn, app: str = "gorilla", every: bool = False) -> int:
     from . import finder
     from .runner import shared_input_lock
 
-    apps = list(config.CHAT_APPS) if every else [app]
+    apps = [a for a in config.CHAT_APPS if a in finder.APP_HINTS and config.platform(conn, a) == "pc"] if every else [app]
     found_any = False
     for one in apps:
         say(f"{config.app_label(one)} 찾는 중…")
@@ -300,14 +300,15 @@ def cmd_select(conn, target: str, app: str = "gorilla") -> int:
 
 def cmd_send_test(conn, app: str = "gorilla") -> int:
     from .. import quiz
-    from .gorilla import Gorilla
     from .runner import shared_input_lock
 
     from .. import evidence
 
+    from .ldplayer import sender_for
+
     text = config.get(conn, f"{app}.test_message").strip() or config.CHAT_APPS[app]["test"]
     with shared_input_lock():
-        result, msg = Gorilla(config.GorillaConfig.load(conn, app)).send_test(text)
+        result, msg = sender_for(conn, app).send_test(text)   # 0.88: LDPlayer 앱이면 그 창으로
     if result.shots:   # 메뉴 '증거 사진'의 '전송 테스트'에도 남긴다
         evidence.save(conn, "tests", 0, app, text, result.status, result.shots)
         msg += f" (증거 사진 화면에 {len(result.shots)}장 저장)"
@@ -317,12 +318,12 @@ def cmd_send_test(conn, app: str = "gorilla") -> int:
 
 def cmd_chat_test(conn, app: str = "gorilla") -> int:
     """채팅창 영역을 지금 찍어 본다 (읽기만 함). 키워드가 들리면 이렇게 찍은 화면을 녹취와 함께 분석한다."""
-    from .gorilla import Gorilla
+    from .ldplayer import sender_for
 
-    if not config.get(conn, f"{app}.chat_rect"):
+    if config.platform(conn, app) == "pc" and not config.get(conn, f"{app}.chat_rect"):
         _save(conn, app, {}, "채팅창 영역이 없습니다. '④ 채팅창 영역 지정'을 먼저 하세요.")
         return 1
-    data = Gorilla(config.GorillaConfig.load(conn, app)).chat_image(save_as=f"{app}_chat")
+    data = sender_for(conn, app).chat_image(save_as=f"{app}_chat")
     _save(conn, app, {}, f"채팅창 읽기 테스트: {len(data) // 1024 if data else 0}KB 사진 → {app}_chat.png "
                          "(글자가 읽히는지 관리 화면에서 확인하세요)")
     return 0 if data else 1

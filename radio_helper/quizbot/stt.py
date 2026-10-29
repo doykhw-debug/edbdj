@@ -77,7 +77,7 @@ def add_nvidia_dll_dirs() -> None:
 
 class WhisperTranscriber:
     def __init__(self, model_size: str = "auto", program_title: str = "", device: str = "cpu",
-                 beam_size: int = 5, overlap_seconds: float = 3.0, hints: str = ""):
+                 beam_size: int = 5, overlap_seconds: float = 3.0, hints: str = "", compute_type: str = ""):
         device = device if device in ("cpu", "cuda") else "cpu"   # auto 는 gpu.choose_device 가 미리 정한다
         model_size = resolve_model(model_size, device)
         if device == "cuda":
@@ -86,7 +86,8 @@ class WhisperTranscriber:
 
         self.device, self.model_size = device, model_size
         started = time.monotonic()
-        self.model = WhisperModel(model_size, device=device, compute_type="float16" if device == "cuda" else "int8")
+        compute_type = compute_type or ("float16" if device == "cuda" else "int8")
+        self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
         self.load_seconds = time.monotonic() - started
         self.beam_size = max(1, int(beam_size or 1))
         self.overlap = max(0.0, float(overlap_seconds or 0))

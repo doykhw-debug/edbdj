@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}LDPlayer 앱 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>LDPlayer 앱 <span class="muted">PC 에서 휴대폰 방송국 앱으로 듣고 보내기</span></h1>
+<p class="muted">LDPlayer(안드로이드 앱 플레이어)의 <b>다중 실행기</b>로 창을 여러 개 만들고, 창마다 방송국 앱 하나를 켜 두세요
+  (예: 0번 반디, 1번 YTN 라디오 …). 도우미는 LDPlayer 의 연결 도구(ldconsole)로 그 창에 <b>터치·글자 넣기·화면 찍기</b>를 합니다 —
+  마우스를 움직이지 않고, 창이 가려져 있거나 최소화돼 있어도 됩니다. 로그인은 앱에서 직접 하세요.
+  <a href="{{ url_for('gorilla') }}">PC 앱(고릴라·mini·콩·레인보우) 설정 →</a></p>
+
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<form method="post" action="{{ url_for('ldplayer_save') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}">
+<div class="panel">
+  <h2>LDPlayer 연결</h2>
+  <label>ldconsole.exe 위치 <span class="muted">(비우면 C:\LDPlayer\LDPlayer9\ldconsole.exe 등에서 찾음)</span></label>
+  <input type="text" name="console" value="{{ console }}" placeholder="C:\LDPlayer\LDPlayer9\ldconsole.exe">
+  {% if instances %}
+  <table style="margin-top:8px">
+    <tr><th>창 번호</th><th>이름</th><th>상태</th></tr>
+    {% for i in instances %}<tr><td>{{ i.index }}</td><td>{{ i.title }}</td>
+      <td><span class="badge {{ 'ok' if i.started else 'warn' }}">{{ '켜짐' if i.started else '꺼짐' }}</span></td></tr>{% endfor %}
+  </table>
+  {% elif not error %}<p class="muted">LDPlayer 창이 없습니다. 다중 실행기에서 창을 만들어 주세요.</p>{% endif %}
+</div>
+
+<div class="panel table-wrap">
+  <h2>앱마다 듣고 보내는 곳</h2>
+  <p class="muted">'LDPlayer'로 정한 앱은 그 창으로 듣고 보냅니다. 소리는 그 창의 프로그램 소리만 받아서 다른 방송과 섞이지 않습니다.
+    국악방송 덩더쿵·BTN 울림은 채팅보다 게시판(사연쓰기)에 가깝습니다 — 사연쓰기 칸을 입력칸으로 정하세요 (제목 칸이 따로 있으면 아직은 직접).</p>
+  <table>
+    <tr><th>앱 (방송국)</th><th>쓰는 곳</th><th>LDPlayer 창 번호</th><th>앱 패키지 (자동으로 켜기, 비워도 됨)</th><th>자리</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td><a href="{{ url_for('ldplayer_page', app=r.app) }}#calibrate"><b>{{ r.label }}</b></a> <span class="muted">({{ r.station }}{{ ' · 게시판형' if r.kind == 'board' }})</span></td>
+      <td><select name="{{ r.app }}_platform">
+        <option value="pc" {{ 'selected' if r.platform == 'pc' }}>PC 앱</option>
+        <option value="ldplayer" {{ 'selected' if r.platform == 'ldplayer' }}>LDPlayer</option></select></td>
+      <td><select name="{{ r.app }}_index"><option value="">(정하지 않음)</option>
+        {% for i in instances %}<option value="{{ i.index }}" {{ 'selected' if r.cfg.index == i.index }}>{{ i.index }} · {{ i.title }}</option>{% endfor %}
+        {% if r.cfg.index is not none and r.cfg.index not in instances|map(attribute='index')|list %}<option value="{{ r.cfg.index }}" selected>{{ r.cfg.index }} (지금 없음)</option>{% endif %}
+      </select></td>
+      <td><input type="text" name="{{ r.app }}_package" value="{{ r.cfg.package }}" placeholder="예: com.회사.앱"></td>
+      <td>{% if r.platform == 'ldplayer' %}<span class="badge {{ 'ok' if r.ready else 'warn' }}">{{ '정함' if r.ready else '정해야 함' }}</span>{% else %}<span class="muted">PC 앱 설정</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div class="actions" style="margin-top:8px"><button>저장</button></div>
+</div>
+</form>
+
+{% if app %}
+<div class="panel" id="calibrate">
+  <h2>{{ label }} — 입력칸·전송 버튼·채팅 목록 자리 <span class="muted">LDPlayer {{ cfg.index if cfg.index is not none else '?' }}번 창</span></h2>
+  <p class="muted">① '화면 찍기'로 지금 창 화면을 가져온 뒤 ② 아래 단추를 고르고 사진에서 그 자리를 누르세요.
+    채팅 목록은 왼쪽 위 → 오른쪽 아래 두 번 누릅니다. 채팅을 연 화면(입력칸이 보이는 화면)에서 찍어야 합니다.</p>
+  <div class="actions">
+    <form method="post" action="{{ url_for('ldplayer_shot', app_=app) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>화면 찍기</button></form>
+    {% if cfg.package %}<form method="post" action="{{ url_for('ldplayer_run', app_=app) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">앱 켜기</button></form>{% endif %}
+    <a class="btn secondary" href="{{ url_for('ldplayer_page', app=app, pk=1) }}">설치된 앱 패키지 보기</a>
+  </div>
+  {% if packages %}<p class="muted">설치된 앱: {% for p in packages %}<code>{{ p }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
+  <p>지금 자리 — 입력칸: <b>{{ cfg.input|join(', ') if cfg.input else '없음' }}</b> · 전송 버튼: <b>{{ cfg.send|join(', ') if cfg.send else '없음' }}</b>
+    · 채팅 목록: <b>{{ cfg.chat|join(', ') if cfg.chat else '없음 (화면 전체를 봄)' }}</b></p>
+  {% if shot %}
+  <div class="actions">
+    <button type="button" class="secondary" data-target="input" onclick="pick(this)">① 입력칸</button>
+    <button type="button" class="secondary" data-target="send" onclick="pick(this)">② 전송 버튼</button>
+    <button type="button" class="secondary" data-target="chat" onclick="pick(this)">③ 채팅 목록 (두 번)</button>
+    <span id="pick-hint" class="muted">단추를 고른 뒤 사진을 누르세요</span>
+  </div>
+  <form id="point-form" method="post" action="{{ url_for('ldplayer_point', app_=app) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="target" id="point-target"><input type="hidden" name="value" id="point-value">
+  </form>
+  <div style="position:relative;display:inline-block;max-width:100%">
+    <img id="ld-shot" src="{{ url_for('inspect_image', name=shot.file) }}?v={{ shot.v }}" alt="{{ label }} 화면"
+         style="max-width:100%;max-height:80vh;border:1px solid var(--line);cursor:crosshair" onclick="hit(event)">
+  </div>
+  <script>
+    let target = null, first = null;
+    function pick(btn) { target = btn.dataset.target; first = null;
+      document.getElementById('pick-hint').textContent = target === 'chat' ? '채팅 목록 왼쪽 위를 누르세요' : '사진에서 그 자리를 누르세요'; }
+    function hit(e) {
+      if (!target) { document.getElementById('pick-hint').textContent = '먼저 단추를 고르세요'; return; }
+      const img = e.target, r = img.getBoundingClientRect();
+      const x = Math.round((e.clientX - r.left) * img.naturalWidth / r.width);
+      const y = Math.round((e.clientY - r.top) * img.naturalHeight / r.height);
+      if (target === 'chat' && !first) { first = [x, y]; document.getElementById('pick-hint').textContent = '이제 오른쪽 아래를 누르세요'; return; }
+      document.getElementById('point-target').value = target;
+      document.getElementById('point-value').value = target === 'chat' ? `${first[0]},${first[1]},${x},${y}` : `${x},${y}`;
+      document.getElementById('point-form').submit();
+    }
+  </script>
+  {% endif %}
+  <div class="actions" style="margin-top:10px">
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="send-test">
+      <input type="text" name="test_message" value="{{ test_message }}" style="width:16em"> <button {{ 'disabled' if not (cfg.input and cfg.send) }}>전송 테스트 (실제로 보냄)</button></form>
+    <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="chat-test"><button class="secondary">채팅 목록 찍어 보기</button></form>
+  </div>
+  {% for s in shots %}<p class="muted">{{ s.label }} ({{ s.at }})</p><img src="{{ url_for('inspect_image', name=s.file) }}?v={{ s.v }}" style="max-width:100%;max-height:60vh">{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

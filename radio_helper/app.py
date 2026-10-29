@@ -44,7 +44,7 @@ PC_ONLY_ENDPOINTS = {"listen_start", "listen_skip", "stt_test", "quizbot_start",
                      "corners_login", "corners_login_check", "corners_collect", "corners_browser", "quizbot_chatgpt_login",
                      "draft_run", "corner_inspect", "repair_stt", "corner_auto_run"}   # 마지막 둘: 사용자가 보는 브라우저 창을 띄움
 TEST_MESSAGE_MAX = 200   # 채팅 앱 입력칸 글자 수 (고릴라 공감로그 200자 내외)
-INSPECT_IMAGE = re.compile(r"(gorilla|mini|kong|sms)_[a-z0-9_]+\.png")
+INSPECT_IMAGE = re.compile(r"(" + "|".join(sorted(qconfig.CHAT_APPS)) + r"|sms|ld)_[a-z0-9_]+\.png")
 
 
 def create_app(data_dir: str | None = None) -> Flask:
@@ -2230,6 +2230,126 @@ def create_app(data_dir: str | None = None) -> Flask:
             return redirect(url_for("quizbot", wait=wait))
         return redirect(url_for("gorilla", app=app_, wait=wait))
 
+    # ── LDPlayer (안드로이드 앱 플레이어) 앱 ─────────────────────────
+    def ld_console():
+        from .quizbot import ldplayer
+
+        return ldplayer.console(g.conn)
+
+    @app.get("/ldplayer")
+    def ldplayer_page():
+        """0.88: LDPlayer 로 켠 방송국 앱 — 앱마다 PC/LDPlayer, 몇 번 창, 앱 패키지, 화면 사진을 눌러 입력칸·전송·채팅 자리."""
+        from .quizbot import ldplayer
+
+        app_ = request.args.get("app", "")
+        if app_ and app_ not in qconfig.CHAT_APPS:
+            abort(404)
+        instances, error, packages = [], "", []
+        try:
+            con = ld_console()
+            instances = con.instances()
+            if app_ and request.args.get("pk") and ldplayer.LdConfig.load(g.conn, app_).index is not None:
+                packages = con.packages(ldplayer.LdConfig.load(g.conn, app_).index)
+        except Exception as e:
+            error = str(e)
+        rows = []
+        for key, meta in qconfig.CHAT_APPS.items():
+            cfg = ldplayer.LdConfig.load(g.conn, key)
+            rows.append({"app": key, "label": meta["label"], "station": meta["station"], "kind": meta.get("kind", "chat"),
+                         "platform": qconfig.platform(g.conn, key), "cfg": cfg,
+                         "ready": cfg.index is not None and cfg.input is not None and cfg.send is not None})
+        shot = None
+        if app_:
+            f = db.data_dir() / "inspect" / f"ld_{app_}.png"
+            if f.exists():
+                shot = {"file": f.name, "v": int(f.stat().st_mtime)}
+        return render_template("ldplayer.html", rows=rows, app=app_, instances=instances, error=error,
+                               console=qconfig.get(g.conn, "ldplayer.console"), shot=shot, packages=packages,
+                               cfg=ldplayer.LdConfig.load(g.conn, app_) if app_ else None,
+                               label=qconfig.app_label(app_) if app_ else "",
+                               test_message=qconfig.get(g.conn, f"{app_}.test_message") if app_ else "",
+                               shots=image_list([(f"{app_}_chat", "채팅 목록 찍어 보기 — 글자가 읽혀야 함")]) if app_ else [])
+
+    @app.post("/ldplayer/save")
+    def ldplayer_save():
+        db.set_setting(g.conn, "ldplayer.console", form("console"))
+        for key in qconfig.CHAT_APPS:
+            plat = form(f"{key}_platform")
+            if plat in qconfig.PLATFORMS:
+                db.set_setting(g.conn, f"{key}.platform", plat)
+            if f"{key}_index" in request.form:
+                index = form(f"{key}_index")
+                if index and not index.isdigit():
+                    abort(400)
+                db.set_setting(g.conn, f"{key}.ld_index", index)
+            if f"{key}_package" in request.form:
+                db.set_setting(g.conn, f"{key}.ld_package", form(f"{key}_package"))
+        flash("LDPlayer 설정을 저장했습니다. 청취 중이면 다시 시작하면 적용됩니다.")
+        return redirect(url_for("ldplayer_page", app=form("app") or None))
+
+    @app.post("/ldplayer/<app_>/shot")
+    def ldplayer_shot(app_):
+        """그 앱 창의 안드로이드 화면을 찍어 이 화면에 보인다 (누르는 것 없음)."""
+        from .quizbot import ldplayer
+
+        if app_ not in qconfig.CHAT_APPS:
+            abort(404)
+        try:
+            png = ldplayer.LdSender(ldplayer.LdConfig.load(g.conn, app_), make_console=ld_console).screen_png()
+            if not png:
+                raise ldplayer.LdError("화면 사진을 받지 못했습니다 (LDPlayer 창이 켜져 있는지 확인)")
+            out = db.data_dir() / "inspect"
+            out.mkdir(exist_ok=True)
+            (out / f"ld_{app_}.png").write_bytes(png)
+            flash(f"{qconfig.app_label(app_)} 화면을 찍었습니다. 사진에서 입력칸·전송 버튼을 차례로 누르세요.")
+        except Exception as e:
+            flash(f"화면을 찍지 못했습니다: {e}", "error")
+        return redirect(url_for("ldplayer_page", app=app_) + "#calibrate")
+
+    @app.post("/ldplayer/<app_>/point")
+    def ldplayer_point(app_):
+        """화면 사진에서 누른 자리 (안드로이드 화면 픽셀): target=input|send → x,y / chat → x1,y1,x2,y2."""
+        if app_ not in qconfig.CHAT_APPS:
+            abort(404)
+        target = form("target")
+        try:
+            nums = [int(float(v)) for v in form("value").split(",")]
+        except ValueError:
+            abort(400)
+        if target in ("input", "send") and len(nums) == 2 and min(nums) >= 0:
+            db.set_setting(g.conn, f"{app_}.ld_{target}", f"{nums[0]},{nums[1]}")
+        elif target == "chat" and len(nums) == 4 and min(nums) >= 0:
+            x1, y1, x2, y2 = nums
+            db.set_setting(g.conn, f"{app_}.ld_chat", f"{min(x1, x2)},{min(y1, y2)},{max(x1, x2)},{max(y1, y2)}")
+        else:
+            abort(400)
+        db.log(g.conn, "quizbot", f"[{qconfig.app_label(app_)}] LDPlayer {target} 자리 저장: {form('value')}")
+        flash({"input": "입력칸", "send": "전송 버튼", "chat": "채팅 목록"}[target] + " 자리를 저장했습니다.")
+        return redirect(url_for("ldplayer_page", app=app_) + "#calibrate")
+
+    @app.post("/ldplayer/<app_>/run")
+    def ldplayer_run(app_):
+        """그 창에서 앱을 켠다 (패키지를 정했을 때만, LDPlayer 창이 꺼져 있으면 먼저 켬)."""
+        from .quizbot import ldplayer
+
+        if app_ not in qconfig.CHAT_APPS:
+            abort(404)
+        cfg = ldplayer.LdConfig.load(g.conn, app_)
+        try:
+            if cfg.index is None or not cfg.package:
+                raise ldplayer.LdError("창 번호와 앱 패키지를 먼저 정하세요")
+            con = ld_console()
+            inst = con.instance(cfg.index)
+            if inst is None:
+                raise ldplayer.LdError(f"LDPlayer {cfg.index}번 창이 없습니다")
+            if not inst["started"]:
+                con.launch(cfg.index)
+            con.run_app(cfg.index, cfg.package)
+            flash(f"LDPlayer {cfg.index}번 창에서 {qconfig.app_label(app_)} 앱을 켰습니다. 로그인·채팅 열기는 직접 해 주세요.")
+        except Exception as e:
+            flash(f"앱을 켜지 못했습니다: {e}", "error")
+        return redirect(url_for("ldplayer_page", app=app_))
+
     # ── 보낸 증거 사진 ──────────────────────────────────────────
     @app.get("/evidence")
     def evidence_page():
@@ -2272,7 +2392,10 @@ def create_app(data_dir: str | None = None) -> Flask:
         app_ = request.args.get("app", "gorilla")
         if app_ not in qconfig.CHAT_APPS:
             abort(404)
-        keys = [k for k in qconfig.DEFAULTS if k.startswith(f"{app_}.") and not k.endswith(("_x", "_y"))] + \
+        if qconfig.platform(g.conn, app_) == "ldplayer":          # 0.88: LDPlayer 로 쓰는 앱은 그 화면에서
+            return redirect(url_for("ldplayer_page", app=app_, wait=request.args.get("wait")))
+        keys = [k for k in qconfig.DEFAULTS if k.startswith(f"{app_}.") and not k.endswith(("_x", "_y"))
+                and not k.startswith((f"{app_}.ld_", f"{app_}.platform"))] + \
                [k for k in qconfig.DEFAULTS if k.startswith("quizbot.")
                 and k not in ("quizbot.autostart", "quizbot.billing", "quizbot.billing_fallback",
                               "quizbot.gpt_fallback", "quizbot.gpt_model", "quizbot.chatgpt_model")]   # AI 연결은 설정 화면에서
@@ -2328,7 +2451,8 @@ def create_app(data_dir: str | None = None) -> Flask:
                             (f"{app_}_select_input", "① 입력칸으로 지정한 영역"),
                             (f"{app_}_select_send", "② 전송 버튼으로 지정한 영역"),
                             (f"{app_}_select_window", f"{label} 창으로 지정한 영역")])
-        return render_template("gorilla.html", app=app_, label=label, apps=qconfig.CHAT_APPS,
+        return render_template("gorilla.html", app=app_, label=label,
+                               apps={k: v for k, v in qconfig.CHAT_APPS.items() if qconfig.platform(g.conn, k) == "pc"},
                                keys=keys, values={k: qconfig.get(g.conn, k) for k in keys},
                                labels=qconfig.LABELS, report=report, auto=auto, found=found, coords=coords,
                                last_tool=last_tool,

@@ -19,16 +19,17 @@ def inside(point, box):
 
 def test_channels_apps_and_numbers(conn):
     chans = config.channels(conn)
-    assert chans["CBS 음악FM"] == "#9390" and chans["CBS 표준FM"] == "" and "EBS FM" not in chans
+    assert chans["CBS 음악FM"] == "#9390" and chans["CBS 표준FM"] == "" and chans["EBS FM"] == ""   # 0.88 EBS 다시
     assert config.chat_app(conn, "CBS 음악FM") == "rainbow" and config.chat_app(conn, "CBS 표준FM") == "rainbow"
-    assert config.chat_app(conn, "KBS 쿨FM") == "kong" and config.chat_app(conn, "EBS FM") is None
-    assert config.broadcaster_of("CBS 음악FM") == "CBS" and config.broadcaster_of("EBS FM") == "EBS FM"
-    assert config.app_label("rainbow") == "레인보우" and "bandi" not in config.CHAT_APPS
+    assert config.chat_app(conn, "KBS 쿨FM") == "kong" and config.chat_app(conn, "EBS FM") == "bandi"
+    assert config.broadcaster_of("CBS 음악FM") == "CBS" and config.broadcaster_of("EBS FM") == "EBS"
+    assert config.app_label("rainbow") == "레인보우" and config.platform(conn, "bandi") == "ldplayer"
     cfg = config.GorillaConfig.load(conn, "rainbow")
     assert cfg.label == "레인보우" and "레인보우" in cfg.default_title and config.get(conn, "rainbow.test_message") == "CBS 화이팅"
 
 
 def test_saved_channel_list_gets_cbs_once(conn):
+    db.set_setting(conn, config.LD_CHANNELS_ADDED, "1")                         # (0.88 LDPlayer 채널은 따로 시험)
     db.set_setting(conn, "channels", "파워FM=#1077\nMBC FM4U=#8000\nCBS 음악FM=#9390\n")
     assert config.migrate_channels(conn) == ["CBS 표준FM="]
     assert db.get_setting(conn, "channels") == "파워FM=#1077\nMBC FM4U=#8000\nCBS 음악FM=#9390\nCBS 표준FM="
@@ -44,6 +45,7 @@ def test_new_pc_uses_default_list_without_saving(conn):
 def test_ebs_added_by_055_is_removed_once(conn):
     # 0.55 를 쓴 PC: 채널 목록에 EBS FM 을 저절로 더했고, 동시 청취 칸에도 넣어 둠
     db.set_setting(conn, config.CHANNELS_MIGRATED, "1")
+    db.set_setting(conn, config.LD_CHANNELS_ADDED, "1")
     db.set_setting(conn, "channels", "파워FM=#1077\nCBS 음악FM=#9390\nCBS 표준FM=\nEBS FM=#1045")
     db.log(conn, "quizbot", "채널 목록에 CBS·EBS 를 더했습니다: CBS 음악FM, CBS 표준FM, EBS FM")
     db.set_setting(conn, "live.lanes", json.dumps([{"channel": "CBS 음악FM", "device": ""}, {"channel": "EBS FM", "device": ""}],
@@ -130,14 +132,14 @@ def test_four_lanes_and_smaller_model_on_gpu(conn, monkeypatch):
     assert lanes.ensure(conn, lambda a: launched.append(a) or "x.log", now=1000.0) == ["2", "3", "4"]
 
 
-def test_home_offers_cbs_and_four_lanes(client, conn, monkeypatch):
+def test_home_offers_cbs_and_ten_lanes(client, conn, monkeypatch):
     from radio_helper import app as app_module
 
     monkeypatch.setattr(app_module, "launch_quizbot", lambda args: "quizbot_x.log")
     monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)       # 윈도우 11: 칸을 비우면 앱 소리
     html = client.get("/").get_data(as_text=True)
-    assert "CBS 음악FM · 레인보우" in html and 'name="lane4_channel"' in html and 'name="lane5_channel"' not in html
-    assert "MBC mini · CBS 레인보우)" in html and "반디" not in html and "EBS" not in html
+    assert "CBS 음악FM · 레인보우" in html and 'name="lane10_channel"' in html and 'name="lane11_channel"' not in html
+    assert "MBC mini · CBS 레인보우)" in html and "EBS FM · 반디" in html                # 0.88: 10곳까지 · LDPlayer 방송국
     r = client.post("/listen/lanes", data={"csrf_token": csrf(client), "multi": "1", "device": "",
                                            "lane2_channel": "CBS 음악FM", "lane2_device": "",
                                            "lane3_channel": "MBC FM4U", "lane3_device": "",

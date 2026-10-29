@@ -23,7 +23,8 @@ def test_broadcaster_of():
     f = config.broadcaster_of
     assert [f(c) for c in ("파워FM", "러브FM", "고릴라M", "SBS 파워FM", None, "")] == ["SBS"] * 6
     assert f("MBC FM4U") == "MBC" and f("KBS 쿨FM") == "KBS" and f("KBS 1라디오") == "KBS"
-    assert f("CBS 음악FM") == "CBS" and f("EBS FM") == "EBS FM"                 # 0.55 CBS (EBS 는 0.56 에 뺌)
+    assert f("CBS 음악FM") == "CBS" and f("EBS FM") == "EBS"                    # 0.88: EBS 다시 (LDPlayer 반디)
+    assert f("경인방송 iFM") == "iFM" and f("KFN 국방FM") == "KFN" and f("아리랑라디오") == "아리랑"
     assert f("TBN 교통방송") == "TBN 교통방송"                                      # 모르는 방송국은 채널 이름 그대로
 
 

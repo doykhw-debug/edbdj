@@ -585,6 +585,8 @@ def app_locator(app: str | None):
             raise RuntimeError("이 채널의 앱(고릴라·콩·mini·레인보우)을 몰라 앱 소리를 받을 수 없습니다 — 채널 설정에서 앱을 정하세요")
         own = db.connect()
         try:
+            if config.platform(own, app) == "ldplayer":    # 0.88: LDPlayer 창(번호)의 프로그램 소리만
+                return ld_process(own, app)
             name = (config.get(own, f"{app}.process_name") or "").strip().lower()
             cfg = config.GorillaConfig.load(own, app)
         finally:
@@ -593,11 +595,26 @@ def app_locator(app: str | None):
     return locate
 
 
+def ld_process(conn, app: str, sessions: list[dict] | None = None, procs: dict | None = None,
+               con=None) -> tuple[int, str]:
+    """LDPlayer 로 듣는 앱: 설정한 창 번호의 플레이어(또는 가상머신) 프로세스."""
+    from . import ldplayer
+
+    raw = (config.get(conn, f"{app}.ld_index") or "").strip()
+    if not raw.isdigit():
+        raise RuntimeError(f"{config.app_label(app)}: 몇 번 LDPlayer 창인지 정하지 않아 소리를 받을 수 없습니다 ('LDPlayer 설정')")
+    con = con or ldplayer.console(conn)
+    return ldplayer.audio_process(con, int(raw), audio_sessions() if sessions is None else sessions,
+                                  processes() if procs is None else procs)
+
+
 def app_process(conn, app: str | None, procs: dict | None = None, window_pid=_window_pid,
                 sessions: list[dict] | None = None) -> tuple[int, str]:
     """설정을 DB 에서 읽어 locate_app (같은 스레드에서만)."""
     if app not in config.CHAT_APPS:
         return app_locator(app)()
+    if config.platform(conn, app) == "ldplayer":
+        return ld_process(conn, app, sessions, procs)
     return locate_app(app, (config.get(conn, f"{app}.process_name") or "").strip().lower(),
                       config.GorillaConfig.load(conn, app), procs, window_pid, sessions)
 

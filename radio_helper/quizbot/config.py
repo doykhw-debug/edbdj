@@ -99,7 +99,8 @@ DEFAULTS = {
     # 듣는 채널과 문자 번호 (한 줄에 '채널=문자번호', 번호를 모르면 비움). 첫 화면 '채널 추가'로도 늘어난다
     # 앱은 이름으로 정해진다 (SBS·파워FM·러브FM·고릴라M → 고릴라, MBC → mini, KBS → 콩). '채널=번호=앱'으로 직접 정할 수도 있다
     "channels": "파워FM=#1077\n러브FM=#1035\n고릴라M=\nMBC FM4U=#8000\nKBS 쿨FM=#8910\nKBS 해피FM=#1061\nKBS 1라디오=\n"
-                "CBS 음악FM=#9390\nCBS 표준FM=",
+                "CBS 음악FM=#9390\nCBS 표준FM=\nEBS FM=\nYTN 라디오=\nKFN 국방FM=\nCPBC 서울=\nFEBC 서울=\n"
+                "경인방송 iFM=\n국악방송=\nBTN 울림=\n아리랑라디오=",
     "sms.signature": "1",                 # 끝에 방송용 별명 붙이기
     "sms.quiz_template": "정답 {answer}",
     "sms.verify_number": "1",             # 작성 화면에 받는 번호(#포함)가 보일 때만 보냄
@@ -161,8 +162,25 @@ CHAT_APPS = {
     "rainbow": {"label": "레인보우", "station": "CBS", "title": r"레인보우|rainbow|\bCBS\b",
                 "input": "채팅|토크|댓글|메시지|글쓰기|사연", "test": "CBS 화이팅"},
 }
+# 0.88: LDPlayer(안드로이드 앱 플레이어)에서 켠 휴대폰 앱으로 듣고 보내는 방송국 (사용자 목록 — TBS 는 앱이 없어 뺌).
+# 'kind': chat 실시간 채팅 / board 게시판에 가까운 사연쓰기 (한 칸에 글을 넣고 보내는 것은 같다)
+LD_APPS = {
+    "bandi": {"label": "반디", "station": "EBS", "title": "", "input": "", "test": "EBS 화이팅", "kind": "chat"},
+    "ytn": {"label": "YTN 라디오", "station": "YTN", "title": "", "input": "", "test": "YTN 라디오 화이팅", "kind": "chat"},
+    "kfn": {"label": "별사탕", "station": "KFN", "title": "", "input": "", "test": "국방FM 화이팅", "kind": "chat"},
+    "cpbc": {"label": "cpbc빵", "station": "CPBC", "title": "", "input": "", "test": "cpbc 화이팅", "kind": "chat"},
+    "febc": {"label": "극동방송", "station": "FEBC", "title": "", "input": "", "test": "극동방송 화이팅", "kind": "chat"},
+    "ifm": {"label": "iFM", "station": "iFM", "title": "", "input": "", "test": "경인방송 화이팅", "kind": "chat"},
+    "gugak": {"label": "덩더쿵", "station": "국악방송", "title": "", "input": "", "test": "국악방송 화이팅", "kind": "board"},
+    "btn": {"label": "울림", "station": "BTN", "title": "", "input": "", "test": "BTN 라디오 화이팅", "kind": "board"},
+    "arirang": {"label": "Arirang Radio", "station": "아리랑", "title": "", "input": "", "test": "Hello from Korea",
+                "kind": "chat"},
+}
+CHAT_APPS.update(LD_APPS)
+PLATFORMS = {"pc": "PC 앱 (창 위치 클릭)", "ldplayer": "LDPlayer 안드로이드 앱 (ADB 터치)"}
 APP_ALIASES = {"고릴라": "gorilla", "gorilla": "gorilla", "mini": "mini", "미니": "mini", "콩": "kong", "kong": "kong",
-               "레인보우": "rainbow", "rainbow": "rainbow"}
+               "레인보우": "rainbow", "rainbow": "rainbow",
+               **{k: k for k in LD_APPS}, **{m["label"]: k for k, m in LD_APPS.items()}}
 _APP_FIELDS = {  # 앱마다 따로 저장하는 화면 설정 (고릴라는 기존 'gorilla.*' 키를 그대로 쓴다)
     "process_name": "", "window_size": "", "screen_region": "", "region_window": "", "input_rect": "", "send_rect": "",
     "chat_rect": "", "input_point": "", "send_point": "", "point_window": "", "chat_screen": "", "exe_path": "", "input_mode": "uia", "input_auto_id": "", "send_mode": "auto", "send_button_name": "전송|보내기|등록",
@@ -178,6 +196,21 @@ for _app, _meta in CHAT_APPS.items():
     DEFAULTS[f"{_app}.test_message"] = _meta["test"]
     for _f in ("process_name", "window_title", "input_mode", "input_name", "send_mode", "send_button_name", "test_message"):
         LABELS[f"{_app}.{_f}"] = LABELS.get(f"gorilla.{_f}", _f).replace("고릴라", _meta["label"])
+# 0.88: 앱마다 PC 앱 / LDPlayer 와 LDPlayer 설정 (몇 번 창 · 입력칸·전송 버튼·채팅 목록 자리는 안드로이드 화면 픽셀)
+for _app in CHAT_APPS:
+    DEFAULTS[f"{_app}.platform"] = "ldplayer" if _app in LD_APPS else "pc"
+    for _f in ("ld_index", "ld_input", "ld_send", "ld_chat", "ld_package"):
+        DEFAULTS[f"{_app}.{_f}"] = ""
+DEFAULTS["ldplayer.console"] = ""        # ldconsole.exe 위치 (비우면 흔한 설치 위치에서 찾음)
+LABELS["ldplayer.console"] = "LDPlayer ldconsole.exe 위치 (비우면 자동으로 찾음)"
+
+
+def platform(conn: sqlite3.Connection, app: str | None) -> str:
+    """그 앱을 PC 앱으로 쓰는지(pc), LDPlayer 안드로이드 앱으로 쓰는지(ldplayer)."""
+    if app not in CHAT_APPS:
+        return "pc"
+    p = get(conn, f"{app}.platform")
+    return p if p in PLATFORMS else ("ldplayer" if app in LD_APPS else "pc")
 
 
 def route(conn: sqlite3.Connection) -> str:
@@ -203,8 +236,15 @@ def localize(app: str, message: str) -> str:
 SBS_CHANNELS = ("파워FM", "러브FM", "고릴라M")
 
 
-BROADCASTERS = ("SBS", "MBC", "KBS", "CBS")
-STATION_APPS = {"MBC": "mini", "KBS": "kong", "CBS": "rainbow"}   # SBS 는 고릴라
+BROADCASTERS = ("SBS", "MBC", "KBS", "CBS", "EBS", "YTN", "KFN", "CPBC", "FEBC", "iFM", "국악방송", "BTN", "아리랑")
+STATION_APPS = {"MBC": "mini", "KBS": "kong", "CBS": "rainbow",   # SBS 는 고릴라
+                "EBS": "bandi", "YTN": "ytn", "KFN": "kfn", "국방": "kfn", "CPBC": "cpbc", "가톨릭": "cpbc",
+                "FEBC": "febc", "극동": "febc", "IFM": "ifm", "경인": "ifm", "국악": "gugak",
+                "BTN": "btn", "ARIRANG": "arirang", "아리랑": "arirang"}
+STATION_OF = {"국방": "KFN", "가톨릭": "CPBC", "극동": "FEBC", "IFM": "iFM", "경인": "iFM", "국악": "국악방송",
+              "ARIRANG": "아리랑"}   # 채널 이름 앞머리 → 방송국 (BROADCASTERS 이름)
+LD_CHANNELS = ("EBS FM=", "YTN 라디오=", "KFN 국방FM=", "CPBC 서울=", "FEBC 서울=", "경인방송 iFM=",
+               "국악방송=", "BTN 울림=", "아리랑라디오=")   # 0.88 사용자 목록 (문자 번호는 모름 — 앱으로만 보냄)
 NEW_CHANNELS = ("CBS 음악FM=#9390", "CBS 표준FM=")   # 0.55 에 기본 목록에 더한 채널 (EBS FM·반디는 0.56 에 뺌)
 AUTO_EBS = "EBS FM=#1045"                             # 0.55 가 저절로 더했던 줄
 
@@ -244,13 +284,16 @@ def chat_limit(conn: sqlite3.Connection, channel: str | None, default: int = 200
 
 
 def broadcaster_of(channel: str | None) -> str:
-    """채널 → 방송국 (SBS·MBC·KBS·CBS). 모르는 채널은 채널 이름 그대로."""
+    """채널 → 방송국 (SBS·MBC·KBS·CBS, 0.88: EBS·YTN·KFN·CPBC·FEBC·iFM·국악방송·BTN·아리랑). 모르는 채널은 이름 그대로."""
     name = (channel or "").strip()
     upper = name.upper()
     if not name or name in SBS_CHANNELS or upper.startswith("SBS"):
         return "SBS"   # 채널을 적지 않던 예전 기록은 모두 SBS(고릴라)
     for b in BROADCASTERS[1:]:
-        if upper.startswith(b):
+        if upper.startswith(b.upper()):
+            return b
+    for prefix, b in STATION_OF.items():
+        if upper.startswith(prefix):
             return b
     return name
 
@@ -397,6 +440,7 @@ EBS_DROPPED = "meta.channels_056"
 def migrate_channels(conn: sqlite3.Connection) -> list[str]:
     """0.55: 채널 목록을 저장해 둔 PC 에 CBS 채널을 한 번 더한다 (이미 있거나 지운 뒤에는 건드리지 않음)."""
     drop_auto_ebs(conn)
+    add_ld_channels(conn)
     if db.get_setting(conn, CHANNELS_MIGRATED) == "1":
         return []
     db.set_setting(conn, CHANNELS_MIGRATED, "1")
@@ -408,6 +452,25 @@ def migrate_channels(conn: sqlite3.Connection) -> list[str]:
     if added:
         db.set_setting(conn, "channels", saved.rstrip("\n") + "\n" + "\n".join(added))
         db.log(conn, "quizbot", "채널 목록에 CBS 를 더했습니다: " + ", ".join(a.split("=")[0] for a in added))
+    return added
+
+
+LD_CHANNELS_ADDED = "meta.channels_088"
+
+
+def add_ld_channels(conn: sqlite3.Connection) -> list[str]:
+    """0.88: 채널 목록을 저장해 둔 PC 에 LDPlayer 로 듣는 방송국 채널(EBS·YTN·KFN·CPBC·FEBC·iFM·국악·BTN·아리랑)을 한 번 더한다."""
+    if db.get_setting(conn, LD_CHANNELS_ADDED) == "1":
+        return []
+    db.set_setting(conn, LD_CHANNELS_ADDED, "1")
+    saved = db.get_setting(conn, "channels", None)
+    if not saved:
+        return []                       # 저장한 적이 없으면 기본 목록(이미 포함)을 씀
+    have = {line.split("=")[0].strip() for line in saved.splitlines() if line.strip()}
+    added = [line for line in LD_CHANNELS if line.split("=")[0] not in have]
+    if added:
+        db.set_setting(conn, "channels", saved.rstrip("\n") + "\n" + "\n".join(added))
+        db.log(conn, "quizbot", "채널 목록에 LDPlayer 방송국을 더했습니다: " + ", ".join(a.split("=")[0] for a in added))
     return added
 
 
