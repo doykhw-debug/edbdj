@@ -27,12 +27,12 @@
 <div class="panel table-wrap">
   <h2>앱마다 듣고 보내는 곳</h2>
   <p class="muted">'LDPlayer'로 정한 앱은 그 창으로 듣고 보냅니다. 소리는 그 창의 프로그램 소리만 받아서 다른 방송과 섞이지 않습니다.
-    국악방송 덩더쿵·BTN 울림은 채팅보다 게시판(사연쓰기)에 가깝습니다 — 사연쓰기 칸을 입력칸으로 정하세요 (제목 칸이 따로 있으면 아직은 직접).</p>
+    LDPlayer 방송국 6곳은 <b>채팅으로만</b> 보냅니다 — 게시판 찾기·쓰기는 하지 않고, 진행자가 게시판에 올려 달라고 해도 채팅으로만 보냅니다.</p>
   <table>
     <tr><th>앱 (방송국)</th><th>쓰는 곳</th><th>LDPlayer 창 번호</th><th>앱 패키지 (자동으로 켜기, 비워도 됨)</th><th>자리</th></tr>
     {% for r in rows %}
     <tr>
-      <td><a href="{{ url_for('ldplayer_page', app=r.app) }}#calibrate"><b>{{ r.label }}</b></a> <span class="muted">({{ r.station }}{{ ' · 게시판형' if r.kind == 'board' }})</span></td>
+      <td><a href="{{ url_for('ldplayer_page', app=r.app) }}#calibrate"><b>{{ r.label }}</b></a> <span class="muted">({{ r.station }})</span></td>
       <td><select name="{{ r.app }}_platform">
         <option value="pc" {{ 'selected' if r.platform == 'pc' }}>PC 앱</option>
         <option value="ldplayer" {{ 'selected' if r.platform == 'ldplayer' }}>LDPlayer</option></select></td>

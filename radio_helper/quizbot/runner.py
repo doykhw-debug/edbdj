@@ -900,7 +900,7 @@ class Runner:
         if res.experience_id in {e["id"] for e in exps}:
             exp = self.conn.execute("SELECT * FROM experiences WHERE id = ?", (res.experience_id,)).fetchone()
         # 0.76 사용자 요청: '게시판에 올려 달라'는 사연도 채팅에 먼저 올리고, 그다음 게시판에도 올린다
-        board_too = bool(res.board_only)
+        board_too = bool(res.board_only) and not config.chat_only(self.conn, schedule["channel"])   # 0.89: 채팅만 쓰는 방송국
         song = (res.song or "").strip()
         if song and config.get(self.conn, "live.song_free") != "1" and \
                 song != ((exp["song"] or "").strip() if exp is not None else "") and \

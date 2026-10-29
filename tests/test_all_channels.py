@@ -43,8 +43,7 @@ class ScheduleAnswerer:
 def test_channels_to_fetch_are_non_sbs(conn):
     assert schedules.channels_to_fetch(conn) == ["MBC FM4U", "KBS 쿨FM", "KBS 해피FM", "KBS 1라디오",
                                                  "CBS 음악FM", "CBS 표준FM", "EBS FM", "YTN 라디오", "KFN 국방FM",
-                                                 "CPBC 서울", "FEBC 서울", "경인방송 iFM", "국악방송", "BTN 울림",
-                                                 "아리랑라디오"]                              # 0.88 LDPlayer 방송국
+                                                 "CPBC 서울", "FEBC 서울", "경인방송 iFM"]   # 0.88 LDPlayer 방송국 (0.89: 6곳)
     assert "89.1" in schedules.describe("KBS 쿨FM") and schedules.describe("EBS FM").startswith("EBS FM")
 
 

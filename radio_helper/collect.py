@@ -174,10 +174,12 @@ def start_pages(conn, hub_found: list[dict] | None = None) -> list[dict]:
         if same_code(h["url"]) not in seen:
             seen.add(same_code(h["url"]))
             out.append({"channel": h["station"], "program": h["program"], "url": h["url"]})
+    from .quizbot import config as qconfig
+
     for p in conn.execute("SELECT channel, title, main_url FROM programs WHERE on_air = 1 ORDER BY channel, start_time"):
         url = (p["main_url"] or "").strip()
-        if same_code(url) in seen or stations.station_of(url) is None:
-            continue
+        if same_code(url) in seen or stations.station_of(url) is None or qconfig.chat_only(conn, p["channel"]):
+            continue                      # 0.89: LDPlayer 방송국(채팅만)은 게시판을 찾지 않음
         seen.add(same_code(url))
         out.append({"channel": p["channel"], "program": p["title"], "url": url})
     return out

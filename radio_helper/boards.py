@@ -621,8 +621,12 @@ def onair_now(conn, now: datetime) -> list[dict]:
     """듣는 채널마다 지금 방송 중인 프로그램 [{channel, program}] (편성표에 있는 것만)."""
     from .quizbot import lanes, live
 
+    from .quizbot import config as qconfig
+
     out = []
     for x in lanes.all_lanes(conn):
+        if qconfig.chat_only(conn, x["channel"]):
+            continue                      # 0.89: LDPlayer 방송국은 채팅만 — 게시판을 찾거나 쓰지 않음
         program = live.current_program(conn, x["channel"], now)
         if program and not any(o["channel"] == x["channel"] for o in out):
             out.append({"channel": x["channel"], "program": program})

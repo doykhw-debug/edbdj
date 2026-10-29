@@ -175,11 +175,13 @@ def test_app_audio_uses_ldplayer_for_ld_apps(conn):
 def test_new_stations_and_apps(conn):
     for channel, app, station in [("EBS FM", "bandi", "EBS"), ("YTN 라디오", "ytn", "YTN"), ("KFN 국방FM", "kfn", "KFN"),
                                   ("CPBC 서울", "cpbc", "CPBC"), ("FEBC 서울", "febc", "FEBC"),
-                                  ("경인방송 iFM", "ifm", "iFM"), ("국악방송", "gugak", "국악방송"), ("BTN 울림", "btn", "BTN"),
-                                  ("아리랑라디오", "arirang", "아리랑")]:
+                                  ("경인방송 iFM", "ifm", "iFM")]:
         assert config.chat_app(conn, channel) == app and config.broadcaster_of(channel) == station
-        assert config.platform(conn, app) == "ldplayer"
-    assert "tbs" not in config.CHAT_APPS and config.chat_app(conn, "TBS FM") is None       # TBS 는 앱이 없어 뺌
+        assert config.platform(conn, app) == "ldplayer" and config.chat_only(conn, channel)
+    assert sorted(config.LD_APPS) == ["bandi", "cpbc", "febc", "ifm", "kfn", "ytn"]          # 0.89 사용자 정리: 6곳만
+    for gone in ("tbs", "gugak", "btn", "arirang"):
+        assert gone not in config.CHAT_APPS
+    assert config.chat_app(conn, "국악방송") is None and not config.chat_only(conn, "파워FM")
     assert config.platform(conn, "gorilla") == "pc"
     assert isinstance(ldplayer.sender_for(conn, "bandi"), ldplayer.LdSender)
     db.set_setting(conn, "kong.platform", "ldplayer")                                    # PC 앱도 LDPlayer 로 바꿀 수 있음
@@ -197,7 +199,7 @@ def test_saved_channel_list_gets_ld_stations_once(conn):
 def test_ten_lanes_and_gpu_memory(conn, monkeypatch):
     monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)          # 윈도우: 칸마다 그 앱 소리만
     assert lanes.MAX_LANES == 10 and len(lanes.EXTRA_LANES) == 9
-    names = ["MBC FM4U", "KBS 쿨FM", "CBS 음악FM", "EBS FM", "YTN 라디오", "KFN 국방FM", "CPBC 서울", "FEBC 서울", "국악방송"]
+    names = ["MBC FM4U", "KBS 쿨FM", "CBS 음악FM", "EBS FM", "YTN 라디오", "KFN 국방FM", "CPBC 서울", "FEBC 서울", "경인방송 iFM"]
     db.set_setting(conn, "live.multi", "1")
     db.set_setting(conn, "live.lanes", json.dumps([{"channel": n, "device": ""} for n in names], ensure_ascii=False))
     assert len(lanes.all_lanes(conn)) == 10 and lanes.problems(conn, lanes.all_lanes(conn)) == []
@@ -211,7 +213,7 @@ def test_ldplayer_page_and_calibration(client, conn, data_dir, monkeypatch):
     con = FakeConsole()
     monkeypatch.setattr(ldplayer, "console", lambda c=None, run=None: con)
     html = client.get("/ldplayer").get_data(as_text=True)
-    assert "반디" in html and "Arirang Radio" in html and "TBS" not in html and "반디창" in html
+    assert "EBS 반디" in html and "KFN 별사탕" in html and "Arirang" not in html and "TBS" not in html and "반디창" in html
     token = csrf(client, "/ldplayer")
     client.post("/ldplayer/save", data={"csrf_token": token, "console": "", "bandi_platform": "ldplayer",
                                         "bandi_index": "0", "bandi_package": "kr.co.ebs.bandi"})
@@ -226,3 +228,35 @@ def test_ldplayer_page_and_calibration(client, conn, data_dir, monkeypatch):
     assert client.post("/ldplayer/bandi/point", data={"csrf_token": token, "target": "send", "value": "x"}).status_code == 400
     assert client.get("/gorilla?app=bandi").status_code == 302                           # LDPlayer 앱은 그 화면으로
     assert client.get("/inspect-image/ld_bandi.png").status_code == 200
+
+
+# ── 0.89: 6곳만 · 채팅만 (게시판 찾기·쓰기에서 뺌) ─────────────────────────────────
+def test_extra_stations_from_088_are_dropped_once(conn):
+    db.set_setting(conn, "channels", "파워FM=#1077\nEBS FM=\n국악방송=\nBTN 울림=\n아리랑라디오=")
+    db.set_setting(conn, "live.lanes", json.dumps([{"channel": "국악방송", "device": ""}, {"channel": "EBS FM", "device": ""}],
+                                                  ensure_ascii=False))
+    assert config.drop_ld_extras(conn) == ["국악방송=", "BTN 울림=", "아리랑라디오="]
+    assert db.get_setting(conn, "channels") == "파워FM=#1077\nEBS FM="
+    assert [x["channel"] for x in json.loads(db.get_setting(conn, "live.lanes"))] == ["", "EBS FM"]
+    db.set_setting(conn, "channels", "국악방송=")                                      # 그 뒤 직접 넣으면 그대로
+    assert config.drop_ld_extras(conn) == [] and db.get_setting(conn, "channels") == "국악방송="
+
+
+def test_chat_only_stations_skip_boards(conn, monkeypatch):
+    from datetime import datetime
+
+    from radio_helper import boards, collect, stations
+    from radio_helper.quizbot import live
+
+    db.set_setting(conn, "live.channel", "YTN 라디오")
+    db.set_setting(conn, "live.multi", "1")
+    db.set_setting(conn, "live.lanes", json.dumps([{"channel": "MBC FM4U", "device": ""}], ensure_ascii=False))
+    monkeypatch.setattr(live, "current_program", lambda c, channel, now: f"{channel} 지금 프로그램")
+    monkeypatch.setattr(stations, "station_of", lambda url: "X")
+    for n, (ch, url) in enumerate([("YTN 라디오", "https://radio.ytn.co.kr/p1"), ("MBC FM4U", "https://www.imbc.com/p2")]):
+        conn.execute("INSERT INTO programs (channel, code, title, main_url, on_air, updated_at) VALUES (?, ?, ?, ?, 1, ?)",
+                     (ch, f"c{n}", f"{ch} 프로", url, db.now()))
+    conn.commit()
+    assert [x["channel"] for x in boards.onair_now(conn, datetime.now())] == ["MBC FM4U"]   # 게시판 쓰기: 채팅만 방송국 뺌
+    found = [p["channel"] for p in collect.start_pages(conn)]
+    assert "MBC FM4U" in found and "YTN 라디오" not in found                                 # 게시판 찾기에서도 뺌

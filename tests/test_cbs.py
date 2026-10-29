@@ -139,7 +139,7 @@ def test_home_offers_cbs_and_ten_lanes(client, conn, monkeypatch):
     monkeypatch.setattr(lanes, "app_audio_supported", lambda: True)       # 윈도우 11: 칸을 비우면 앱 소리
     html = client.get("/").get_data(as_text=True)
     assert "CBS 음악FM · 레인보우" in html and 'name="lane10_channel"' in html and 'name="lane11_channel"' not in html
-    assert "MBC mini · CBS 레인보우)" in html and "EBS FM · 반디" in html                # 0.88: 10곳까지 · LDPlayer 방송국
+    assert "MBC mini · CBS 레인보우)" in html and "EBS FM · EBS 반디" in html                # 0.88: 10곳까지 · LDPlayer 방송국
     r = client.post("/listen/lanes", data={"csrf_token": csrf(client), "multi": "1", "device": "",
                                            "lane2_channel": "CBS 음악FM", "lane2_device": "",
                                            "lane3_channel": "MBC FM4U", "lane3_device": "",

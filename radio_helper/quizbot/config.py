@@ -100,7 +100,7 @@ DEFAULTS = {
     # 앱은 이름으로 정해진다 (SBS·파워FM·러브FM·고릴라M → 고릴라, MBC → mini, KBS → 콩). '채널=번호=앱'으로 직접 정할 수도 있다
     "channels": "파워FM=#1077\n러브FM=#1035\n고릴라M=\nMBC FM4U=#8000\nKBS 쿨FM=#8910\nKBS 해피FM=#1061\nKBS 1라디오=\n"
                 "CBS 음악FM=#9390\nCBS 표준FM=\nEBS FM=\nYTN 라디오=\nKFN 국방FM=\nCPBC 서울=\nFEBC 서울=\n"
-                "경인방송 iFM=\n국악방송=\nBTN 울림=\n아리랑라디오=",
+                "경인방송 iFM=",
     "sms.signature": "1",                 # 끝에 방송용 별명 붙이기
     "sms.quiz_template": "정답 {answer}",
     "sms.verify_number": "1",             # 작성 화면에 받는 번호(#포함)가 보일 때만 보냄
@@ -162,19 +162,15 @@ CHAT_APPS = {
     "rainbow": {"label": "레인보우", "station": "CBS", "title": r"레인보우|rainbow|\bCBS\b",
                 "input": "채팅|토크|댓글|메시지|글쓰기|사연", "test": "CBS 화이팅"},
 }
-# 0.88: LDPlayer(안드로이드 앱 플레이어)에서 켠 휴대폰 앱으로 듣고 보내는 방송국 (사용자 목록 — TBS 는 앱이 없어 뺌).
-# 'kind': chat 실시간 채팅 / board 게시판에 가까운 사연쓰기 (한 칸에 글을 넣고 보내는 것은 같다)
+# 0.88: LDPlayer(안드로이드 앱 플레이어)에서 켠 휴대폰 앱으로 듣고 보내는 방송국. 0.89 사용자 정리: 이 6곳만
+# (TBS 는 앱이 없어, 국악방송·BTN·아리랑은 뺌). 모두 채팅으로만 보내고 게시판은 쓰지 않는다 (게시판 찾기·쓰기에서 뺌).
 LD_APPS = {
-    "bandi": {"label": "반디", "station": "EBS", "title": "", "input": "", "test": "EBS 화이팅", "kind": "chat"},
+    "bandi": {"label": "EBS 반디", "station": "EBS", "title": "", "input": "", "test": "EBS 화이팅", "kind": "chat"},
     "ytn": {"label": "YTN 라디오", "station": "YTN", "title": "", "input": "", "test": "YTN 라디오 화이팅", "kind": "chat"},
-    "kfn": {"label": "별사탕", "station": "KFN", "title": "", "input": "", "test": "국방FM 화이팅", "kind": "chat"},
+    "kfn": {"label": "KFN 별사탕", "station": "KFN", "title": "", "input": "", "test": "국방FM 화이팅", "kind": "chat"},
     "cpbc": {"label": "cpbc빵", "station": "CPBC", "title": "", "input": "", "test": "cpbc 화이팅", "kind": "chat"},
     "febc": {"label": "극동방송", "station": "FEBC", "title": "", "input": "", "test": "극동방송 화이팅", "kind": "chat"},
-    "ifm": {"label": "iFM", "station": "iFM", "title": "", "input": "", "test": "경인방송 화이팅", "kind": "chat"},
-    "gugak": {"label": "덩더쿵", "station": "국악방송", "title": "", "input": "", "test": "국악방송 화이팅", "kind": "board"},
-    "btn": {"label": "울림", "station": "BTN", "title": "", "input": "", "test": "BTN 라디오 화이팅", "kind": "board"},
-    "arirang": {"label": "Arirang Radio", "station": "아리랑", "title": "", "input": "", "test": "Hello from Korea",
-                "kind": "chat"},
+    "ifm": {"label": "경인방송 iFM", "station": "iFM", "title": "", "input": "", "test": "경인방송 화이팅", "kind": "chat"},
 }
 CHAT_APPS.update(LD_APPS)
 PLATFORMS = {"pc": "PC 앱 (창 위치 클릭)", "ldplayer": "LDPlayer 안드로이드 앱 (ADB 터치)"}
@@ -236,15 +232,14 @@ def localize(app: str, message: str) -> str:
 SBS_CHANNELS = ("파워FM", "러브FM", "고릴라M")
 
 
-BROADCASTERS = ("SBS", "MBC", "KBS", "CBS", "EBS", "YTN", "KFN", "CPBC", "FEBC", "iFM", "국악방송", "BTN", "아리랑")
+BROADCASTERS = ("SBS", "MBC", "KBS", "CBS", "EBS", "YTN", "KFN", "CPBC", "FEBC", "iFM")
 STATION_APPS = {"MBC": "mini", "KBS": "kong", "CBS": "rainbow",   # SBS 는 고릴라
                 "EBS": "bandi", "YTN": "ytn", "KFN": "kfn", "국방": "kfn", "CPBC": "cpbc", "가톨릭": "cpbc",
-                "FEBC": "febc", "극동": "febc", "IFM": "ifm", "경인": "ifm", "국악": "gugak",
-                "BTN": "btn", "ARIRANG": "arirang", "아리랑": "arirang"}
-STATION_OF = {"국방": "KFN", "가톨릭": "CPBC", "극동": "FEBC", "IFM": "iFM", "경인": "iFM", "국악": "국악방송",
-              "ARIRANG": "아리랑"}   # 채널 이름 앞머리 → 방송국 (BROADCASTERS 이름)
+                "FEBC": "febc", "극동": "febc", "IFM": "ifm", "경인": "ifm"}
+STATION_OF = {"국방": "KFN", "가톨릭": "CPBC", "극동": "FEBC", "IFM": "iFM", "경인": "iFM"}   # 채널 이름 앞머리 → 방송국 (BROADCASTERS 이름)
 LD_CHANNELS = ("EBS FM=", "YTN 라디오=", "KFN 국방FM=", "CPBC 서울=", "FEBC 서울=", "경인방송 iFM=",
-               "국악방송=", "BTN 울림=", "아리랑라디오=")   # 0.88 사용자 목록 (문자 번호는 모름 — 앱으로만 보냄)
+)   # 0.88 사용자 목록 (문자 번호는 모름 — 앱으로만 보냄)
+LD_DROPPED_CHANNELS = ("국악방송=", "BTN 울림=", "아리랑라디오=")   # 0.88 에 저절로 더했다가 0.89 에 뺀 줄
 NEW_CHANNELS = ("CBS 음악FM=#9390", "CBS 표준FM=")   # 0.55 에 기본 목록에 더한 채널 (EBS FM·반디는 0.56 에 뺌)
 AUTO_EBS = "EBS FM=#1045"                             # 0.55 가 저절로 더했던 줄
 
@@ -284,7 +279,7 @@ def chat_limit(conn: sqlite3.Connection, channel: str | None, default: int = 200
 
 
 def broadcaster_of(channel: str | None) -> str:
-    """채널 → 방송국 (SBS·MBC·KBS·CBS, 0.88: EBS·YTN·KFN·CPBC·FEBC·iFM·국악방송·BTN·아리랑). 모르는 채널은 이름 그대로."""
+    """채널 → 방송국 (SBS·MBC·KBS·CBS, 0.88: EBS·YTN·KFN·CPBC·FEBC·iFM). 모르는 채널은 이름 그대로."""
     name = (channel or "").strip()
     upper = name.upper()
     if not name or name in SBS_CHANNELS or upper.startswith("SBS"):
@@ -441,6 +436,7 @@ def migrate_channels(conn: sqlite3.Connection) -> list[str]:
     """0.55: 채널 목록을 저장해 둔 PC 에 CBS 채널을 한 번 더한다 (이미 있거나 지운 뒤에는 건드리지 않음)."""
     drop_auto_ebs(conn)
     add_ld_channels(conn)
+    drop_ld_extras(conn)
     if db.get_setting(conn, CHANNELS_MIGRATED) == "1":
         return []
     db.set_setting(conn, CHANNELS_MIGRATED, "1")
@@ -459,7 +455,7 @@ LD_CHANNELS_ADDED = "meta.channels_088"
 
 
 def add_ld_channels(conn: sqlite3.Connection) -> list[str]:
-    """0.88: 채널 목록을 저장해 둔 PC 에 LDPlayer 로 듣는 방송국 채널(EBS·YTN·KFN·CPBC·FEBC·iFM·국악·BTN·아리랑)을 한 번 더한다."""
+    """0.88: 채널 목록을 저장해 둔 PC 에 LDPlayer 로 듣는 방송국 채널(EBS·YTN·KFN·CPBC·FEBC·iFM)을 한 번 더한다."""
     if db.get_setting(conn, LD_CHANNELS_ADDED) == "1":
         return []
     db.set_setting(conn, LD_CHANNELS_ADDED, "1")
@@ -472,6 +468,39 @@ def add_ld_channels(conn: sqlite3.Connection) -> list[str]:
         db.set_setting(conn, "channels", saved.rstrip("\n") + "\n" + "\n".join(added))
         db.log(conn, "quizbot", "채널 목록에 LDPlayer 방송국을 더했습니다: " + ", ".join(a.split("=")[0] for a in added))
     return added
+
+
+LD_DROPPED = "meta.channels_089"
+
+
+def drop_ld_extras(conn: sqlite3.Connection) -> list[str]:
+    """0.89: 0.88 이 저절로 더한 국악방송·BTN 울림·아리랑라디오 줄과 그 채널을 넣은 동시 청취 칸을 한 번 뺀다."""
+    if db.get_setting(conn, LD_DROPPED) == "1":
+        return []
+    db.set_setting(conn, LD_DROPPED, "1")
+    saved = db.get_setting(conn, "channels", None)
+    if not saved:
+        return []
+    names = {line.split("=")[0] for line in LD_DROPPED_CHANNELS}
+    gone = [line.strip() for line in saved.splitlines() if line.strip() in LD_DROPPED_CHANNELS]
+    if not gone:
+        return []
+    db.set_setting(conn, "channels", "\n".join(line for line in saved.splitlines() if line.strip() not in LD_DROPPED_CHANNELS))
+    try:
+        lanes = json.loads(db.get_setting(conn, "live.lanes") or "[]")
+        if isinstance(lanes, list):
+            db.set_setting(conn, "live.lanes", json.dumps(
+                [x if not (isinstance(x, dict) and x.get("channel") in names) else {"channel": "", "device": ""}
+                 for x in lanes], ensure_ascii=False))
+    except ValueError:
+        pass
+    db.log(conn, "quizbot", "채널 목록에서 국악방송·BTN 울림·아리랑라디오를 뺐습니다 (LDPlayer 는 6곳만)")
+    return gone
+
+
+def chat_only(conn: sqlite3.Connection, channel: str | None) -> bool:
+    """채팅으로만 보내는 채널 (0.89: LDPlayer 방송국 6곳 — 게시판을 찾거나 쓰지 않음, 게시판 요청도 채팅으로만)."""
+    return chat_app(conn, channel) in LD_APPS
 
 
 def drop_auto_ebs(conn: sqlite3.Connection) -> bool:
