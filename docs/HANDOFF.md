@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-30, 0.91 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-30, 0.92 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -42,6 +42,7 @@
 | 0.89 | LD_APPS 6곳(bandi·ytn·kfn·cpbc·febc·ifm), config.drop_ld_extras(meta.channels_089: 국악·BTN·아리랑 줄·칸 한 번 뺌), config.chat_only(채팅만): boards.onair_now·collect.start_pages 에서 빼고 runner.analyze_story 게시판 요청 무시 |
 | 0.90 | ldplayer.LD_LAYOUTS(사용자 6창 사진으로 잰 입력·전송·채팅 비율, 9:16), layout_point/layout_box — 정한 자리가 없을 때. match_instance(TITLE_HINTS, 창 이름으로 창 번호, 하나일 때만) — LdSender._ready·appaudio.ld_process·설정 화면. find_console 이 C:/D:/E:\LDPlayer·Program Files 아래 */ldconsole.exe·dnconsole.exe 도 찾음 |
 | 0.91 | 첫 화면 30초 시간 초과(사용자 화면): app.home 의 lanes.devices()(PyAudio) → lanes.devices_cached(뒤 스레드, 3초만 기다림, 5분 캐시). __main__.self_check 시간 초과 때 dump_hang(faulthandler, logs/hang_*.txt) + 2분 더 기다림. 실제 원인은 hang 파일로 확인 필요 |
+| 0.92 | radio_helper/cleanup.py: logs/ 3일 지난 파일 지움(server.log·server_crash.log 는 5MB 넘으면 뒤 1MB), evidence 표·사진 3일 지난 것 지움. __main__.watch_runner 에서 cleanup.tick (6시간마다, cleanup.last). 일수는 설정 cleanup.keep_days |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).

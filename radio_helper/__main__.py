@@ -20,7 +20,7 @@ from datetime import datetime
 
 from werkzeug.serving import make_server, run_simple
 
-from . import __version__, boards, collect, db, remote, repair, schedules, server
+from . import __version__, boards, cleanup, collect, db, remote, repair, schedules, server
 from .app import create_app, ensure_runner, launch_quizbot, start_runner
 from .quizbot import config as qconfig
 from .quizbot import lanes
@@ -118,6 +118,7 @@ def watch_runner(interval: float = WATCHDOG_SECONDS) -> None:
                 collect.tick(conn)          # 코너 게시판 모으기: 일주일마다 프로그램 홈페이지 메뉴에서 (0.62)
                 boards.onair_tick(conn)     # 듣는 중: 지금 방송 프로그램의 게시판에 모두 쓰기 (Aside 창, 0.63)
                 schedules.tick(conn)        # 전 채널 편성표: 일주일 지나면 MBC·KBS·CBS(웹 검색)·SBS(공식 페이지) 다시
+                cleanup.tick(conn)          # 3일 지난 실행 기록·증거 사진 지우기 (6시간에 한 번, 0.92)
             finally:
                 conn.close()
             if done and done != "limit":
