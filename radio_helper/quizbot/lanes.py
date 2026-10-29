@@ -206,6 +206,30 @@ def ensure(conn: sqlite3.Connection, launch, now: float | None = None) -> list[s
 
 
 # ── 녹음 장치 ────────────────────────────────────────────────────────
+DEVICES_TTL = 300         # 장치 목록은 5분 동안 다시 읽지 않는다
+DEVICES_WAIT = 3.0        # 화면에서는 이만큼만 기다리고, 늦으면 지난 목록(또는 빈 목록)으로 보인다
+_devices_cache: dict = {"at": 0.0, "names": [], "thread": None}
+
+
+def devices_cached(wait: float = DEVICES_WAIT, now: float | None = None, reader=None) -> list[str]:
+    """관리 화면용 장치 목록 (0.91): 소리 장치 읽기가 멈추면(드물게 오래 걸림) 첫 화면 전체가 열리지 않으므로
+    뒤에서 읽고 몇 초만 기다린다. 다 읽으면 다음부터 그 목록을 쓴다."""
+    now = time.time() if now is None else now
+    cache = _devices_cache
+    if cache["names"] and now - cache["at"] < DEVICES_TTL:
+        return list(cache["names"])
+    t = cache["thread"]
+    if t is None or not t.is_alive():
+        def run():
+            names = (reader or devices)()
+            cache.update(names=names, at=time.time())
+        t = threading.Thread(target=run, name="audio-devices", daemon=True)
+        cache["thread"] = t
+        t.start()
+    t.join(wait)
+    return list(cache["names"])
+
+
 def devices() -> list[str]:
     """루프백 녹음할 수 있는 출력 장치 이름 (윈도우 전용, 못 읽으면 빈 목록)."""
     try:

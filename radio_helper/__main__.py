@@ -290,8 +290,32 @@ def self_check(url: str, open_browser: bool, wait: float = 15.0, say=print) -> b
     except urllib.error.HTTPError as e:
         say(f"[점검] 관리 화면이 오류를 냈습니다 (HTTP {e.code}). 위에 나온 오류 내용과 이 창을 캡처해 보내 주세요.")
     except Exception as e:
-        say(f"[점검] 관리 화면이 30초 안에 열리지 않습니다 ({type(e).__name__}). 이 창을 캡처해 보내 주세요.")
+        hang = dump_hang()       # 0.91: 어디서 멈췄는지 (모든 스레드의 지금 위치) 파일로 남긴다
+        say(f"[점검] 관리 화면이 30초 안에 열리지 않습니다 ({type(e).__name__}). 이 창을 캡처해 보내 주세요."
+            + (f" 멈춘 자리 기록: 데이터 폴더 logs\\{hang} (이 파일도 보내 주세요)" if hang else ""))
+        try:                     # 늦게라도 열리는지 한 번 더 (얼마나 걸렸는지 알려 줌)
+            with _local.open(url, timeout=120) as r:
+                r.read()
+            say(f"[점검] 관리 화면이 늦게 열렸습니다 ({time.time() - started:.0f}초). 브라우저에서 새로 고침해 보세요.")
+            return True
+        except Exception:
+            say("[점검] 2분이 지나도 관리 화면이 열리지 않습니다.")
     return False
+
+
+def dump_hang() -> str | None:
+    """지금 이 프로그램의 모든 스레드가 어디서 무엇을 하는지 logs/hang_*.txt 로 남긴다. 파일 이름 (못 남기면 None)."""
+    try:
+        out_dir = db.data_dir() / "logs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        name = f"hang_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(out_dir / name, "w", encoding="utf-8") as f:
+            f.write("관리 화면 첫 화면이 30초 안에 열리지 않았을 때 모든 스레드의 위치\n\n")
+            f.flush()
+            faulthandler.dump_traceback(file=f, all_threads=True)
+        return name
+    except Exception:
+        return None
 
 
 def run_server(port: int, serve=None) -> None:

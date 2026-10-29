@@ -326,3 +326,56 @@ def test_attach_really_serves_on_a_free_port(app, monkeypatch):
             _t.sleep(0.05)
     else:
         raise AssertionError("이어 붙인 번호가 답하지 않음")
+
+
+# ── 0.91: 관리 화면이 30초 안에 안 열릴 때 — 멈춘 자리 기록, 장치 목록 읽기는 기다리지 않음 ─────────────────
+def test_slow_home_dumps_where_it_hangs(data_dir, monkeypatch):
+    import urllib.error
+
+    calls = {"n": 0}
+
+    class Slow:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b""
+
+    def fake_open(url, timeout=None):
+        calls["n"] += 1
+        if url.endswith("health"):
+            return Slow()
+        if calls["n"] == 2:
+            raise TimeoutError("timed out")
+        return Slow()
+    monkeypatch.setattr(launcher._local, "open", fake_open)
+    said = []
+    assert launcher.self_check("http://127.0.0.1:5000/", False, say=said.append)
+    assert "멈춘 자리 기록" in said[0] and "늦게 열렸습니다" in said[1]
+    hang = sorted((data_dir / "logs").glob("hang_*.txt"))
+    assert hang and "모든 스레드" in hang[0].read_text(encoding="utf-8")
+    assert urllib.error  # (HTTPError 경로는 위 시험들)
+
+
+def test_device_list_does_not_block_home():
+    import threading
+    import time as t
+
+    from radio_helper.quizbot import lanes
+
+    lanes._devices_cache.update(at=0.0, names=[], thread=None)
+    gate = threading.Event()
+
+    def slow():
+        gate.wait(5)
+        return ["스피커 (Realtek)"]
+    started = t.time()
+    assert lanes.devices_cached(wait=0.2, reader=slow) == []                        # 멈춰도 0.2초 만에 빈 목록
+    assert t.time() - started < 2
+    gate.set()
+    lanes._devices_cache["thread"].join(2)
+    assert lanes.devices_cached(wait=0.2, reader=slow) == ["스피커 (Realtek)"]      # 다 읽으면 그 목록
+    lanes._devices_cache.update(at=0.0, names=[], thread=None)

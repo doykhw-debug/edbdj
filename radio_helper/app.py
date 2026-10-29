@@ -395,7 +395,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         from .quizbot import gpu
 
         extra = lanes.extras(c)
-        devices = lanes.devices()
+        devices = lanes.devices_cached()      # 0.91: 장치 읽기가 멈춰도 첫 화면은 열리게
         multi = {"on": lanes.enabled(c), "device": qconfig.get(c, "live.device"), "device_mode": lanes.device_mode(c),
                  "lanes": [next((x for x in extra if x["lane"] == n), {"lane": n, "channel": "", "device": ""})
                            for n in lanes.EXTRA_LANES],
