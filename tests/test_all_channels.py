@@ -42,7 +42,7 @@ class ScheduleAnswerer:
 # ── 편성표 ──────────────────────────────────────────────────────────
 def test_channels_to_fetch_are_non_sbs(conn):
     assert schedules.channels_to_fetch(conn) == ["MBC FM4U", "KBS 쿨FM", "KBS 해피FM", "KBS 1라디오",
-                                                 "CBS 음악FM", "CBS 표준FM", "EBS FM", "YTN 라디오", "KFN 국방FM",
+                                                 "KBS 클래식FM", "CBS 음악FM", "CBS 표준FM", "EBS FM", "YTN 라디오", "KFN 국방FM",
                                                  "CPBC 서울", "FEBC 서울", "경인방송 iFM"]   # 0.88 LDPlayer 방송국 (0.89: 6곳)
     assert "89.1" in schedules.describe("KBS 쿨FM") and schedules.describe("EBS FM").startswith("EBS FM")
 
@@ -201,3 +201,17 @@ def test_listening_report(client, conn):
     assert mbc["quizzes"] == 1 and any("문자 등" in n for n in mbc["notes"])
     page = client.get("/quizzes").get_data(as_text=True)
     assert "최근 6시간 청취 점검" in page and "KBS 쿨FM" in page
+
+
+def test_kbs_classic_fm_added(conn):
+    """0.94 사용자 요청: KBS 클래식FM (KBS 콩 앱, 편성표 검색 설명 93.1MHz)."""
+    from radio_helper.quizbot import config
+
+    assert "KBS 클래식FM" in config.channels(conn) and config.chat_app(conn, "KBS 클래식FM") == "kong"
+    assert config.broadcaster_of("KBS 클래식FM") == "KBS" and "93.1" in schedules.describe("KBS 클래식FM")
+    assert "KBS 클래식FM" in schedules.channels_to_fetch(conn)
+    db.set_setting(conn, "channels", "파워FM=#1077\nKBS 1라디오=\nCBS 음악FM=#9390")
+    assert config.add_classic(conn)
+    assert db.get_setting(conn, "channels") == "파워FM=#1077\nKBS 1라디오=\nKBS 클래식FM=\nCBS 음악FM=#9390"
+    db.set_setting(conn, "channels", "파워FM=#1077")                               # 지운 뒤에는 다시 넣지 않음
+    assert not config.add_classic(conn) and db.get_setting(conn, "channels") == "파워FM=#1077"

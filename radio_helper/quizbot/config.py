@@ -98,7 +98,7 @@ DEFAULTS = {
     # 휴대폰 문자 (안드로이드 + USB)
     # 듣는 채널과 문자 번호 (한 줄에 '채널=문자번호', 번호를 모르면 비움). 첫 화면 '채널 추가'로도 늘어난다
     # 앱은 이름으로 정해진다 (SBS·파워FM·러브FM·고릴라M → 고릴라, MBC → mini, KBS → 콩). '채널=번호=앱'으로 직접 정할 수도 있다
-    "channels": "파워FM=#1077\n러브FM=#1035\n고릴라M=\nMBC FM4U=#8000\nKBS 쿨FM=#8910\nKBS 해피FM=#1061\nKBS 1라디오=\n"
+    "channels": "파워FM=#1077\n러브FM=#1035\n고릴라M=\nMBC FM4U=#8000\nKBS 쿨FM=#8910\nKBS 해피FM=#1061\nKBS 1라디오=\nKBS 클래식FM=\n"
                 "CBS 음악FM=#9390\nCBS 표준FM=\nEBS FM=\nYTN 라디오=\nKFN 국방FM=\nCPBC 서울=\nFEBC 서울=\n"
                 "경인방송 iFM=",
     "sms.signature": "1",                 # 끝에 방송용 별명 붙이기
@@ -438,6 +438,7 @@ def migrate_channels(conn: sqlite3.Connection) -> list[str]:
     drop_auto_ebs(conn)
     add_ld_channels(conn)
     drop_ld_extras(conn)
+    add_classic(conn)
     if db.get_setting(conn, CHANNELS_MIGRATED) == "1":
         return []
     db.set_setting(conn, CHANNELS_MIGRATED, "1")
@@ -453,6 +454,25 @@ def migrate_channels(conn: sqlite3.Connection) -> list[str]:
 
 
 LD_CHANNELS_ADDED = "meta.channels_088"
+CLASSIC_ADDED = "meta.channels_094"
+CLASSIC_LINE = "KBS 클래식FM="       # 0.94 사용자 요청 (KBS 콩 앱, 문자 번호는 모름)
+
+
+def add_classic(conn: sqlite3.Connection) -> bool:
+    """0.94: 채널 목록을 저장해 둔 PC 에 KBS 클래식FM 을 한 번 더한다 (KBS 1라디오 다음 줄, 지운 뒤에는 다시 넣지 않음)."""
+    if db.get_setting(conn, CLASSIC_ADDED) == "1":
+        return False
+    db.set_setting(conn, CLASSIC_ADDED, "1")
+    saved = db.get_setting(conn, "channels", None)
+    if not saved:
+        return False                    # 저장한 적이 없으면 기본 목록(이미 포함)을 씀
+    lines = saved.splitlines()
+    if any(line.split("=")[0].strip() == "KBS 클래식FM" for line in lines):
+        return False
+    at = next((i + 1 for i, line in enumerate(lines) if line.split("=")[0].strip() == "KBS 1라디오"), len(lines))
+    db.set_setting(conn, "channels", "\n".join(lines[:at] + [CLASSIC_LINE] + lines[at:]))
+    db.log(conn, "quizbot", "채널 목록에 KBS 클래식FM 을 더했습니다 (KBS 콩)")
+    return True
 
 
 def add_ld_channels(conn: sqlite3.Connection) -> list[str]:

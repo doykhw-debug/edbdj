@@ -27,7 +27,7 @@ DEVICES = ("auto", "cpu", "cuda")
 TURBO_MIN_CORES = 16    # CPU로 large-v3-turbo 를 돌릴 최소 논리 코어 수 (적으면 small)
 
 BROADCAST_WORDS = ("퀴즈, 정답, 오답, 힌트, 문제, 초성, 고릴라, 공감로그, 문자, 응모, 선물, 기프티콘, 경품, 당첨, "
-                   "사연, 신청곡, 게시판, 파워FM, 러브FM, FM4U, 쿨FM, 레인보우, 음악FM")
+                   "사연, 신청곡, 게시판, 파워FM, 러브FM, FM4U, 쿨FM, 클래식FM, 레인보우, 음악FM")
 CHOSEONG_NAMES = "기역, 니은, 디귿, 리을, 미음, 비읍, 시옷, 이응, 지읒, 치읓, 키읔, 티읕, 피읖, 히읗, 쌍기역, 쌍시옷"
 MAX_HINT_CHARS = 300    # Whisper 힌트는 앞쪽 일부만 쓰이므로 길게 넣지 않는다
 

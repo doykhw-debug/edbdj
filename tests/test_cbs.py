@@ -30,6 +30,7 @@ def test_channels_apps_and_numbers(conn):
 
 def test_saved_channel_list_gets_cbs_once(conn):
     db.set_setting(conn, config.LD_CHANNELS_ADDED, "1")                         # (0.88 LDPlayer 채널은 따로 시험)
+    db.set_setting(conn, config.CLASSIC_ADDED, "1")                             # (0.94 클래식FM 도 따로)
     db.set_setting(conn, "channels", "파워FM=#1077\nMBC FM4U=#8000\nCBS 음악FM=#9390\n")
     assert config.migrate_channels(conn) == ["CBS 표준FM="]
     assert db.get_setting(conn, "channels") == "파워FM=#1077\nMBC FM4U=#8000\nCBS 음악FM=#9390\nCBS 표준FM="
@@ -46,6 +47,7 @@ def test_ebs_added_by_055_is_removed_once(conn):
     # 0.55 를 쓴 PC: 채널 목록에 EBS FM 을 저절로 더했고, 동시 청취 칸에도 넣어 둠
     db.set_setting(conn, config.CHANNELS_MIGRATED, "1")
     db.set_setting(conn, config.LD_CHANNELS_ADDED, "1")
+    db.set_setting(conn, config.CLASSIC_ADDED, "1")
     db.set_setting(conn, "channels", "파워FM=#1077\nCBS 음악FM=#9390\nCBS 표준FM=\nEBS FM=#1045")
     db.log(conn, "quizbot", "채널 목록에 CBS·EBS 를 더했습니다: CBS 음악FM, CBS 표준FM, EBS FM")
     db.set_setting(conn, "live.lanes", json.dumps([{"channel": "CBS 음악FM", "device": ""}, {"channel": "EBS FM", "device": ""}],
