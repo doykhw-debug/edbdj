@@ -334,3 +334,43 @@ def test_setup_page_shows_title_match(client, conn, monkeypatch):
     monkeypatch.setattr(ldplayer, "console", lambda c=None, run=None: Six())
     html = client.get("/ldplayer").get_data(as_text=True)
     assert "창 이름으로: 1번 YTN 라디오" in html and "알려진 자리" in html
+
+
+# ── 0.95: VBoxManage.exe 오류(0xc0000142) — ldconsole 부르는 횟수 줄이기 ─────────────────────────────
+def test_direct_adb_skips_ldconsole_and_list_is_cached(tmp_path):
+    ldplayer._cache.clear()
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        exe = args[0].split("\\")[-1]
+        if exe == "ldconsole.exe" and args[1] == "list2":
+            return SimpleNamespace(stdout=LIST2.encode("utf-8"))
+        if exe == "ldconsole.exe" and args[-1] == "get-serialno":
+            return SimpleNamespace(stdout=b"emulator-5554\r\n")
+        if exe == "adb.exe" and "screencap" in args:
+            return SimpleNamespace(stdout=png(False))
+        return SimpleNamespace(stdout=b"")
+
+    con = ldplayer.Console(r"C:\LDPlayer\LDPlayer9\ldconsole.exe", run=run, shot_dir=tmp_path, exists=lambda p: True)
+    con.tap(0, (10, 20))
+    con.keys(0, 66)
+    assert con.screenshot(0)[:4] == b"\x89PNG"
+    adb_calls = [a for a in calls if a[0].endswith("adb.exe")]
+    assert [a[1:4] for a in adb_calls] == [["-s", "emulator-5554", "shell"]] * 2 + [["-s", "emulator-5554", "exec-out"]]
+    console_calls = [a for a in calls if a[0].endswith("ldconsole.exe")]
+    assert len(console_calls) == 1                                               # 연결 이름만 한 번 물음
+    for _ in range(5):
+        con.instance(0)
+    assert sum(1 for a in calls if a[1:2] == ["list2"]) == 1                     # 창 목록은 10초 동안 기억
+    ldplayer._cache.clear()
+
+
+def test_without_adb_exe_falls_back_to_ldconsole(tmp_path):
+    ldplayer._cache.clear()
+    calls = []
+    con = ldplayer.Console("ldconsole.exe", run=lambda args, **kw: calls.append(args) or SimpleNamespace(stdout=b""),
+                           shot_dir=tmp_path, exists=lambda p: False)
+    con.tap(0, (1, 2))
+    assert calls == [["ldconsole.exe", "adb", "--index", "0", "--command", "shell input tap 1 2"]]
+    ldplayer._cache.clear()

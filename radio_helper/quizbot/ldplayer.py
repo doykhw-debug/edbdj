@@ -18,6 +18,7 @@ from __future__ import annotations
 import io
 import ntpath
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -130,21 +131,36 @@ def parse_box(text: str | None) -> tuple[int, int, int, int] | None:
     return v if len(v) == 4 and v[2] > v[0] and v[3] > v[1] else None
 
 
+LIST_TTL = 10            # 0.95: 창 목록(list2)은 10초 동안 다시 묻지 않는다
+SERIAL_TTL = 3600        # 창 번호 → adb 연결 이름은 한 시간 동안 기억
+SERIAL_RE = re.compile(r"^(emulator-\d+|127\.0\.0\.1:\d+|localhost:\d+)$")
+_cache: dict = {}        # 이 프로그램 안에서 함께 씀 (보낼 때마다 Console 을 새로 만들어도)
+
+
 class Console:
-    """ldconsole.exe 부르기. run 은 시험에서 가짜로 바꾼다 (subprocess.run 과 같은 모양)."""
+    """ldconsole.exe 부르기. run 은 시험에서 가짜로 바꾼다 (subprocess.run 과 같은 모양).
+    0.95: ldconsole 명령마다 LDPlayer 의 VBoxManage.exe 가 새로 떠서, 창 6개 × 보낼 때마다 여러 번이면 윈도우 자원이 모자라
+    'VBoxManage.exe 응용 프로그램 오류 (0xc0000142)'가 났다 → 창 목록은 잠깐 기억하고, 터치·키·화면 찍기는
+    LDPlayer 폴더의 adb.exe 로 그 창에 바로 보낸다 (창 번호의 adb 연결 이름은 ldconsole 에 한 번만 물음). 안 되면 예전처럼 ldconsole."""
 
-    def __init__(self, path: str, run=subprocess.run, shot_dir: Path | None = None):
+    def __init__(self, path: str, run=subprocess.run, shot_dir: Path | None = None, exists=os.path.isfile):
         self.path, self.run, self.shot_dir = path, run, shot_dir
+        adb = ntpath.join(ntpath.dirname(path), "adb.exe")
+        self.adb_path = adb if exists(adb) else None
 
-    def call(self, *args: str, timeout: int = 20) -> str:
+    def _run(self, exe: str, args: list[str], timeout: int) -> bytes:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            r = self.run([self.path, *args], capture_output=True, timeout=timeout, creationflags=flags)
+            r = self.run([exe, *args], capture_output=True, timeout=timeout, creationflags=flags)
         except subprocess.TimeoutExpired:
-            raise LdError(f"LDPlayer 명령이 {timeout}초 안에 끝나지 않음: {' '.join(args[:3])}")
+            raise LdError(f"LDPlayer 명령이 {timeout}초 안에 끝나지 않음: {' '.join(str(a) for a in args[:3])}")
         except OSError as e:
-            raise LdError(f"ldconsole 을 실행하지 못함: {e}")
-        out = r.stdout if isinstance(r.stdout, (bytes, bytearray)) else (r.stdout or "").encode("utf-8")
+            raise LdError(f"{ntpath.basename(exe)} 을 실행하지 못함: {e}")
+        out = r.stdout
+        return out if isinstance(out, (bytes, bytearray)) else (out or "").encode("utf-8")
+
+    def call(self, *args: str, timeout: int = 20) -> str:
+        out = self._run(self.path, list(args), timeout)
         for enc in ("utf-8", "cp949"):
             try:
                 return out.decode(enc)
@@ -152,8 +168,14 @@ class Console:
                 continue
         return out.decode("utf-8", errors="replace")
 
-    def instances(self) -> list[dict]:
-        return parse_list2(self.call("list2"))
+    def instances(self, now: float | None = None) -> list[dict]:
+        now = time.monotonic() if now is None else now
+        hit = _cache.get(("list2", self.path))
+        if hit and now - hit[0] < LIST_TTL:
+            return hit[1]
+        rows = parse_list2(self.call("list2"))
+        _cache[("list2", self.path)] = (now, rows)
+        return rows
 
     def instance(self, index: int) -> dict | None:
         return next((i for i in self.instances() if i["index"] == index), None)
@@ -161,11 +183,42 @@ class Console:
     def adb(self, index: int, command: str, timeout: int = 10) -> str:
         return self.call("adb", "--index", str(index), "--command", command, timeout=timeout)
 
+    def serial(self, index: int, now: float | None = None) -> str | None:
+        """그 창의 adb 연결 이름 (예: emulator-5556). adb.exe 가 없거나 모르면 None."""
+        if not self.adb_path:
+            return None
+        now = time.monotonic() if now is None else now
+        hit = _cache.get(("serial", self.path, index))
+        if hit and now - hit[0] < SERIAL_TTL:
+            return hit[1]
+        try:
+            got = self.adb(index, "get-serialno").strip().splitlines()
+        except LdError:
+            got = []
+        serial = got[-1].strip() if got and SERIAL_RE.match(got[-1].strip()) else None
+        _cache[("serial", self.path, index)] = (now, serial)
+        return serial
+
+    def direct(self, index: int, args: list[str], timeout: int = 10) -> bytes | None:
+        """adb.exe 로 그 창에 바로 (VBoxManage 를 거치지 않음). 바로 보낼 수 없으면 None."""
+        serial = self.serial(index)
+        if serial is None:
+            return None
+        try:
+            return self._run(self.adb_path, ["-s", serial, *args], timeout)
+        except LdError:
+            _cache.pop(("serial", self.path, index), None)      # 연결 이름이 바뀌었을 수 있음 → 다음에 다시 물음
+            return None
+
     def tap(self, index: int, point: tuple[int, int]) -> None:
-        self.adb(index, f"shell input tap {int(point[0])} {int(point[1])}")
+        args = ["shell", "input", "tap", str(int(point[0])), str(int(point[1]))]
+        if self.direct(index, args) is None:
+            self.adb(index, " ".join(args))
 
     def keys(self, index: int, *codes: int) -> None:
-        self.adb(index, "shell input keyevent " + " ".join(str(c) for c in codes))
+        args = ["shell", "input", "keyevent", *(str(c) for c in codes)]
+        if self.direct(index, args) is None:
+            self.adb(index, " ".join(args))
 
     def clear(self, index: int) -> None:
         self.keys(index, KEY_MOVE_END, *([KEY_DEL] * CLEAR_KEYS))
@@ -175,7 +228,10 @@ class Console:
         self.call("action", "--index", str(index), "--key", "call.input", "--value", text)
 
     def screenshot(self, index: int) -> bytes | None:
-        """그 창의 안드로이드 화면 사진(PNG). 못 찍으면 None."""
+        """그 창의 안드로이드 화면 사진(PNG). 못 찍으면 None. adb.exe 로 바로 받을 수 있으면 한 번에 (파일 없이)."""
+        data = self.direct(index, ["exec-out", "screencap", "-p"], timeout=15)
+        if data and data[:4] == b"\x89PNG":
+            return bytes(data)
         folder = self.shot_dir or Path(".")
         folder.mkdir(parents=True, exist_ok=True)
         local = folder / f"ld{index}_screen.png"

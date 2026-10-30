@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-30, 0.94 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-30, 0.95 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -45,6 +45,7 @@
 | 0.92 | radio_helper/cleanup.py: logs/ 3일 지난 파일 지움(server.log·server_crash.log 는 5MB 넘으면 뒤 1MB), evidence 표·사진 3일 지난 것 지움. __main__.watch_runner 에서 cleanup.tick (6시간마다, cleanup.last). 일수는 설정 cleanup.keep_days |
 | 0.93 | 사용자 0xc000012d(가상 메모리 부족). quizbot __main__ --lane choices 2~4 → EXTRA_LANES(2~10) (5~10 칸이 바로 꺼졌음). quizbot/stt_server.py 공용 받아쓰기(ThreadingHTTPServer 127.0.0.1, WhisperModel num_workers, data/stt_server.json, 잠금 stt_server.lock, 15분 무요청 종료) + RemoteModel; runner.shared_model, lanes.shared_stt(3칸↑)/stt_workers, WhisperTranscriber(engine=). runner.uses_adb: LDPlayer 전송·채팅찍기는 input_turn 없이. lanes.ensure 한 번에 한 칸·free_commit_mb<2000 이면 안 띄움. __main__.quiet_error_boxes(SetErrorMode). ldplayer adb timeout 10 |
 | 0.94 | KBS 클래식FM: 기본 channels 에 추가, config.add_classic(meta.channels_094 — KBS 1라디오 다음 줄에 한 번), stt 힌트 클래식FM |
+| 0.95 | VBoxManage.exe 0xc0000142: ldplayer.Console — 같은 폴더 adb.exe 가 있으면 serial(ldconsole adb get-serialno, 1시간 기억)로 tap/keyevent/exec-out screencap 을 바로(direct), 실패하면 ldconsole. list2 는 10초 캐시(_cache, 프로세스 안 공용) |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).
