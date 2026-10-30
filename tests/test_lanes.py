@@ -47,10 +47,11 @@ def test_should_run_and_ensure_launch(conn):
     assert lanes.ensure(conn, launch, now=1000.0) == [] and not lanes.should_run(conn, "2")   # 청취 중이 아님
     db.set_setting(conn, "live.active", "1")
     assert lanes.should_run(conn, "2")
-    assert lanes.ensure(conn, launch, now=1000.0) == ["2", "3"]
+    assert lanes.ensure(conn, launch, now=1000.0) == ["2"]                        # 0.93: 한 번에 한 칸씩
+    assert lanes.ensure(conn, launch, now=1030.0) == ["3"]
     assert launched == [["lane", "--lane", "2"], ["lane", "--lane", "3"]]
     assert lanes.ensure(conn, launch, now=1050.0) == []                           # 막 띄운 것은 2분 동안 다시 안 띄움
-    assert lanes.ensure(conn, launch, now=1200.0) == ["2", "3"]                   # 꺼졌으면(잠금이 풀림) 다시
+    assert lanes.ensure(conn, launch, now=1200.0) == ["2"]                        # 꺼졌으면(잠금이 풀림) 다시
     db.set_setting(conn, "quizbot.stop", "1")
     assert not lanes.should_run(conn, "2")
 
@@ -193,7 +194,7 @@ def test_home_panel_save_and_conflict(client, conn, monkeypatch):
                                            "lane2_channel": "KBS 쿨FM", "lane2_device": "CABLE Input",
                                            "lane3_channel": "MBC FM4U", "lane3_device": "CABLE-A Input"},
                     follow_redirects=True)
-    assert config.get(conn, "live.multi") == "1" and launched == [["lane", "--lane", "2"], ["lane", "--lane", "3"]]
+    assert config.get(conn, "live.multi") == "1" and launched == [["lane", "--lane", "2"]]   # 나머지는 30초마다 한 칸씩
     page = r.get_data(as_text=True)
     assert "보조 2" in page and "KBS 쿨FM" in page and "CABLE-A Input" in page
     client.post("/listen/lanes/test", data={"csrf_token": token})

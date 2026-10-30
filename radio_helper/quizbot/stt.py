@@ -77,23 +77,29 @@ def add_nvidia_dll_dirs() -> None:
 
 class WhisperTranscriber:
     def __init__(self, model_size: str = "auto", program_title: str = "", device: str = "cpu",
-                 beam_size: int = 5, overlap_seconds: float = 3.0, hints: str = "", compute_type: str = ""):
+                 beam_size: int = 5, overlap_seconds: float = 3.0, hints: str = "", compute_type: str = "",
+                 engine=None):
+        """engine: 미리 만든 모델 (0.93 공용 받아쓰기 RemoteModel). 주면 이 프로그램에서는 모델을 올리지 않는다."""
         device = device if device in ("cpu", "cuda") else "cpu"   # auto 는 gpu.choose_device 가 미리 정한다
         model_size = resolve_model(model_size, device)
-        if device == "cuda":
-            add_nvidia_dll_dirs()
-        from faster_whisper import WhisperModel
-
         self.device, self.model_size = device, model_size
         started = time.monotonic()
-        compute_type = compute_type or ("float16" if device == "cuda" else "int8")
-        self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        model = engine
+        if model is None:
+            if device == "cuda":
+                add_nvidia_dll_dirs()
+            from faster_whisper import WhisperModel
+
+            compute_type = compute_type or ("float16" if device == "cuda" else "int8")
+            model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        self.model = model
         self.load_seconds = time.monotonic() - started
         self.beam_size = max(1, int(beam_size or 1))
         self.overlap = max(0.0, float(overlap_seconds or 0))
         self.carry: np.ndarray | None = None
         self._has_hotwords = "hotwords" in inspect.signature(self.model.transcribe).parameters
-        self.label = f"{'그래픽카드' if device == 'cuda' else 'CPU'} · {model_size} · 후보 {self.beam_size}"
+        self.label = f"{'그래픽카드' if device == 'cuda' else 'CPU'} · {model_size} · 후보 {self.beam_size}" + \
+            (" · 공용 받아쓰기" if hasattr(model, "url") else "")
         self.set_context(program_title, hints)
 
     def set_context(self, program_title: str = "", hints: str = "") -> None:

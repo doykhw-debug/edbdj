@@ -29,7 +29,7 @@ import sys
 import time
 
 from .. import db
-from . import config
+from . import config, lanes
 
 
 def say(msg: str) -> None:
@@ -498,17 +498,34 @@ def cmd_gpu_check() -> int:
     return 0
 
 
+def cmd_stt_server(model: str, device: str, compute: str, workers: int) -> int:
+    """공용 받아쓰기 (0.93): 모델을 한 번 올리고 모든 청취기가 함께 쓴다. 15분 동안 요청이 없으면 꺼진다."""
+    from . import stt_server
+
+    lower_priority()
+    say(f"공용 받아쓰기: {model} 모델을 {'그래픽카드' if device == 'cuda' else 'CPU'}에 올리는 중…")
+    loaded, size = stt_server.load_model(model, device, compute, workers)
+    stt_server.serve(db.data_dir(), loaded, {"model": size, "device": device, "compute": compute, "workers": workers},
+                     say=say)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="고릴라 퀴즈 자동 참여")
     ap.add_argument("command", choices=["run", "lane", "device-test", "gpu-recheck", "vbcable-install", "captions", "check", "stt-test",
                                         "auto-setup", "find", "inspect-gorilla",
                                         "select", "calibrate", "send-test", "chat-test", "sms-check", "sms-test",
-                                        "gpu-check", "enrich"])
+                                        "gpu-check", "enrich", "stt-server"])
     ap.add_argument("target", nargs="?", choices=["window", "input", "send", "chat"])
     ap.add_argument("--app", choices=list(config.CHAT_APPS), default="gorilla",
                     help="채팅 앱: gorilla(SBS 고릴라) / mini(MBC) / kong(KBS 콩)")
     ap.add_argument("--all", action="store_true", help="find: 모든 앱(고릴라·콩·mini·레인보우)")
-    ap.add_argument("--lane", choices=["2", "3", "4"], help="lane: 동시 청취의 보조 채널 칸")
+    ap.add_argument("--model", default="large-v3-turbo", help="stt-server: 받아쓰기 모델")
+    ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"], help="stt-server: 그래픽카드/CPU")
+    ap.add_argument("--compute", default="float16", help="stt-server: 계산 방식")
+    ap.add_argument("--workers", type=int, default=4, help="stt-server: 한꺼번에 받아쓰는 칸 수")
+    # 0.93: 2~4 만 받아 보조 5~10 칸 청취기가 켜지자마자 꺼졌음 (화면에 '신호 없음 · 시작 중'으로 멈춤)
+    ap.add_argument("--lane", choices=list(lanes.EXTRA_LANES), help="lane: 동시 청취의 보조 채널 칸 (2~10)")
     args = ap.parse_args(argv)
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
     ignore_ctrl_c()
@@ -516,6 +533,8 @@ def main(argv: list[str] | None = None) -> int:
         lower_priority()
     if args.command == "gpu-check":
         return cmd_gpu_check()
+    if args.command == "stt-server":
+        return cmd_stt_server(args.model, args.device, args.compute, args.workers)
     conn = db.connect()
     db.init_db(conn)
     try:
@@ -523,7 +542,7 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_run(conn)
         if args.command == "lane":
             if not args.lane:
-                ap.error("lane 에는 --lane 2~4 가 필요합니다.")
+                ap.error("lane 에는 --lane 2~10 이 필요합니다.")
             return cmd_lane(conn, args.lane)
         if args.command == "device-test":
             return cmd_device_test(conn)

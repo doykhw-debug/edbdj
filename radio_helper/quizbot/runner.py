@@ -177,6 +177,11 @@ def consensus_fits(res: QuizAnalysis, keyword: str) -> bool:
     return False
 
 
+def uses_adb(sender) -> bool:
+    """LDPlayer 로 보내는 도구인지 (마우스·키보드를 쓰지 않음)."""
+    return hasattr(sender, "screen_png")
+
+
 def adopt_consensus(res: QuizAnalysis, agreed: dict) -> QuizAnalysis:
     """채팅에서 같은 답이 3개 이상 겹치면 그 답을 정답으로 채택한다 (기발한 오답은 쓰지 않음).
     0.84 사용자 요청: 보낼 글에 답 사유('…라는 답이 가장 많이 보여요')를 붙이지 않는다 — 사유는 기록에만."""
@@ -613,14 +618,18 @@ class Runner:
         sender = self.chat_sender(app) if app else None
         if keep <= 0 or sender is None or not hasattr(sender, "chat_image"):
             return
-        if not config.get(self.conn, f"{app}.chat_rect"):
-            return
+        ld = uses_adb(sender)
+        if not ld and not config.get(self.conn, f"{app}.chat_rect"):
+            return                            # (LDPlayer 앱은 채팅 목록 자리를 몰라도 알려진 자리·화면 전체를 찍음)
         try:
-            try:                              # 확인 창 닫기(클릭)는 화면·마우스 차례가 비어 있을 때만 (0.79)
-                with self.input_turn(0):
-                    data = sender.chat_image(save_as=f"{app}_chat")
-            except LockBusy:                  # 다른 방송사가 입력 중 → 찍기만 (누르지 않음)
-                data = sender.chat_image(save_as=f"{app}_chat", click_ok=False)
+            if ld:                            # 0.93: LDPlayer 는 화면·마우스를 쓰지 않으므로 차례를 기다리지 않음
+                data = sender.chat_image(save_as=f"{app}_chat")
+            else:
+                try:                          # 확인 창 닫기(클릭)는 화면·마우스 차례가 비어 있을 때만 (0.79)
+                    with self.input_turn(0):
+                        data = sender.chat_image(save_as=f"{app}_chat")
+                except LockBusy:              # 다른 방송사가 입력 중 → 찍기만 (누르지 않음)
+                    data = sender.chat_image(save_as=f"{app}_chat", click_ok=False)
         except Exception as e:
             if not self._shot_error:
                 self._shot_error = True
@@ -1371,8 +1380,11 @@ class Runner:
             if route == "sms":
                 result = self.deps.sms.send(number, text)
             else:
-                with self.input_turn(SEND_LOCK_WAIT):
-                    result = self.chat_sender(app).send(text)
+                sender = self.chat_sender(app)
+                # 0.93: LDPlayer 앱은 ADB 로 보내 화면·마우스를 쓰지 않으므로 PC 앱 차례 줄에 서지 않는다
+                # (느린 LDPlayer 명령이 차례를 오래 잡아 다른 방송사 전송까지 모두 막혔음)
+                with (nullcontext() if uses_adb(sender) else self.input_turn(SEND_LOCK_WAIT)):
+                    result = sender.send(text)
             status, detail = result.status, result.detail
             shots = getattr(result, "shots", None) or []
         except LockBusy as e:   # 차례를 못 잡음 = 아무것도 누르지 않았음 → 보내지 않은 것 (0.58 전에는 '결과 불명'으로 끝났음)
@@ -1484,11 +1496,29 @@ def make_transcriber(conn: sqlite3.Connection, model: str, program: str):
     from .stt import WhisperTranscriber
 
     device, note = gpu.choose_device(conn, config.get(conn, "quizbot.whisper_device"))
-    tr = WhisperTranscriber(lanes.stt_model(conn, model, device), program, device, beam_size=config.whisper_beam(conn, device),
+    size = lanes.stt_model(conn, model, device)
+    remote = shared_model(conn, size, device, note) if lanes.shared_stt(conn) else None
+    tr = WhisperTranscriber(size, program, device, beam_size=config.whisper_beam(conn, device),
                             overlap_seconds=config.get_int(conn, "quizbot.stt_overlap"),
-                            hints=stt_hints(conn, program), compute_type=lanes.stt_compute(conn, device))
+                            hints=stt_hints(conn, program), compute_type=lanes.stt_compute(conn, device), engine=remote)
     tr.device_note = note
     return tr
+
+
+def shared_model(conn: sqlite3.Connection, size: str, device: str, note: str = "", launch=None):
+    """0.93 공용 받아쓰기: 모델을 한 번만 올린 프로그램에 보내는 RemoteModel. 못 쓰면 None (이 청취기가 직접 올림)."""
+    from . import stt_server
+
+    if launch is None:
+        from ..app import launch_quizbot as launch
+    compute = "float16" if device == "cuda" else "int8"      # 모델이 하나뿐이라 8비트로 줄일 필요 없음
+    try:
+        st = stt_server.ensure(db.data_dir(), launch, ["--model", size, "--device", device, "--compute", compute,
+                                                     "--workers", str(lanes.stt_workers(conn))])
+    except Exception as e:
+        db.log(conn, "quizbot", f"공용 받아쓰기를 쓰지 못해 이 청취기에서 모델을 올립니다: {str(e)[:120]}")
+        return None
+    return stt_server.RemoteModel(st["url"])
 
 
 def lane_item(conn: sqlite3.Connection, lane: str) -> dict:

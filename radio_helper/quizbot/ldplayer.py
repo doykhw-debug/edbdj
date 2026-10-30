@@ -158,7 +158,7 @@ class Console:
     def instance(self, index: int) -> dict | None:
         return next((i for i in self.instances() if i["index"] == index), None)
 
-    def adb(self, index: int, command: str, timeout: int = 20) -> str:
+    def adb(self, index: int, command: str, timeout: int = 10) -> str:
         return self.call("adb", "--index", str(index), "--command", command, timeout=timeout)
 
     def tap(self, index: int, point: tuple[int, int]) -> None:

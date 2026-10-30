@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime
@@ -30,6 +31,9 @@ EXTRA_LANES = tuple(str(n) for n in range(2, MAX_LANES + 1))
 GPU_LARGE_LANES = 3       # 그래픽카드 large-v3 는 채널당 약 3~4GB 라 3칸까지 — 넘으면 auto 를 large-v3-turbo(약 2GB)로
 GPU_INT8_LANES = 6        # 이보다 많으면 받아쓰기 모델을 8비트로 올려 칸당 약 1GB (10칸 × 1GB — 16GB 그래픽카드에 맞게)
 LAUNCH_GRACE = 120        # 막 띄운 보조 청취기는 이 시간 동안 다시 띄우지 않는다
+MIN_COMMIT_MB = 2000      # 0.93: 남은 메모리(실제+가상)가 이보다 적으면 새 청취기를 띄우지 않는다 — 사용자 PC 에서
+                          # 'python.exe 응용 프로그램 오류 0xc000012d'(가상 메모리 부족)로 청취기가 켜지지 못했음
+MEMORY_NOTE_KEY = "lanes.memory_note"
 QUIET = 8                 # 장치 점검: 소리 크기(0~100)가 이보다 작으면 '소리 없음'
 SAME_SOUND = 0.85         # 장치 점검: 두 장치 소리 흐름의 상관이 이보다 크면 '같은 소리'
 TEST_KEY = "lanes.test"
@@ -60,6 +64,22 @@ def all_lanes(conn: sqlite3.Connection) -> list[dict]:
 
 def lane_of(conn: sqlite3.Connection, lane: str) -> dict | None:
     return next((x for x in all_lanes(conn) if x["lane"] == lane), None)
+
+
+SHARED_STT_LANES = 3      # 0.93: 이만큼 이상 함께 들으면 받아쓰기 모델을 하나만 올려 함께 쓴다 (stt_server)
+
+
+def shared_stt(conn: sqlite3.Connection) -> bool:
+    """공용 받아쓰기를 쓸지: 설정 quizbot.stt_shared — auto(3칸 이상), 1(늘), 0(쓰지 않음)."""
+    mode = config.get(conn, "quizbot.stt_shared") or "auto"
+    if mode in ("0", "1"):
+        return mode == "1"
+    return len(all_lanes(conn)) >= SHARED_STT_LANES
+
+
+def stt_workers(conn: sqlite3.Connection) -> int:
+    """공용 받아쓰기가 한꺼번에 받아쓰는 칸 수 (그래픽카드 하나로 4칸씩)."""
+    return max(1, min(4, len(all_lanes(conn))))
 
 
 def stt_compute(conn: sqlite3.Connection, device: str) -> str:
@@ -179,13 +199,38 @@ def status(conn: sqlite3.Connection, now: datetime | None = None) -> list[dict]:
     return out
 
 
-def ensure(conn: sqlite3.Connection, launch, now: float | None = None) -> list[str]:
-    """청취 중이고 동시 청취가 켜져 있으면 꺼져 있는 보조 청취기를 띄운다 (관리 화면이 30초마다 부름). 띄운 칸들."""
+def free_commit_mb() -> int | None:
+    """지금 더 쓸 수 있는 메모리(실제 메모리 + 가상 메모리 파일 남은 만큼, MB). 윈도우가 아니거나 모르면 None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        st = MEMORYSTATUSEX()
+        st.dwLength = ctypes.sizeof(st)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+            return None
+        return int(st.ullAvailPageFile // (1024 * 1024))
+    except Exception:
+        return None
+
+
+def ensure(conn: sqlite3.Connection, launch, now: float | None = None, free_mb=free_commit_mb) -> list[str]:
+    """청취 중이고 동시 청취가 켜져 있으면 꺼져 있는 보조 청취기를 띄운다 (관리 화면이 30초마다 부름). 띄운 칸들.
+    0.93: 한 번에 하나씩만 띄우고(모델을 한꺼번에 올리면 메모리가 치솟음), 남은 메모리가 모자라면 띄우지 않는다."""
     now = now if now is not None else time.time()
     started = []
     if config.get(conn, "live.active") != "1" or not enabled(conn) or db.is_stopped(conn):
         return started
     for x in extras(conn):
+        if started:
+            break                 # 다음 칸은 30초 뒤에
         lane = x["lane"]
         try:
             last = float(db.get_setting(conn, key(lane, "launched")) or 0)
@@ -197,6 +242,15 @@ def ensure(conn: sqlite3.Connection, launch, now: float | None = None) -> list[s
         if lock is None:
             continue              # 그 칸의 보조 청취기가 살아 있음
         lock.close()
+        free = free_mb()
+        if free is not None and free < MIN_COMMIT_MB:
+            note = (f"메모리 부족 (남은 {free}MB)으로 보조 {lane} '{x['channel']}' 청취기를 띄우지 않음 — "
+                    "C 드라이브를 비우거나(가상 메모리) 동시 청취 칸·LDPlayer 창을 줄이세요")
+            db.set_setting(conn, key(lane, "state"), note)
+            if db.get_setting(conn, MEMORY_NOTE_KEY) != note[:40]:
+                db.set_setting(conn, MEMORY_NOTE_KEY, note[:40])
+                db.log(conn, "quizbot", note)
+            break
         db.set_setting(conn, key(lane, "launched"), str(now))
         db.set_setting(conn, key(lane, "state"), "시작 중")
         log_name = launch(["lane", "--lane", lane])

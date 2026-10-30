@@ -358,8 +358,24 @@ def run_server(port: int, serve=None) -> None:
     serve(app, host=server.BIND, port=port, threads=8, ident="radio-helper", channel_timeout=120)
 
 
+def quiet_error_boxes() -> bool:
+    """0.93: 'python.exe 응용 프로그램 오류(0xc000012d 가상 메모리 부족)' 같은 윈도우 오류 창이 청취기를 띄울 때마다 쌓이지 않게
+    한다 (이 프로그램과 이 프로그램이 띄우는 청취기·도구에 이어짐). 실패는 기록(logs)과 관리 화면으로 알린다."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX, SEM_NOOPENFILEERRORBOX = 0x0001, 0x0002, 0x8000
+        ctypes.windll.kernel32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX)
+        return True
+    except Exception:
+        return False
+
+
 def main() -> None:
     server.load_env()   # 프로그램 폴더의 .env (API 키·PORT·데이터 폴더). 이미 있는 환경 변수는 그대로
+    quiet_error_boxes()
     ap = argparse.ArgumentParser(description="SBS 라디오 참여 도우미 — 관리 화면")
     ap.add_argument("--port", type=int, default=None,
                     help="관리 화면 번호 (기본: 환경 변수 PORT, 없으면 PC 5000 · 서버 5002)")

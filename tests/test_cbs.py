@@ -129,7 +129,8 @@ def test_four_lanes_and_smaller_model_on_gpu(conn, monkeypatch):
     launched = []
     db.set_setting(conn, "live.lanes", json.dumps(extra, ensure_ascii=False))
     db.set_setting(conn, "live.active", "1")
-    assert lanes.ensure(conn, lambda a: launched.append(a) or "x.log", now=1000.0) == ["2", "3", "4"]
+    got = [lanes.ensure(conn, lambda a: launched.append(a) or "x.log", now=1000.0 + 30 * n) for n in range(3)]
+    assert got == [["2"], ["3"], ["4"]]                                         # 0.93: 30초마다 한 칸씩
 
 
 def test_home_offers_cbs_and_ten_lanes(client, conn, monkeypatch):

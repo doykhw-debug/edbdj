@@ -197,7 +197,8 @@ for _app in CHAT_APPS:
     DEFAULTS[f"{_app}.platform"] = "ldplayer" if _app in LD_APPS else "pc"
     for _f in ("ld_index", "ld_input", "ld_send", "ld_chat", "ld_package"):
         DEFAULTS[f"{_app}.{_f}"] = ""
-DEFAULTS["ldplayer.console"] = ""        # ldconsole.exe 위치 (비우면 흔한 설치 위치에서 찾음)
+DEFAULTS["ldplayer.console"] = ""
+DEFAULTS["quizbot.stt_shared"] = "auto"   # 0.93 공용 받아쓰기: auto(동시 청취 3칸 이상) / 1 / 0        # ldconsole.exe 위치 (비우면 흔한 설치 위치에서 찾음)
 LABELS["ldplayer.console"] = "LDPlayer ldconsole.exe 위치 (비우면 자동으로 찾음)"
 
 
