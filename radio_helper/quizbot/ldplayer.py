@@ -49,9 +49,9 @@ LD_LAYOUTS = {
 TITLE_HINTS = {"ifm": ("ifm", "경인"), "ytn": ("ytn",), "bandi": ("반디", "bandi", "ebs"), "kfn": ("kfn", "별사탕", "국방"),
                "cpbc": ("cpbc", "빵"), "febc": ("극동", "febc")}
 TYPE_TRIES = 3           # 글 넣기를 다시 하는 횟수 (처음 포함)
-CLEAR_KEYS = 120         # 입력칸에 남은 글 지우기: 끝으로 → 지우기 키 이만큼
+CLEAR_KEYS = 400         # 입력칸에 남은 글 지우기: 끝으로 → 지우기 키 이만큼 (0.96: 120 → 400 — 긴 사연이 남아 새 글과 섞였음)
 INPUT_BOX = (0.35, 45)   # 입력칸 확인 네모: 입력칸 자리 좌우로 화면 너비의 이 비율, 위아래로 이 픽셀
-KEY_ENTER, KEY_MOVE_END, KEY_DEL = 66, 123, 67
+KEY_ENTER, KEY_MOVE_END, KEY_DEL, KEY_BACK = 66, 123, 67, 4
 
 
 class LdError(RuntimeError):
@@ -223,6 +223,37 @@ class Console:
     def clear(self, index: int) -> None:
         self.keys(index, KEY_MOVE_END, *([KEY_DEL] * CLEAR_KEYS))
 
+    def shell(self, index: int, *args: str) -> str:
+        """그 창에서 안드로이드 명령 (글자로 결과)."""
+        out = self.direct(index, ["shell", *args])
+        if out is None:
+            return self.adb(index, "shell " + " ".join(args))
+        return out.decode("utf-8", errors="replace")
+
+    def screen_size(self, index: int) -> tuple[int, int] | None:
+        """안드로이드 화면 크기 (wm size — 바꾼 크기가 있으면 그것). 모르면 None. LDPlayer 창 목록(list2)의 크기는
+        가로·세로가 앱 화면과 다를 수 있어 (태블릿 설정에 세로 앱) 쓰지 않는다 (0.96)."""
+        hit = _cache.get(("size", self.path, index))
+        if hit:
+            return hit
+        try:
+            text = self.shell(index, "wm", "size")
+        except LdError:
+            return None
+        found = re.findall(r"(\d+)x(\d+)", text)
+        if not found:
+            return None
+        size = tuple(int(v) for v in found[-1])     # Override size 가 있으면 마지막 줄
+        _cache[("size", self.path, index)] = size
+        return size
+
+    def keyboard_shown(self, index: int) -> bool:
+        """화면 자판(IME)이 떠 있는지 — 떠 있으면 입력줄·전송 버튼이 위로 밀려 알려진 자리가 어긋난다."""
+        try:
+            return "mInputShown=true" in self.shell(index, "dumpsys", "input_method")
+        except LdError:
+            return False
+
     def type_text(self, index: int, text: str) -> None:
         """한글도 넣을 수 있는 LDPlayer 글자 넣기 (지금 입력칸에)."""
         self.call("action", "--index", str(index), "--key", "call.input", "--value", text)
@@ -349,7 +380,6 @@ class LdSender:
 
     def _points(self, size) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
         """입력칸·전송 버튼: 화면 사진을 눌러 정한 자리, 없으면 알려진 자리 (화면 크기로 환산)."""
-        size = size or getattr(self, "_size", None)
         inp = self.cfg.input or layout_point(self.cfg.app, "input", size)
         snd = self.cfg.send or layout_point(self.cfg.app, "send", size)
         if (inp, snd) != (self.cfg.input, self.cfg.send) and inp and snd:
@@ -408,9 +438,14 @@ class LdSender:
         con, index = self._ready()
         label = self.cfg.label
         before = self._shot(con, index)
-        inp, snd = self._points(before.size if before is not None else None)
+        size = before.size if before is not None else self._screen_size(con, index)
+        inp, snd = self._points(size)
         if inp is None or snd is None:
             raise LdError(f"{label}: 입력칸·전송 버튼 자리를 정하지 않았습니다 ('LDPlayer 설정'에서 화면 사진을 눌러 정하세요)")
+        # 0.96: 어디까지 했는지 결과에 남긴다 (보내지 못했을 때 원인을 바로 찾게)
+        self.trace = [f"화면 {size[0]}×{size[1]}" if size else "화면 크기 모름",
+                      "사진 확인 가능" if before is not None else "사진 못 찍음(확인 없이)",
+                      f"입력칸 {inp[0]},{inp[1]} · 전송 {snd[0]},{snd[1]}", f"글 {len(text)}자"]
         box = input_box(before.size, inp) if before is not None else None
         filled, verified = None, False
         for n in range(1, TYPE_TRIES + 1):
@@ -435,10 +470,17 @@ class LdSender:
                 shots.append((f"보내지 못했을 때 {label} 화면", self._evidence(filled)))
             raise LdError(f"{label} 입력칸에 글이 들어가지 않아 전송을 누르지 않았습니다 (글 넣기 {TYPE_TRIES}번) — "
                           "입력칸 자리를 다시 정하거나 LDPlayer 의 글자 입력을 확인하세요")
+        self.trace.append("글 들어감 확인" if verified else "글 들어감 확인 못 함")
+        if getattr(con, "keyboard_shown", lambda i: False)(index):   # 화면 자판이 입력줄·전송 버튼을 밀어 올림 → 자판만 내림
+            con.keys(index, KEY_BACK)
+            self.sleep(0.6)
+            self.trace.append("화면 자판 내림")
+            filled = self._shot(con, index) if box else filled
         con.tap(index, snd)
         self.sleep(1.5)
         after = self._shot(con, index)
         if verified and self._changed(filled, after, box) is False:      # 전송을 눌렀는데 입력칸이 그대로
+            self.trace.append("전송 터치 뒤 글이 그대로")
             con.tap(index, inp)
             self.sleep(0.4)
             con.keys(index, KEY_ENTER)
@@ -446,13 +488,21 @@ class LdSender:
             self.fixes.append("전송 터치가 안 돼 엔터로 다시 보냄")
             after = self._shot(con, index)
             if self._changed(filled, after, box) is False:
+                self.trace.append("엔터 뒤에도 그대로")
                 shots.append((f"보내지 못했을 때 {label} 화면", self._evidence(after)))
                 return SendResult("failed", f"{label} 전송 터치·엔터 모두 안 돼 입력칸에 글이 남아 있습니다 — 잠시 뒤 다시 보냅니다 "
-                                            "(전송 버튼 자리를 확인해 보세요)")
+                                            f"(전송 버튼 자리를 확인해 보세요) [{' · '.join(self.trace)}]")
         if after is not None:
             shots.append((f"보낸 뒤 {label} 화면", self._evidence(after)))
         how = "입력칸이 비워져 전송된 것으로 보임" if verified else "확인 사진을 못 찍어 전송 여부는 확인하지 못함"
-        return SendResult("entered", f"LDPlayer {index}번 창 {label}: {how}")
+        return SendResult("entered" if verified else "unknown",
+                          f"LDPlayer {index}번 창 {label}: {how} [{' · '.join(self.trace)}]")
+
+    def _screen_size(self, con, index: int) -> tuple[int, int] | None:
+        try:
+            return con.screen_size(index) if hasattr(con, "screen_size") else None
+        except Exception:
+            return None
 
     def send_test(self, text: str) -> tuple[SendResult, str]:
         result = self.send(text)

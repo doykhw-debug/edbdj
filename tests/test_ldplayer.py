@@ -107,7 +107,8 @@ def test_player_off_or_unset(conn):
 def test_no_screenshot_still_sends_unverified(conn):
     con = FakeConsole(shots=False)
     r = sender(con).send("정답")
-    assert r.status == "entered" and con.sent == ["정답"] and "확인하지 못함" in r.detail
+    assert r.status == "unknown" and con.sent == ["정답"] and "확인하지 못함" in r.detail   # 0.96: 확인 못 하면 '결과 불명'
+    assert "사진 못 찍음" in r.detail
 
 
 def test_chat_image_crops_saved_area(conn, data_dir):
@@ -373,4 +374,43 @@ def test_without_adb_exe_falls_back_to_ldconsole(tmp_path):
                            shot_dir=tmp_path, exists=lambda p: False)
     con.tap(0, (1, 2))
     assert calls == [["ldconsole.exe", "adb", "--index", "0", "--command", "shell input tap 1 2"]]
+    ldplayer._cache.clear()
+
+
+# ── 0.96: 경인방송 iFM — 입력칸에 글만 들어가고 전송이 안 된 화면 (사용자 사진) ─────────────────────────
+class KeyboardConsole(FakeConsole):
+    """화면 자판이 떠 있으면 전송 버튼이 위로 밀려 원래 자리 터치가 듣지 않는 창."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.ime = True
+
+    def keyboard_shown(self, index):
+        return self.ime
+
+    def keys(self, index, *codes):
+        if codes == (ldplayer.KEY_BACK,):
+            self.ime = False
+        super().keys(index, *codes)
+
+    def tap(self, index, point):
+        if tuple(point) == (870, 1495) and self.ime:
+            self.log.append(("tap", tuple(point)))       # 자판에 가려 전송이 안 됨
+            return
+        super().tap(index, point)
+
+
+def test_keyboard_is_hidden_before_touching_send(conn):
+    con = KeyboardConsole()
+    r = sender(con).send("정답은 사과")
+    assert r.status == "entered" and con.sent == ["정답은 사과"] and "화면 자판 내림" in r.detail
+    assert "글 6자" in r.detail and "입력칸 400,1495" in r.detail                     # 어디까지 했는지 남김
+
+
+def test_clear_removes_long_leftover_and_size_from_wm(tmp_path):
+    assert ldplayer.CLEAR_KEYS >= 400                                                # 긴 사연이 남아 섞이지 않게
+    ldplayer._cache.clear()
+    con = ldplayer.Console("ldconsole.exe", shot_dir=tmp_path, exists=lambda p: False,
+                           run=lambda args, **kw: SimpleNamespace(stdout=b"Physical size: 1600x900\nOverride size: 900x1600\n"))
+    assert con.screen_size(0) == (900, 1600)                                        # 바꾼 크기(세로)를 씀
     ldplayer._cache.clear()
