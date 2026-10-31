@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-10-31, 0.96 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-10-31, 0.97 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -47,6 +47,7 @@
 | 0.94 | KBS 클래식FM: 기본 channels 에 추가, config.add_classic(meta.channels_094 — KBS 1라디오 다음 줄에 한 번), stt 힌트 클래식FM |
 | 0.95 | VBoxManage.exe 0xc0000142: ldplayer.Console — 같은 폴더 adb.exe 가 있으면 serial(ldconsole adb get-serialno, 1시간 기억)로 tap/keyevent/exec-out screencap 을 바로(direct), 실패하면 ldconsole. list2 는 10초 캐시(_cache, 프로세스 안 공용) |
 | 0.96 | iFM 입력칸에 글만 남고 전송 안 됨(사용자 사진, 원인 미확정): CLEAR_KEYS 400, Console.screen_size(wm size, override 우선)·keyboard_shown(dumpsys input_method) — 사진 못 찍으면 wm size 로 자리 계산(list2 크기 안 씀), 자판 떠 있으면 BACK 후 전송, 확인 못 한 전송은 unknown, 결과에 단계 trace |
+| 0.97 | PC 켤 때 VBoxManage 0xc0000142: Console.call 이 PC 켠 뒤 BOOT_WAIT(180초)는 ldconsole 안 부름(uptime_seconds=GetTickCount64, LdError '기다리는 중'), one_at_a_time(data/ldconsole.lock, msvcrt.locking·flock, 30초 넘으면 그냥 실행)으로 프로그램 간 하나씩, serial 실패는 1분만 기억(켠 직후는 기억 안 함). 실제 PC 미확인 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).

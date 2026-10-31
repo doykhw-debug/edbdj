@@ -414,3 +414,57 @@ def test_clear_removes_long_leftover_and_size_from_wm(tmp_path):
                            run=lambda args, **kw: SimpleNamespace(stdout=b"Physical size: 1600x900\nOverride size: 900x1600\n"))
     assert con.screen_size(0) == (900, 1600)                                        # 바꾼 크기(세로)를 씀
     ldplayer._cache.clear()
+
+
+def test_no_ldconsole_right_after_pc_start(tmp_path):
+    """0.97: PC 를 켤 때 VBoxManage 오류 창 — 켠 뒤 3분은 ldconsole 을 부르지 않는다 (adb 연결 이름도 기억하지 않음)."""
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        out = LIST2.encode() if args[1] == "list2" else b"emulator-5554\n"
+        return SimpleNamespace(stdout=out, returncode=0)
+
+    up = [30.0]
+    con = ldplayer.Console("ldconsole.exe", run=run, exists=lambda p: True, uptime=lambda: up[0])
+    ldplayer._cache.clear()
+    with pytest.raises(ldplayer.LdError, match="기다리는 중"):
+        con.call("list2")
+    assert con.serial(3) is None and calls == []
+    s = ldplayer.LdSender(ldplayer.LdConfig(app="bandi", index=0), make_console=lambda: con, sleep=lambda s: None)
+    assert not s.is_running() and s.send("정답").status == "failed"
+    up[0] = ldplayer.BOOT_WAIT + 1                                          # 3분 지나면 평소대로
+    assert con.instance(0)["title"] == "반디창" and con.serial(3) == "emulator-5554"
+    ldplayer._cache.clear()
+    assert ldplayer.Console("ldconsole.exe", run=run, uptime=lambda: None).instances()   # 모르면(윈도우 아님) 기다리지 않음
+    ldplayer._cache.clear()
+
+
+def test_ldconsole_runs_one_at_a_time_across_programs(tmp_path):
+    """0.97: 청취기·보조 칸·관리 화면(따로 프로그램)이 ldconsole 을 동시에 부르지 않게 잠금 파일로 하나씩."""
+    lock = tmp_path / ldplayer.LOCK_FILE
+    with ldplayer.one_at_a_time(lock) as got:
+        assert got
+        waits = []
+        t = [0.0]
+
+        def sleep(sec):
+            waits.append(sec)
+            t[0] += sec
+        with ldplayer.one_at_a_time(lock, wait=1, sleep=sleep, clock=lambda: t[0]) as second:
+            assert not second and waits                                    # 기다렸지만 못 잡음 → 그냥 실행
+    with ldplayer.one_at_a_time(lock, wait=0) as again:
+        assert again                                                       # 끝나면 풀림
+    with ldplayer.one_at_a_time(None) as none:
+        assert not none
+
+    seen = []
+
+    def run(args, **kw):
+        with ldplayer.one_at_a_time(lock, wait=0) as free:
+            seen.append(free)                                              # 명령 도는 동안 남은 잠겨 있음
+        return SimpleNamespace(stdout=LIST2.encode(), returncode=0)
+    ldplayer._cache.clear()
+    ldplayer.Console("ldconsole.exe", run=run, lock_path=lock, uptime=lambda: 9999).instances()
+    assert seen == [False]
+    ldplayer._cache.clear()

@@ -20,7 +20,9 @@ import ntpath
 import os
 import re
 import subprocess
+import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -133,18 +135,97 @@ def parse_box(text: str | None) -> tuple[int, int, int, int] | None:
 
 LIST_TTL = 10            # 0.95: 창 목록(list2)은 10초 동안 다시 묻지 않는다
 SERIAL_TTL = 3600        # 창 번호 → adb 연결 이름은 한 시간 동안 기억
+SERIAL_FAIL_TTL = 60     # 못 물었으면 1분 뒤 다시
 SERIAL_RE = re.compile(r"^(emulator-\d+|127\.0\.0\.1:\d+|localhost:\d+)$")
 _cache: dict = {}        # 이 프로그램 안에서 함께 씀 (보낼 때마다 Console 을 새로 만들어도)
+BOOT_WAIT = 180          # 0.97: PC 를 켠 뒤 이만큼(초)은 ldconsole 을 부르지 않는다 (LDPlayer 가 자리 잡을 때까지)
+LOCK_FILE = "ldconsole.lock"
+LOCK_WAIT = 30           # 0.97: 다른 청취기의 ldconsole 명령이 끝나기를 기다리는 최대 시간 (넘으면 그냥 실행)
+
+
+def uptime_seconds() -> float | None:
+    """PC 를 켠 지 몇 초 지났는지 (윈도우만). 모르면 None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        k = ctypes.WinDLL("kernel32")
+        k.GetTickCount64.restype = ctypes.c_uint64
+        return k.GetTickCount64() / 1000.0
+    except Exception:
+        return None
+
+
+def _lock_file(f) -> None:
+    f.seek(0)
+    if sys.platform == "win32":
+        import msvcrt
+
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(f) -> None:
+    try:
+        f.seek(0)
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+@contextmanager
+def one_at_a_time(path: Path | None, wait: float = LOCK_WAIT, sleep=time.sleep, clock=time.monotonic):
+    """컴퓨터 전체에서 ldconsole 명령을 한 번에 하나씩 (청취기·보조 칸·관리 화면이 따로 프로그램이라 파일 잠금으로).
+    윈도우가 잠금을 프로그램이 꺼질 때 함께 풀어 주므로 멈춘 잠금이 남지 않는다. wait 초 안에 못 잡으면 그냥 실행 → 잡았는지"""
+    if path is None:
+        yield False
+        return
+    try:
+        f = open(path, "a+b")
+    except OSError:
+        yield False
+        return
+    got, deadline = False, clock() + wait
+    try:
+        while True:
+            try:
+                _lock_file(f)
+                got = True
+                break
+            except OSError:
+                if clock() >= deadline:
+                    break
+                sleep(0.2)
+        yield got
+    finally:
+        if got:
+            _unlock_file(f)
+        f.close()
 
 
 class Console:
     """ldconsole.exe 부르기. run 은 시험에서 가짜로 바꾼다 (subprocess.run 과 같은 모양).
     0.95: ldconsole 명령마다 LDPlayer 의 VBoxManage.exe 가 새로 떠서, 창 6개 × 보낼 때마다 여러 번이면 윈도우 자원이 모자라
     'VBoxManage.exe 응용 프로그램 오류 (0xc0000142)'가 났다 → 창 목록은 잠깐 기억하고, 터치·키·화면 찍기는
-    LDPlayer 폴더의 adb.exe 로 그 창에 바로 보낸다 (창 번호의 adb 연결 이름은 ldconsole 에 한 번만 물음). 안 되면 예전처럼 ldconsole."""
+    LDPlayer 폴더의 adb.exe 로 그 창에 바로 보낸다 (창 번호의 adb 연결 이름은 ldconsole 에 한 번만 물음). 안 되면 예전처럼 ldconsole.
+    0.97: PC 를 켤 때 같은 오류 창이 떴다 (LDPlayer 창 6개·도우미·청취기가 한꺼번에 시작) → PC 를 켠 뒤 BOOT_WAIT 초는
+    ldconsole 을 부르지 않고, ldconsole 명령은 컴퓨터 전체에서 한 번에 하나씩 (lock_path 잠금 파일)."""
 
-    def __init__(self, path: str, run=subprocess.run, shot_dir: Path | None = None, exists=os.path.isfile):
+    def __init__(self, path: str, run=subprocess.run, shot_dir: Path | None = None, exists=os.path.isfile,
+                 lock_path: Path | None = None, uptime=uptime_seconds):
         self.path, self.run, self.shot_dir = path, run, shot_dir
+        self.lock_path, self.uptime = lock_path, uptime
         adb = ntpath.join(ntpath.dirname(path), "adb.exe")
         self.adb_path = adb if exists(adb) else None
 
@@ -159,8 +240,17 @@ class Console:
         out = r.stdout
         return out if isinstance(out, (bytes, bytearray)) else (out or "").encode("utf-8")
 
+    def booting(self) -> float | None:
+        """PC 를 켠 지 BOOT_WAIT 초가 안 됐으면 남은 초, 아니면 None."""
+        up = self.uptime() if self.uptime else None
+        return None if up is None or up >= BOOT_WAIT else BOOT_WAIT - up
+
     def call(self, *args: str, timeout: int = 20) -> str:
-        out = self._run(self.path, list(args), timeout)
+        left = self.booting()
+        if left is not None:
+            raise LdError(f"PC 를 켠 지 얼마 안 돼 LDPlayer 가 자리 잡기를 기다리는 중 ({left:.0f}초 뒤부터 사용)")
+        with one_at_a_time(self.lock_path):
+            out = self._run(self.path, list(args), timeout)
         for enc in ("utf-8", "cp949"):
             try:
                 return out.decode(enc)
@@ -194,7 +284,10 @@ class Console:
         try:
             got = self.adb(index, "get-serialno").strip().splitlines()
         except LdError:
-            got = []
+            # 0.97: 켠 직후 기다림은 기억하지 않고, 다른 실패는 1분만 기억 (예전엔 한 시간 동안 ldconsole 로만 보냈음)
+            if self.booting() is None:
+                _cache[("serial", self.path, index)] = (now - SERIAL_TTL + SERIAL_FAIL_TTL, None)
+            return None
         serial = got[-1].strip() if got and SERIAL_RE.match(got[-1].strip()) else None
         _cache[("serial", self.path, index)] = (now, serial)
         return serial
@@ -297,7 +390,7 @@ def console(conn=None, run=subprocess.run) -> Console:
     if path is None:
         raise LdError("LDPlayer 의 ldconsole.exe 를 찾지 못했습니다 — LDPlayer 를 설치했으면 'LDPlayer 설정'에서 위치를 적어 주세요 "
                       r"(보통 C:\LDPlayer\LDPlayer9\ldconsole.exe)")
-    return Console(path, run=run, shot_dir=db.data_dir() / "inspect")
+    return Console(path, run=run, shot_dir=db.data_dir() / "inspect", lock_path=db.data_dir() / LOCK_FILE)
 
 
 @dataclass
