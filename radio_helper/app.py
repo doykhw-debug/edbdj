@@ -2236,6 +2236,15 @@ def create_app(data_dir: str | None = None) -> Flask:
 
         return ldplayer.console(g.conn)
 
+    def sms_adb():
+        """1.01: 휴대폰 문자용 adb (LDPlayer adb 와 판이 같은지 연결 점검에서 비교). 없으면 None."""
+        from .quizbot import sms as sms_mod
+
+        try:
+            return sms_mod.find_adb(qconfig.get(g.conn, "sms.adb_path"))
+        except Exception:
+            return None
+
     @app.get("/ldplayer")
     def ldplayer_page():
         """0.88: LDPlayer 로 켠 방송국 앱 — 앱마다 PC/LDPlayer, 몇 번 창, 앱 패키지, 화면 사진을 눌러 입력칸·전송·채팅 자리."""
@@ -2353,7 +2362,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             if index is None:
                 found = ldplayer.match_instance(app_, con.instances())
                 index = found["index"] if found else None
-            rows = con.check(index)
+            rows = con.check(index, other_adb=sms_adb())
         except Exception as e:
             rows = [{"step": "ldconsole.exe", "ok": False, "detail": str(e), "sec": 0}]
         out = db.data_dir() / "inspect"
@@ -2387,7 +2396,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             found = ldplayer.match_instance(key, instances) if cfg.index is None else None
             index = cfg.index if cfg.index is not None else (found["index"] if found else None)
             try:
-                rows = con.check(index)
+                rows = con.check(index, other_adb=sms_adb())
             except Exception as e:
                 rows = [{"step": "점검", "ok": False, "detail": str(e), "sec": 0}]
             (out / f"ld_check_{key}.json").write_text(json.dumps({"at": db.now(), "rows": rows}, ensure_ascii=False),

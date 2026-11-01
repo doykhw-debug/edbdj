@@ -41,6 +41,21 @@ def keep_awake(display: bool = True, kernel32=None):
         k.SetThreadExecutionState(ES_CONTINUOUS)
 
 
+def quiet_error_boxes(kernel32=None) -> bool:
+    """1.01: 청취기·보조 칸이 띄우는 도구(adb.exe·ldconsole 등)가 오류로 꺼질 때 윈도우 오류 창을 띄우지 않게 한다
+    (이 설정은 띄우는 프로그램에 이어진다). 오류 창이 뜨면 그 도구가 창을 닫을 때까지 붙잡혀 청취기가 먹통처럼 기다렸다.
+    관리 화면 서버(0.93)와 같은 설정을 청취기에도 — 청취기를 따로 켰을 때도."""
+    k = kernel32 if kernel32 is not None else (ctypes.WinDLL("kernel32") if sys.platform == "win32" else None)
+    if k is None:
+        return False
+    try:
+        SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX, SEM_NOOPENFILEERRORBOX = 0x0001, 0x0002, 0x8000
+        k.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX)
+        return True
+    except Exception:
+        return False
+
+
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint32)]
 

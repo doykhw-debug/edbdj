@@ -142,6 +142,7 @@ BOOT_WAIT = 180          # 0.97: PC 를 켠 뒤 이만큼(초)은 ldconsole 을 
 LOCK_FILE = "ldconsole.lock"
 LOCK_WAIT = 15           # 0.97: 다른 청취기의 ldconsole 명령이 끝나기를 기다리는 최대 시간 (넘으면 그냥 실행, 0.98: 30 → 15)
 CHECK_TIMEOUT = 6        # 0.98: 연결 점검의 단계마다 기다리는 시간
+ADB_FAILS, ADB_PAUSE = 3, 120   # 1.01: adb.exe 가 잇달아 이만큼 실패하면 이만큼(초) 쉰다 (ld.exe·ldconsole 로)
 # 0.98: ld.exe 로 찍은 화면이 저장되는 PC 쪽 공유 폴더 (LDPlayer 의 /sdcard/Pictures ↔ 내 문서\XuanZhi9\Pictures)
 SHARED_PICTURES = ("XuanZhi9", "XuanZhi64", "XuanZhi", "leidian9")
 ADB_HINT = ("LDPlayer 창의 설정(톱니) → 기타 설정 → 'ADB 디버깅'을 '로컬 연결 열기'로 바꾸고 저장한 뒤 그 창을 다시 시작하세요 "
@@ -299,16 +300,28 @@ class Console:
         _cache[("serial", self.path, index)] = (now, serial)
         return serial
 
-    def direct(self, index: int, args: list[str], timeout: int = 10) -> bytes | None:
-        """adb.exe 로 그 창에 바로 (VBoxManage 를 거치지 않음). 바로 보낼 수 없으면 None."""
+    def direct(self, index: int, args: list[str], timeout: int = 10, now: float | None = None) -> bytes | None:
+        """adb.exe 로 그 창에 바로 (VBoxManage 를 거치지 않음). 바로 보낼 수 없으면 None.
+        1.01: 'adb 오류 창이 뜨면서 먹통' — 청취기·보조 칸 여럿이 adb.exe 를 한꺼번에 띄우면 adb 서버를 서로 새로 켜다
+        오류가 나고, 오류 난 adb 는 시간이 다 될 때까지 붙잡혀 모두가 기다렸다 → 컴퓨터 전체에서 한 번에 하나씩(잠금),
+        잇달아 ADB_FAILS 번 실패하면 ADB_PAUSE 초 동안 adb 를 쉬고 ld.exe·ldconsole 로 한다."""
+        now = time.monotonic() if now is None else now
+        fails, until = _cache.get(("adb_fail", self.path), (0, 0.0))
+        if now < until:
+            return None
         serial = self.serial(index)
         if serial is None:
             return None
         try:
-            return self._run(self.adb_path, ["-s", serial, *args], timeout)
+            with one_at_a_time(self.lock_path):
+                out = self._run(self.adb_path, ["-s", serial, *args], timeout)
         except LdError:
             _cache.pop(("serial", self.path, index), None)      # 연결 이름이 바뀌었을 수 있음 → 다음에 다시 물음
+            fails += 1
+            _cache[("adb_fail", self.path)] = (0, now + ADB_PAUSE) if fails >= ADB_FAILS else (fails, 0.0)
             return None
+        _cache[("adb_fail", self.path)] = (0, 0.0)
+        return out
 
     def ld(self, index: int, args: list[str], timeout: int = 10) -> bytes | None:
         """0.98: ld.exe 로 그 창 안에서 안드로이드 명령 (adb 디버깅이 꺼져 있어도 됨). ld.exe 가 없거나 실패하면 None."""
@@ -419,7 +432,19 @@ class Console:
                 continue
         return None
 
-    def check(self, index: int | None) -> list[dict]:
+    def adb_version(self, exe: str | None) -> str | None:
+        """adb.exe 판 (예: '1.0.41 (34.0.5)'). 모르면 None."""
+        if not exe:
+            return None
+        try:
+            text = self._run(exe, ["version"], CHECK_TIMEOUT).decode("utf-8", errors="replace")
+        except LdError:
+            return None
+        m = re.search(r"version (\d+\.\d+\.\d+)", text)
+        rev = re.search(r"Version ([\d.\-]+)", text)
+        return (m.group(1) + (f" ({rev.group(1)})" if rev else "")) if m else None
+
+    def check(self, index: int | None, other_adb: str | None = None) -> list[dict]:
         """0.98: 연결 점검 — 단계마다 {step, ok, detail, sec}. 누르거나 보내는 것은 없다."""
         rows = []
 
@@ -434,6 +459,17 @@ class Console:
 
         step("ldconsole.exe", lambda: (True, self.path))
         step("adb.exe (LDPlayer 폴더)", lambda: (bool(self.adb_path), self.adb_path or "없음"))
+        if self.adb_path and other_adb and ntpath.normcase(other_adb) != ntpath.normcase(self.adb_path):
+            # 1.01: 문자(휴대폰)용 adb 와 LDPlayer adb 의 판이 다르면 서로 상대의 adb 서버를 끄고 다시 켠다
+            def same_adb():
+                mine, theirs = self.adb_version(self.adb_path), self.adb_version(other_adb)
+                if not mine or not theirs:
+                    return True, f"LDPlayer {mine or '?'} · 문자용 {theirs or '?'} (판을 몰라 비교 못 함)"
+                if mine.split(" ")[0] == theirs.split(" ")[0]:
+                    return True, f"같은 판 {mine.split(' ')[0]} (LDPlayer · 문자용 {other_adb})"
+                return False, (f"LDPlayer {mine} ≠ 문자용 {theirs} ({other_adb}) — 판이 다른 adb 둘이 서로 상대의 adb 서버를 "
+                               "끄고 다시 켜 오류·먹통이 날 수 있습니다. 문자 설정의 adb 위치를 LDPlayer 의 adb.exe 로 같게 하세요")
+            step("adb 판 (문자용 adb 와 같은지)", same_adb)
         step("ld.exe (LDPlayer 폴더)", lambda: (bool(self.ld_path), self.ld_path or "없음"))
         left = self.booting()
         if left is not None:

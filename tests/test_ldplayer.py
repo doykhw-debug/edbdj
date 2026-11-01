@@ -590,3 +590,59 @@ def test_check_all_button(client, data_dir, monkeypatch):
     assert "화면 사진: 못 찍음" in page and (data_dir / "inspect" / "ld_check_kfn.json").exists()
     assert page.index("모두 연결 점검</button>") < page.index("ldplayer/save")              # 저장 폼 밖 (단추가 저장을 누르지 않게)
     ldplayer._cache.clear()
+
+
+# ── 1.01: 'ADB 오류 창이 뜨면서 먹통' ─────────────────────────────────────────
+def test_adb_rests_after_repeated_failures_and_runs_one_at_a_time(tmp_path):
+    ldplayer._cache.clear()
+    calls, held = [], []
+    lock = tmp_path / ldplayer.LOCK_FILE
+
+    def run(args, **kw):
+        calls.append(args)
+        exe = args[0].split("\\")[-1]
+        if exe == "ldconsole.exe" and args[-1] == "get-serialno":
+            return SimpleNamespace(stdout=b"emulator-5554\r\n")
+        if exe == "adb.exe":
+            with ldplayer.one_at_a_time(lock, wait=0) as free:
+                held.append(free)                                             # adb 도는 동안 잠겨 있음
+            raise subprocess.TimeoutExpired(args, 10)                         # 오류 창에 붙잡힘 → 시간 다 됨
+        return SimpleNamespace(stdout=b"")
+    con = ldplayer.Console(r"C:\LDPlayer\LDPlayer9\ldconsole.exe", run=run, exists=lambda p: True, lock_path=lock,
+                           uptime=lambda: None)
+    for t in range(ldplayer.ADB_FAILS):
+        assert con.direct(0, ["shell", "echo"], now=100.0 + t) is None
+    n = sum(1 for a in calls if a[0].endswith("adb.exe"))
+    assert n == ldplayer.ADB_FAILS and held == [False] * n
+    assert con.direct(0, ["shell", "echo"], now=150.0) is None                 # 2분 동안 adb 쉼 (부르지 않음)
+    assert sum(1 for a in calls if a[0].endswith("adb.exe")) == n
+    con.direct(0, ["shell", "echo"], now=100.0 + ldplayer.ADB_PAUSE + 5)        # 쉬고 나면 다시 해 봄
+    assert sum(1 for a in calls if a[0].endswith("adb.exe")) == n + 1
+    ldplayer._cache.clear()
+
+
+def test_check_warns_when_sms_adb_is_another_version(tmp_path):
+    ldplayer._cache.clear()
+
+    def run(args, **kw):
+        exe = args[0].split("\\")[-1]
+        if args[1:] == ["version"]:
+            v = "1.0.41\nVersion 34.0.5" if "platform-tools" in args[0] else "1.0.39\nVersion 0.0.1-4500957"
+            return SimpleNamespace(stdout=f"Android Debug Bridge version {v}\n".encode())
+        if exe == "ldconsole.exe" and args[1] == "list2":
+            return SimpleNamespace(stdout=LIST2.encode())
+        return SimpleNamespace(stdout=b"")
+    con = ldplayer.Console(r"C:\LDPlayer\LDPlayer9\ldconsole.exe", run=run, exists=lambda p: True, uptime=lambda: None)
+    rows = {r["step"]: r for r in con.check(0, other_adb=r"C:\platform-tools\adb.exe")}
+    r = rows["adb 판 (문자용 adb 와 같은지)"]
+    assert not r["ok"] and "1.0.39" in r["detail"] and "1.0.41" in r["detail"] and "같게" in r["detail"]
+    rows = {r["step"]: r for r in con.check(0)}                                 # 문자용 adb 가 없으면 이 단계 없음
+    assert "adb 판 (문자용 adb 와 같은지)" not in rows
+    ldplayer._cache.clear()
+
+
+def test_listener_suppresses_error_boxes():
+    from radio_helper.quizbot import power
+
+    seen = []
+    assert power.quiet_error_boxes(SimpleNamespace(SetErrorMode=lambda m: seen.append(m))) and seen == [0x8003]

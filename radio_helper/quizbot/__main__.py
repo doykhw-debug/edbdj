@@ -527,6 +527,9 @@ def main(argv: list[str] | None = None) -> int:
     # 0.93: 2~4 만 받아 보조 5~10 칸 청취기가 켜지자마자 꺼졌음 (화면에 '신호 없음 · 시작 중'으로 멈춤)
     ap.add_argument("--lane", choices=list(lanes.EXTRA_LANES), help="lane: 동시 청취의 보조 채널 칸 (2~10)")
     args = ap.parse_args(argv)
+    from . import power
+
+    power.quiet_error_boxes()      # 1.01: 띄우는 도구(adb.exe 등)가 오류 창으로 청취기를 붙잡지 않게
     faulthandler.enable()  # 음성 인식 등 내부 라이브러리가 프로그램을 갑자기 끄면 그 위치를 기록 파일에 남긴다
     ignore_ctrl_c()
     if args.command in ("run", "lane", "stt-test", "gpu-check", "device-test"):

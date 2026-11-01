@@ -205,10 +205,19 @@ def test_quiz_retried_every_minute_when_gorilla_really_missing(conn):
     assert len(msgs) == 1                                        # 실패 알림은 한 번만
 
 
+class PressedButFailed(FakeGorilla):
+    """누르긴 했지만 보내지 못한 실패 (창은 있음)."""
+
+    def send(self, text):
+        self.tried.append(text)
+        from radio_helper.quizbot import gorilla
+        return gorilla.SendResult("failed", "입력칸에 글이 들어가지 않아 전송을 누르지 않았습니다")
+
+
 def test_retry_stops_after_set_retries(conn):
     """0.85 사용자 요청: 같은 글이 여러 번 가지 않게 처음 1번 + 다시 N번(0.87: 5번)까지만 해 보고 멈춘다."""
     start_live(conn)
-    sender = FakeGorilla(running=False)
+    sender = PressedButFailed(running=False)
     r, _ = live_runner(conn, {3: "오늘의 퀴즈 정답은 고릴라로"}, ScriptAnswerer([analysis()]), sender, n=60)
     r.run_live()
     q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
@@ -216,6 +225,29 @@ def test_retry_stops_after_set_retries(conn):
     assert len(sender.tried) == 1 + runner.SEND_RETRIES and q["send_tries"] == 1 + runner.SEND_RETRIES
     assert q["decision"].startswith(runner.RETRY_STOP) and "마지막:" in q["decision"]       # 못 보낸 까닭도 남김
     assert not q["approved"] and q["entry_status"] == "pending"
+
+
+def test_closed_chat_window_waits_up_to_20_minutes(conn):
+    """1.01 사용자 요청: 채팅 창이 닫혀 아무것도 못 누른 실패는 5번에 세지 않고 20분까지 1분마다 기다린다."""
+    start_live(conn)
+    sender = FakeGorilla(running=False)                      # '고릴라 창을 찾지 못했습니다' (누르기 전에 막힘)
+    r, _ = live_runner(conn, {3: "오늘의 퀴즈 정답은 고릴라로"}, ScriptAnswerer([analysis()]), sender, n=60)
+    r.run_live()
+    q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
+    assert len(sender.tried) > 1 + runner.SEND_RETRIES and q["decision"].startswith(runner.RETRY_PREFIX)   # 10분째도 기다림
+    msgs = " ".join(m for (m,) in conn.execute("SELECT message FROM events"))
+    assert "채팅 창을 열어 두면 20분 안에 보냅니다" in msgs
+    assert runner.not_pressed("mini 채팅 창이 열려 있지 않음 (지정할 때 크기의 창이 없음)") and not runner.not_pressed("전송 터치·엔터 모두 안 돼")
+
+
+
+def test_closed_chat_window_gives_up_after_20_minutes(conn):
+    start_live(conn)
+    sender = FakeGorilla(running=False)
+    r, _ = live_runner(conn, {3: "오늘의 퀴즈 정답은 고릴라로"}, ScriptAnswerer([analysis()]), sender, n=150)   # 25분
+    r.run_live()
+    q = conn.execute("SELECT * FROM quizzes WHERE source = 'auto'").fetchone()
+    assert q["decision"].startswith("보류:") and not q["approved"] and len(sender.tried) <= 1 + runner.WAIT_RETRIES
 
 
 def test_user_send_after_stop_gets_fresh_tries(client, conn):

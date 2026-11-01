@@ -112,6 +112,11 @@ RETRY_PREFIX = "대기: 전송 못 함 — 1분마다 다시 시도"   # 채팅 
 RETRY_SECONDS = 60
 SEND_RETRIES = 5          # 다시 보내기 횟수 (처음 1번 + 다시 N번). 0.85 에 2번 → 0.87 사용자 요청 5번
 RETRY_STOP = f"보류: 다시 보내기를 {SEND_RETRIES}번 했지만 보내지 못함 — 같은 글이 여러 번 가지 않게 멈춤 (확인 후 직접 보내기)"
+# 1.01 사용자 요청: 채팅 창이 닫혀·없어 아무것도 누르지 못한 실패는 5번에 세지 않고 20분까지 1분마다 기다린다
+# (입력 자체를 못 했으므로 같은 글이 여러 번 갈 일이 없음). 이런 실패의 결과 문구에 들어 있는 말:
+NOT_PRESSED = ("창이 없습니다", "창이 열려 있지 않음", "창을 찾지 못", "창이 꺼져 있습니다", "아직 못 보냄",
+               "화면을 받지 못해", "기다리는 중")
+WAIT_RETRIES = 20         # 위 실패만 이어지면 이만큼(1분 간격 → 약 20분)까지 다시 시도
 CONSENSUS_MIN = 3         # 채팅에서 같은 답이 이만큼 겹치면 그 답을 정답으로 채택
 DJ_WAIT_SECONDS = 120     # 프로그램이 바뀐 뒤 DJ 한마디가 새로 바뀔 때까지 기다리는 시간
 DJ_RETRY_MINUTES = 10     # DJ 한마디를 못 읽었으면 이 간격으로 다시
@@ -1345,12 +1350,18 @@ class Runner:
                 return None
         row = self.conn.execute(f"SELECT send_tries, decision FROM {table} WHERE id = ?", (item_id,)).fetchone()
         tries = row[0] or 0
-        if tries > SEND_RETRIES:      # 처음 1번 + 다시 N번 해 봤으면 그만 (0.85) — 마지막 못 보낸 까닭은 남긴다 (0.87)
-            last = (row[1] or "")[len(RETRY_PREFIX):].strip(" ()") if (row[1] or "").startswith(RETRY_PREFIX) else ""
+        last = (row[1] or "")[len(RETRY_PREFIX):].strip(" ()") if (row[1] or "").startswith(RETRY_PREFIX) else ""
+        waiting = not_pressed(last)   # 1.01: 창이 닫혀 아무것도 못 누른 실패면 20번(약 20분)까지
+        if tries > (WAIT_RETRIES if waiting else SEND_RETRIES):
+            # 처음 1번 + 다시 N번 해 봤으면 그만 (0.85) — 마지막 못 보낸 까닭은 남긴다 (0.87)
+            stop = (f"보류: 채팅 창이 {WAIT_RETRIES}분 동안 열리지 않아 보내지 못함 (확인 후 직접 보내기)" if waiting
+                    else RETRY_STOP)
             self.conn.execute(f"UPDATE {table} SET approved = 0, decision = ?, updated_at = ? WHERE id = ?",
-                              (RETRY_STOP + (f" — 마지막: {last[:160]}" if last else ""), db.now(), item_id))
+                              (stop + (f" — 마지막: {last[:160]}" if last else ""), db.now(), item_id))
             self.conn.commit()
-            db.log(self.conn, "quizbot", f"{label}: 다시 보내기를 {SEND_RETRIES}번 했지만 보내지 못해 멈춤 (확인 후 직접 보내기)")
+            db.log(self.conn, "quizbot", f"{label}: " + (f"채팅 창이 {WAIT_RETRIES}분 동안 열리지 않아 멈춤" if waiting else
+                                                        f"다시 보내기를 {SEND_RETRIES}번 했지만 보내지 못해 멈춤")
+                   + " (확인 후 직접 보내기)")
             return None
         retried[key] = now
         if not (text or "").strip():                 # 0.80: 빈 글은 붙여넣지 않는다 (붙여넣어도 앱이 '메시지를 작성해주세요')
@@ -1403,7 +1414,9 @@ class Runner:
                 if shots:
                     evidence.save(self.conn, table, item_id, app, text, status, shots)
                 db.log(self.conn, "quizbot", f"{label} {config.app_label(app)} 전송 '{text[:60]}' → 못 보냄, "
-                                             f"1분마다 다시 시도 ({detail[:120]})")
+                                             f"1분마다 다시 시도 ({detail[:120]})"
+                       + (f" — {config.app_label(app)} 채팅 창을 열어 두면 {WAIT_RETRIES}분 안에 보냅니다"
+                          if not_pressed(detail) else ""))
             return None
         if shots:   # 증거 사진 (보낸 뒤 채팅 앱 창 / 문자 작성·보낸 화면)
             evidence.save(self.conn, table, item_id, "sms" if route == "sms" else app, text, status, shots)
@@ -1414,6 +1427,11 @@ class Runner:
         via = f"문자({number})" if route == "sms" else config.app_label(app)
         db.log(self.conn, "quizbot", f"{label} {via} 전송 '{text[:60]}' → {quiz.entry_label(status, route)} ({detail})")
         return status
+
+
+def not_pressed(detail: str | None) -> bool:
+    """채팅 창이 닫혀·없어 아무것도 누르지 못한 실패인지 (1.01)."""
+    return any(p in (detail or "") for p in NOT_PRESSED)
 
 
 def _plain(text: str) -> str:
