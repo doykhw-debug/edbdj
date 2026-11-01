@@ -2272,6 +2272,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         return render_template("ldplayer.html", rows=rows, app=app_, instances=instances, error=error,
                                console=qconfig.get(g.conn, "ldplayer.console"), shot=shot, packages=packages,
                                check=check, adb_hint=ldplayer.ADB_HINT,
+                               known=app_ in ldplayer.LD_LAYOUTS,
                                cfg=ldplayer.LdConfig.load(g.conn, app_) if app_ else None,
                                label=qconfig.app_label(app_) if app_ else "",
                                test_message=qconfig.get(g.conn, f"{app_}.test_message") if app_ else "",

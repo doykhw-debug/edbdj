@@ -76,7 +76,9 @@
   {% endif %}
   {% if packages %}<p class="muted">설치된 앱: {% for p in packages %}<code>{{ p }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
   <p>지금 자리 — 입력칸: <b>{{ cfg.input|join(', ') if cfg.input else '없음' }}</b> · 전송 버튼: <b>{{ cfg.send|join(', ') if cfg.send else '없음' }}</b>
-    · 채팅 목록: <b>{{ cfg.chat|join(', ') if cfg.chat else '없음 (화면 전체를 봄)' }}</b></p>
+    · 채팅 목록: <b>{{ cfg.chat|join(', ') if cfg.chat else '없음 (화면 전체를 봄)' }}</b>
+    {% if known and not (cfg.input and cfg.send) %}<br><span class="muted">정하지 않으면 보내 주신 화면으로 잰 <b>알려진 자리</b>를 누릅니다 —
+      바로 '전송 테스트'를 해 보고, 빗나가면 화면 찍기로 정하세요.</span>{% endif %}</p>
   {% if shot %}
   <div class="actions">
     <button type="button" class="secondary" data-target="input" onclick="pick(this)">① 입력칸</button>
@@ -111,7 +113,7 @@
   <div class="actions" style="margin-top:10px">
     <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="send-test">
-      <input type="text" name="test_message" value="{{ test_message }}" style="width:16em"> <button {{ 'disabled' if not (cfg.input and cfg.send) }}>전송 테스트 (실제로 보냄)</button></form>
+      <input type="text" name="test_message" value="{{ test_message }}" style="width:16em"> <button {{ 'disabled' if not ((cfg.input and cfg.send) or known) }}>전송 테스트 (실제로 보냄)</button></form>
     <form method="post" action="{{ url_for('quizbot_tool') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <input type="hidden" name="app" value="{{ app }}"><input type="hidden" name="tool" value="chat-test"><button class="secondary">채팅 목록 찍어 보기</button></form>
   </div>

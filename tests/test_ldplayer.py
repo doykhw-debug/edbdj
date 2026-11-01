@@ -554,4 +554,5 @@ def test_connection_check_page(client, data_dir, monkeypatch):
     client.post("/ldplayer/bandi/check", data={"csrf_token": token})
     page = client.get("/ldplayer?app=bandi").get_data(as_text=True)
     assert "연결 점검 (" in page and "adb 연결 목록" in page and "로컬 연결 열기" in page and "data-busy" in page
+    assert "알려진 자리</b>를 누릅니다" in page and "disabled>전송 테스트" not in page.replace("disabled >", "disabled>")   # 0.99
     ldplayer._cache.clear()
