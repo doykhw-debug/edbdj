@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-11-01, 0.99 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-11-01, 1.00 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -50,6 +50,7 @@
 | 0.97 | PC 켤 때 VBoxManage 0xc0000142: Console.call 이 PC 켠 뒤 BOOT_WAIT(180초)는 ldconsole 안 부름(uptime_seconds=GetTickCount64, LdError '기다리는 중'), one_at_a_time(data/ldconsole.lock, msvcrt.locking·flock, 30초 넘으면 그냥 실행)으로 프로그램 간 하나씩, serial 실패는 1분만 기억(켠 직후는 기억 안 함). 실제 PC 미확인 |
 | 0.98 | 사용자 PC: LDPlayer 화면 사진·wm size 모두 실패(= adb 연결 안 됨, ADB 디버깅 꺼짐 추정) → KFN '자리를 정하지 않았습니다'. Console.ld(ld.exe -s 번호 …) 를 direct adb 다음 대체로(tap·keys·shell·screenshot: stdout PNG 또는 /sdcard/Pictures→내 문서\\XuanZhi9\\Pictures), Console.check + POST /ldplayer/<app>/check(inspect/ld_check_<app>.json, 표), 크기 모르면 list2 크기 세로로, 크기도 없으면 ADB_HINT 오류, data-busy 단추, LOCK_WAIT 15. ld.exe 문법·공유 폴더 경로 실제 PC 미확인 |
 | 0.99 | 사용자가 6창 모두 ADB 디버깅 '로컬 연결'로 켜고 adb 응답 확인함. ldplayer.html 전송 테스트 단추가 cfg.input/send 있을 때만 눌리던 것 → LD_LAYOUTS 앱이면 눌림(known) |
+| 1.00 | POST /ldplayer/check-all(LDPlayer 앱마다 Console.check, inspect/ld_check_all.json, 저장 폼 밖 패널). 사용자 'PC 다운': crashcheck.py — wevtutil qe(System: WER-SystemErrorReporting 1001·Kernel-Power 41(BugcheckCode)·WHEA-Logger·Display 4101·nvlddmkm·Resource-Exhaustion-Detector 2004 / Application: Application Error 1000·Hang 1002, /f:RenderedXml) + GlobalMemoryStatusEx + C 드라이브 + tasklist 묶음 → verdicts(쉬운 말), /pc-check(inspect/pc_check.json). 실제 PC 기록 미확인 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).

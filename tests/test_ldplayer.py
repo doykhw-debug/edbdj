@@ -556,3 +556,37 @@ def test_connection_check_page(client, data_dir, monkeypatch):
     assert "연결 점검 (" in page and "adb 연결 목록" in page and "로컬 연결 열기" in page and "data-busy" in page
     assert "알려진 자리</b>를 누릅니다" in page and "disabled>전송 테스트" not in page.replace("disabled >", "disabled>")   # 0.99
     ldplayer._cache.clear()
+
+
+def test_check_all_button(client, data_dir, monkeypatch):
+    """1.00: '모두 연결 점검' — LDPlayer 로 쓰는 앱을 차례로 점검해 위쪽에 한 줄씩."""
+    ldplayer._cache.clear()
+    LIST6 = "".join(f"{i},{t},1,1,1,{i + 1},{i + 1},900,1600,320\n" for i, t in
+                    enumerate(["경인방송 iFM", "YTN 라디오", "EBS 반디", "KFN Radio 별사탕", "cpbc빵", "극동방송"]))
+
+    def run(args, **kw):
+        exe = args[0].split("\\")[-1]
+        if exe == "ldconsole.exe" and args[1] == "list2":
+            return SimpleNamespace(stdout=LIST6.encode())
+        if exe == "ldconsole.exe" and args[-1] == "get-serialno":
+            return SimpleNamespace(stdout=f"emulator-{5554 + 2 * int(args[3])}\r\n".encode())
+        if exe == "adb.exe" and args[1:] == ["devices"]:
+            return SimpleNamespace(stdout=b"List of devices attached\r\nemulator-5554\tdevice\r\n")
+        if exe == "adb.exe" and "screencap" in args:
+            return SimpleNamespace(stdout=b"" if args[2] == "emulator-5560" else png(False))   # 3번(KFN)만 화면 안 옴
+        if args[-2:] == ["echo", "ok"]:
+            return SimpleNamespace(stdout=b"ok\r\n")
+        if args[-2:] == ["wm", "size"]:
+            return SimpleNamespace(stdout=b"Physical size: 900x1600\r\n")
+        return SimpleNamespace(stdout=b"")
+    con = ldplayer.Console(r"C:\LDPlayer\LDPlayer9\ldconsole.exe", run=run, shot_dir=data_dir,
+                           exists=lambda p: not p.endswith("ld.exe"), uptime=lambda: None)
+    monkeypatch.setattr(ldplayer, "console", lambda c=None, run=None: con)
+    token = csrf(client, "/ldplayer")
+    r = client.post("/ldplayer/check-all", data={"csrf_token": token})
+    assert r.status_code == 302, r.get_data(as_text=True)[-600:]
+    page = client.get("/ldplayer").get_data(as_text=True)
+    assert "모두 연결 점검 (" in page, page[page.find("모두 연결 점검"):][:1500] and page.count("모두 됨 (누르기·화면 찍기 가능)") == 5
+    assert "화면 사진: 못 찍음" in page and (data_dir / "inspect" / "ld_check_kfn.json").exists()
+    assert page.index("모두 연결 점검</button>") < page.index("ldplayer/save")              # 저장 폼 밖 (단추가 저장을 누르지 않게)
+    ldplayer._cache.clear()

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}PC 다운 원인 찾기 · 라디오 참여 도우미{% endblock %}
+{% block content %}
+<h1>PC 다운 원인 찾기 <span class="muted">윈도우 시스템 기록 · 지금 메모리 · C 드라이브</span></h1>
+<p class="muted">윈도우가 스스로 남기는 기록(이벤트 뷰어)에서 최근의 <b>갑자기 꺼짐 · 블루스크린 · 하드웨어 오류 · 그래픽 드라이버 멈춤 ·
+  메모리 부족 · 프로그램 강제 종료</b>를 모아 쉬운 말로 보여 줍니다. 읽기만 하고 아무것도 바꾸지 않습니다.
+  <b>PC 가 다운된 뒤 다시 켜고 바로</b> 눌러 보세요. <a href="{{ url_for('quizbot') }}">← 설정</a></p>
+
+<form method="post" action="{{ url_for('pc_check_run') }}" data-busy="기록을 읽는 중… (최대 1분)" class="actions">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label>최근 <input type="number" name="days" value="{{ result.days if result and result.days else 7 }}" min="1" max="60" style="width:5em">일</label>
+  <button>원인 찾기</button>
+</form>
+
+{% if result %}
+{% if result.error %}<div class="flash warn">{{ result.error }}</div>{% else %}
+<div class="panel">
+  <h2>결론 <span class="muted">{{ result.at }} · 최근 {{ result.days }}일</span></h2>
+  <ul>{% for v in result.verdicts %}<li>{{ v }}</li>{% endfor %}</ul>
+  {% if result.minidumps %}<p class="muted">블루스크린 기록 파일(Minidump): {{ result.minidumps|join(', ') }}</p>{% endif %}
+</div>
+
+<div class="panel table-wrap">
+  <h2>지금 PC 상태</h2>
+  {% set s = result.snapshot %}
+  <p>{% if s.phys_total %}실제 메모리 <b>{{ s.phys_total }}MB</b> 중 남음 {{ s.phys_free }}MB ·
+     더 쓸 수 있는 메모리(가상 메모리 파일 포함) <b>{{ s.commit_free }}MB</b> / {{ s.commit_total }}MB{% endif %}
+     {% if s.disk_free_gb %} · C 드라이브 남음 <b>{{ s.disk_free_gb }}GB</b> / {{ s.disk_total_gb }}GB{% endif %}</p>
+  {% if result.top %}
+  <table><tr><th>프로그램 (메모리 많이 쓰는 순, 위쪽은 묶음)</th><th>메모리</th><th>개수</th></tr>
+    {% for t in result.top %}<tr><td>{{ t.name }}</td><td>{{ t.mb }}MB</td><td>{{ t.n }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+<div class="panel table-wrap">
+  <h2>윈도우 기록</h2>
+  <table><tr><th>종류</th><th>횟수</th><th>최근</th><th>뜻</th></tr>
+    {% for c in result.cats %}<tr><td><b>{{ c.label }}</b></td>
+      <td><span class="badge {{ 'warn' if c.count else 'ok' }}">{{ c.count }}</span></td><td>{{ c.last }}</td><td class="muted">{{ c.explain }}</td></tr>
+      {% for it in c["items"] %}<tr><td></td><td></td><td>{{ it.time }}</td><td><code style="white-space:pre-wrap">{{ it.detail }}</code></td></tr>{% endfor %}
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endif %}
+<script>
+  document.querySelectorAll('form[data-busy]').forEach(f => f.addEventListener('submit', () => {
+    const b = f.querySelector('button'); if (b) { b.disabled = true; b.textContent = f.dataset.busy; }
+  }));
+</script>
+{% endblock %}

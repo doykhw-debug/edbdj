@@ -9,6 +9,24 @@
 
 {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
 
+<div class="panel">
+  <h2>모두 연결 점검</h2>
+  <div class="actions" id="check-all" style="margin-top:8px">
+    <form method="post" action="{{ url_for('ldplayer_check_all') }}" data-busy="6곳 연결 점검 중… (최대 몇 분)"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>모두 연결 점검</button></form>
+    <span class="muted">LDPlayer 로 쓰는 앱을 차례로 점검합니다 (누르거나 보내는 것은 없음).</span>
+  </div>
+  {% if check_all %}
+  <table style="margin-top:8px">
+    <tr><th>앱</th><th>창</th><th>결과</th><th>내용</th><th>걸린 시간</th></tr>
+    {% for r in check_all.rows %}<tr><td>{% if r.app %}<a href="{{ url_for('ldplayer_page', app=r.app) }}#check">{{ r.label }}</a>{% else %}{{ r.label }}{% endif %}</td>
+      <td>{{ r.index if r.index is not none else '?' }}</td>
+      <td><span class="badge {{ 'ok' if r.ok else 'warn' }}">{{ '됨' if r.ok else '안 됨' }}</span></td>
+      <td>{{ r.detail }}</td><td>{{ r.sec }}초</td></tr>{% endfor %}
+  </table>
+  <p class="muted">모두 연결 점검 ({{ check_all.at }}). 앱 이름을 누르면 단계별 결과와 '전송 테스트'가 있습니다.</p>
+  {% endif %}
+</div>
+
 <form method="post" action="{{ url_for('ldplayer_save') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="app" value="{{ app }}">
 <div class="panel">

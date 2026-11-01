@@ -2261,6 +2261,10 @@ def create_app(data_dir: str | None = None) -> Flask:
                          "ready": (cfg.index is not None or matched is not None)
                          and ((cfg.input is not None and cfg.send is not None) or key in ldplayer.LD_LAYOUTS)})
         shot, check = None, None
+        try:
+            check_all = json.loads((db.data_dir() / "inspect" / "ld_check_all.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            check_all = None
         if app_:
             f = db.data_dir() / "inspect" / f"ld_{app_}.png"
             if f.exists():
@@ -2272,7 +2276,7 @@ def create_app(data_dir: str | None = None) -> Flask:
         return render_template("ldplayer.html", rows=rows, app=app_, instances=instances, error=error,
                                console=qconfig.get(g.conn, "ldplayer.console"), shot=shot, packages=packages,
                                check=check, adb_hint=ldplayer.ADB_HINT,
-                               known=app_ in ldplayer.LD_LAYOUTS,
+                               known=app_ in ldplayer.LD_LAYOUTS, check_all=check_all,
                                cfg=ldplayer.LdConfig.load(g.conn, app_) if app_ else None,
                                label=qconfig.app_label(app_) if app_ else "",
                                test_message=qconfig.get(g.conn, f"{app_}.test_message") if app_ else "",
@@ -2362,6 +2366,44 @@ def create_app(data_dir: str | None = None) -> Flask:
         flash("연결 점검을 마쳤습니다. 아래 결과를 보세요." if bad else "연결 점검: 모두 됩니다.", "warn" if bad else "message")
         return redirect(url_for("ldplayer_page", app=app_) + "#check")
 
+    @app.post("/ldplayer/check-all")
+    def ldplayer_check_all():
+        """1.00: LDPlayer 로 쓰는 앱 모두 연결 점검 (앱마다 결과도 저장, 위쪽에 한 줄씩)."""
+        from .quizbot import ldplayer
+
+        summary = []
+        try:
+            con = ld_console()
+            instances = con.instances()
+        except Exception as e:
+            con, instances = None, []
+            summary.append({"app": "", "label": "LDPlayer", "ok": False, "detail": str(e), "sec": 0})
+        out = db.data_dir() / "inspect"
+        out.mkdir(exist_ok=True)
+        for key in qconfig.CHAT_APPS:
+            if con is None or qconfig.platform(g.conn, key) != "ldplayer":
+                continue
+            cfg = ldplayer.LdConfig.load(g.conn, key)
+            found = ldplayer.match_instance(key, instances) if cfg.index is None else None
+            index = cfg.index if cfg.index is not None else (found["index"] if found else None)
+            try:
+                rows = con.check(index)
+            except Exception as e:
+                rows = [{"step": "점검", "ok": False, "detail": str(e), "sec": 0}]
+            (out / f"ld_check_{key}.json").write_text(json.dumps({"at": db.now(), "rows": rows}, ensure_ascii=False),
+                                                      encoding="utf-8")
+            bad = [r for r in rows if not r["ok"]]
+            summary.append({"app": key, "label": qconfig.app_label(key), "index": index, "ok": not bad,
+                            "detail": "모두 됨 (누르기·화면 찍기 가능)" if not bad else
+                            " · ".join(f"{r['step']}: {str(r['detail'])[:80]}" for r in bad[:3]),
+                            "sec": round(sum(r["sec"] for r in rows), 1)})
+        (out / "ld_check_all.json").write_text(json.dumps({"at": db.now(), "rows": summary}, ensure_ascii=False),
+                                               encoding="utf-8")
+        n_ok = sum(1 for r in summary if r["ok"])
+        db.log(g.conn, "quizbot", f"LDPlayer 모두 연결 점검: {n_ok}/{len(summary)} 됨")
+        flash(f"모두 연결 점검: {len(summary)}곳 중 {n_ok}곳 됨", "message" if n_ok == len(summary) else "warn")
+        return redirect(url_for("ldplayer_page") + "#check-all")
+
     @app.post("/ldplayer/<app_>/run")
     def ldplayer_run(app_):
         """그 창에서 앱을 켠다 (패키지를 정했을 때만, LDPlayer 창이 꺼져 있으면 먼저 켬)."""
@@ -2384,6 +2426,30 @@ def create_app(data_dir: str | None = None) -> Flask:
         except Exception as e:
             flash(f"앱을 켜지 못했습니다: {e}", "error")
         return redirect(url_for("ldplayer_page", app=app_))
+
+    # ── PC 다운 원인 찾기 (1.00) ─────────────────────────────────
+    def pc_check_file():
+        return db.data_dir() / "inspect" / "pc_check.json"
+
+    @app.get("/pc-check")
+    def pc_check_page():
+        try:
+            result = json.loads(pc_check_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            result = None
+        return render_template("pccheck.html", result=result)
+
+    @app.post("/pc-check")
+    def pc_check_run():
+        from . import crashcheck
+
+        days = request.form.get("days", type=int) or crashcheck.DAYS
+        result = crashcheck.scan(days=max(1, min(days, 60)))
+        result["at"] = db.now()
+        pc_check_file().parent.mkdir(exist_ok=True)
+        pc_check_file().write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+        db.log(g.conn, "system", "PC 다운 원인 찾기: " + " / ".join(result.get("verdicts") or [result.get("error", "")])[:300])
+        return redirect(url_for("pc_check_page"))
 
     # ── 보낸 증거 사진 ──────────────────────────────────────────
     @app.get("/evidence")
