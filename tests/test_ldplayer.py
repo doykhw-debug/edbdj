@@ -468,3 +468,90 @@ def test_ldconsole_runs_one_at_a_time_across_programs(tmp_path):
     ldplayer.Console("ldconsole.exe", run=run, lock_path=lock, uptime=lambda: 9999).instances()
     assert seen == [False]
     ldplayer._cache.clear()
+
+
+# ── 0.98: 사용자 PC — LDPlayer 창 위치를 전혀 못 찾고 채팅도 못 보냄 (화면 사진·크기 모두 못 받음 = adb 연결 안 됨) ──────
+def test_ld_exe_is_used_when_adb_does_not_answer(tmp_path):
+    ldplayer._cache.clear()
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        exe = args[0].split("\\")[-1]
+        if exe == "ld.exe" and args[3:] == ["wm", "size"]:
+            return SimpleNamespace(stdout=b"Physical size: 900x1600\r\n")
+        if exe == "ld.exe" and args[3:5] == ["screencap", "-p"] and len(args) == 5:
+            return SimpleNamespace(stdout=png(False).replace(b"\n", b"\r\n"))       # 줄바꿈이 바뀌어 나와도
+        return SimpleNamespace(stdout=b"error: no devices/emulators found\r\n")   # adb 디버깅이 꺼진 창
+
+    con = ldplayer.Console(r"C:\LDPlayer\LDPlayer9\ldconsole.exe", run=run, shot_dir=tmp_path,
+                           exists=lambda p: not p.endswith("adb.exe"), uptime=lambda: None)
+    con.tap(3, (10, 20))
+    assert calls[-1] == [r"C:\LDPlayer\LDPlayer9\ld.exe", "-s", "3", "input", "tap", "10", "20"]
+    assert con.screen_size(3) == (900, 1600)
+    assert con.screenshot(3)[:8] == b"\x89PNG\r\n\x1a\n"
+    ldplayer._cache.clear()
+
+
+def test_ld_screenshot_from_shared_pictures_folder(tmp_path):
+    def run(args, **kw):
+        if args[3:5] == ["screencap", "-p"] and len(args) == 6:                  # 창 안 /sdcard/Pictures 에 저장
+            pics = tmp_path / "Documents" / "XuanZhi9" / "Pictures"
+            pics.mkdir(parents=True, exist_ok=True)
+            (pics / "rh_ld2.png").write_bytes(png(True))
+        return SimpleNamespace(stdout=b"")
+    con = ldplayer.Console(r"C:\LD\ldconsole.exe", run=run, exists=lambda p: p.endswith("ld.exe"), uptime=lambda: None)
+    assert con._ld_screenshot(2, home=tmp_path)[:4] == b"\x89PNG"
+
+
+class BlindConsole(FakeConsole):
+    """화면 사진도 화면 크기도 못 받는 창 (adb 디버깅 꺼짐)."""
+
+    def instances(self):
+        return [{"index": 0, "title": "KFN Radio 별사탕", "started": True, "pid": 1, "vbox_pid": 2, "size": (1600, 900)}]
+
+    def screenshot(self, index):
+        return None
+
+    def screen_size(self, index):
+        return None
+
+
+def test_unknown_screen_uses_window_size_portrait_and_explains(conn):
+    con = BlindConsole()
+    s = ldplayer.LdSender(ldplayer.LdConfig(app="kfn", index=0), make_console=lambda: con, sleep=lambda s: None)
+    r = s.send("정답")
+    taps = [e[1] for e in con.log if e[0] == "tap"]
+    assert taps[0] == ldplayer.layout_point("kfn", "input", (900, 1600))           # 가로로 적힌 크기도 세로로 맞춰 계산
+    assert "창 설정 크기(900×1600)" in r.detail and r.status == "unknown"
+
+    class NoSize(BlindConsole):
+        def instances(self):
+            return [{"index": 0, "title": "KFN", "started": True, "pid": 1, "vbox_pid": 2}]
+    r = ldplayer.LdSender(ldplayer.LdConfig(app="kfn", index=0), make_console=NoSize, sleep=lambda s: None).send("정답")
+    assert r.status == "failed" and "연결 점검" in r.detail and "ADB 디버깅" in r.detail and "정하지 않았습니다" not in r.detail
+
+
+def test_connection_check_page(client, data_dir, monkeypatch):
+    ldplayer._cache.clear()
+
+    def run(args, **kw):
+        exe = args[0].split("\\")[-1]
+        if exe == "ldconsole.exe" and args[1] == "list2":
+            return SimpleNamespace(stdout=LIST2.encode())
+        if exe == "adb.exe" and args[1:] == ["devices"]:
+            return SimpleNamespace(stdout=b"List of devices attached\r\n\r\n")
+        return SimpleNamespace(stdout=b"error: no devices/emulators found")
+    con = ldplayer.Console(r"C:\LDPlayer\LDPlayer9\ldconsole.exe", run=run, shot_dir=data_dir, exists=lambda p: True,
+                           uptime=lambda: None)
+    rows = {r["step"]: r for r in con.check(0)}
+    assert rows["창 목록 (ldconsole list2)"]["ok"] and "0번 반디창(켜짐)" in rows["창 목록 (ldconsole list2)"]["detail"]
+    assert not rows["adb 연결 목록 (adb devices)"]["ok"] and not rows["화면 사진"]["ok"]
+    assert not rows["0번 창 adb 이름 (get-serialno)"]["ok"] and not rows["ld.exe 로 명령"]["ok"]
+
+    monkeypatch.setattr(ldplayer, "console", lambda c=None, run=None: con)
+    token = csrf(client, "/ldplayer")
+    client.post("/ldplayer/bandi/check", data={"csrf_token": token})
+    page = client.get("/ldplayer?app=bandi").get_data(as_text=True)
+    assert "연결 점검 (" in page and "adb 연결 목록" in page and "로컬 연결 열기" in page and "data-busy" in page
+    ldplayer._cache.clear()

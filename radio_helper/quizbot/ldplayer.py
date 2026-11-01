@@ -140,7 +140,12 @@ SERIAL_RE = re.compile(r"^(emulator-\d+|127\.0\.0\.1:\d+|localhost:\d+)$")
 _cache: dict = {}        # 이 프로그램 안에서 함께 씀 (보낼 때마다 Console 을 새로 만들어도)
 BOOT_WAIT = 180          # 0.97: PC 를 켠 뒤 이만큼(초)은 ldconsole 을 부르지 않는다 (LDPlayer 가 자리 잡을 때까지)
 LOCK_FILE = "ldconsole.lock"
-LOCK_WAIT = 30           # 0.97: 다른 청취기의 ldconsole 명령이 끝나기를 기다리는 최대 시간 (넘으면 그냥 실행)
+LOCK_WAIT = 15           # 0.97: 다른 청취기의 ldconsole 명령이 끝나기를 기다리는 최대 시간 (넘으면 그냥 실행, 0.98: 30 → 15)
+CHECK_TIMEOUT = 6        # 0.98: 연결 점검의 단계마다 기다리는 시간
+# 0.98: ld.exe 로 찍은 화면이 저장되는 PC 쪽 공유 폴더 (LDPlayer 의 /sdcard/Pictures ↔ 내 문서\XuanZhi9\Pictures)
+SHARED_PICTURES = ("XuanZhi9", "XuanZhi64", "XuanZhi", "leidian9")
+ADB_HINT = ("LDPlayer 창의 설정(톱니) → 기타 설정 → 'ADB 디버깅'을 '로컬 연결 열기'로 바꾸고 저장한 뒤 그 창을 다시 시작하세요 "
+            "(창마다 따로 설정)")
 
 
 def uptime_seconds() -> float | None:
@@ -228,6 +233,8 @@ class Console:
         self.lock_path, self.uptime = lock_path, uptime
         adb = ntpath.join(ntpath.dirname(path), "adb.exe")
         self.adb_path = adb if exists(adb) else None
+        ld = ntpath.join(ntpath.dirname(path), "ld.exe")      # 0.98: adb 없이 그 창 안에서 명령 (ld -s 번호 …)
+        self.ld_path = ld if exists(ld) else None
 
     def _run(self, exe: str, args: list[str], timeout: int) -> bytes:
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -303,15 +310,29 @@ class Console:
             _cache.pop(("serial", self.path, index), None)      # 연결 이름이 바뀌었을 수 있음 → 다음에 다시 물음
             return None
 
+    def ld(self, index: int, args: list[str], timeout: int = 10) -> bytes | None:
+        """0.98: ld.exe 로 그 창 안에서 안드로이드 명령 (adb 디버깅이 꺼져 있어도 됨). ld.exe 가 없거나 실패하면 None."""
+        if not self.ld_path or self.booting() is not None:
+            return None
+        try:
+            with one_at_a_time(self.lock_path):
+                return self._run(self.ld_path, ["-s", str(index), *args], timeout)
+        except LdError:
+            return None
+
+    def _command(self, index: int, args: list[str]) -> None:
+        """안드로이드 명령 (args 는 'shell' 다음): adb.exe 바로 → ld.exe → ldconsole adb 차례로."""
+        if self.direct(index, ["shell", *args]) is not None:
+            return
+        if self.ld(index, args) is not None:
+            return
+        self.adb(index, "shell " + " ".join(args))
+
     def tap(self, index: int, point: tuple[int, int]) -> None:
-        args = ["shell", "input", "tap", str(int(point[0])), str(int(point[1]))]
-        if self.direct(index, args) is None:
-            self.adb(index, " ".join(args))
+        self._command(index, ["input", "tap", str(int(point[0])), str(int(point[1]))])
 
     def keys(self, index: int, *codes: int) -> None:
-        args = ["shell", "input", "keyevent", *(str(c) for c in codes)]
-        if self.direct(index, args) is None:
-            self.adb(index, " ".join(args))
+        self._command(index, ["input", "keyevent", *(str(c) for c in codes)])
 
     def clear(self, index: int) -> None:
         self.keys(index, KEY_MOVE_END, *([KEY_DEL] * CLEAR_KEYS))
@@ -319,6 +340,8 @@ class Console:
     def shell(self, index: int, *args: str) -> str:
         """그 창에서 안드로이드 명령 (글자로 결과)."""
         out = self.direct(index, ["shell", *args])
+        if out is None:
+            out = self.ld(index, list(args))
         if out is None:
             return self.adb(index, "shell " + " ".join(args))
         return out.decode("utf-8", errors="replace")
@@ -356,6 +379,9 @@ class Console:
         data = self.direct(index, ["exec-out", "screencap", "-p"], timeout=15)
         if data and data[:4] == b"\x89PNG":
             return bytes(data)
+        got = self._ld_screenshot(index)
+        if got:
+            return got
         folder = self.shot_dir or Path(".")
         folder.mkdir(parents=True, exist_ok=True)
         local = folder / f"ld{index}_screen.png"
@@ -369,6 +395,77 @@ class Console:
             return local.read_bytes() if local.exists() else None
         except (LdError, OSError):
             return None
+
+    def _ld_screenshot(self, index: int, home: Path | None = None) -> bytes | None:
+        """0.98: ld.exe 로 화면 찍기 — 바로 받거나(PNG 가 그대로 나오면), 공유 폴더(/sdcard/Pictures)에 저장해 PC 에서 읽음."""
+        if not self.ld_path:
+            return None
+        data = self.ld(index, ["screencap", "-p"], timeout=15)
+        if data and data[:4] == b"\x89PNG":
+            if data[4:8] == b"\r\r\n\x1a":                  # 줄바꿈이 바뀌어 나온 경우 되돌림
+                data = data.replace(b"\r\n", b"\n")
+            if data[4:7] == b"\r\n\x1a":
+                return bytes(data)
+        name = f"rh_ld{index}.png"
+        if self.ld(index, ["screencap", "-p", f"/sdcard/Pictures/{name}"], timeout=15) is None:
+            return None
+        docs = (home or Path.home()) / "Documents"
+        for folder in SHARED_PICTURES:
+            f = docs / folder / "Pictures" / name
+            try:
+                if f.exists() and time.time() - f.stat().st_mtime < 60:
+                    return f.read_bytes()
+            except OSError:
+                continue
+        return None
+
+    def check(self, index: int | None) -> list[dict]:
+        """0.98: 연결 점검 — 단계마다 {step, ok, detail, sec}. 누르거나 보내는 것은 없다."""
+        rows = []
+
+        def step(name, fn):
+            t = time.monotonic()
+            try:
+                ok, detail = fn()
+            except Exception as e:
+                ok, detail = False, f"{type(e).__name__}: {str(e)[:200]}"
+            rows.append({"step": name, "ok": ok, "detail": detail, "sec": round(time.monotonic() - t, 1)})
+            return ok
+
+        step("ldconsole.exe", lambda: (True, self.path))
+        step("adb.exe (LDPlayer 폴더)", lambda: (bool(self.adb_path), self.adb_path or "없음"))
+        step("ld.exe (LDPlayer 폴더)", lambda: (bool(self.ld_path), self.ld_path or "없음"))
+        left = self.booting()
+        if left is not None:
+            rows.append({"step": "PC 켠 직후", "ok": False, "detail": f"{left:.0f}초 뒤부터 LDPlayer 명령을 씁니다", "sec": 0})
+            return rows
+        _cache.pop(("list2", self.path), None)
+        if not step("창 목록 (ldconsole list2)", lambda: (lambda r: (bool(r), f"{len(r)}개: " + ", ".join(
+                f"{i['index']}번 {i['title']}({'켜짐' if i['started'] else '꺼짐'})" for i in r)))(self.instances())):
+            return rows
+        if index is None:
+            rows.append({"step": "창 번호", "ok": False, "detail": "몇 번 창인지 모릅니다 (창 이름을 앱 이름으로 바꾸거나 창 번호를 고르세요)",
+                         "sec": 0})
+            return rows
+        _cache.pop(("serial", self.path, index), None)
+        if self.adb_path:
+            step("adb 연결 목록 (adb devices)", lambda: (lambda o: ("device" in o.replace("List of devices attached", ""),
+                                                                 o.strip()[:300] or "(빈 결과)"))(
+                self._run(self.adb_path, ["devices"], CHECK_TIMEOUT).decode("utf-8", errors="replace")))
+        step(f"{index}번 창 adb 이름 (get-serialno)", lambda: (lambda o: (bool(SERIAL_RE.match(o.strip().splitlines()[-1].strip()))
+                                                                        if o.strip() else False, o.strip()[:300] or "(빈 결과)"))(
+            self.call("adb", "--index", str(index), "--command", "get-serialno", timeout=CHECK_TIMEOUT)))
+        if self.adb_path:
+            step("adb 로 바로 명령", lambda: (lambda o: (o is not None and b"ok" in o, "응답 없음" if o is None else
+                                                    o.decode("utf-8", errors="replace").strip()[:200]))(
+                self.direct(index, ["shell", "echo", "ok"], timeout=CHECK_TIMEOUT)))
+        if self.ld_path:
+            step("ld.exe 로 명령", lambda: (lambda o: (o is not None and b"ok" in o, "응답 없음" if o is None else
+                                                  o.decode("utf-8", errors="replace").strip()[:200]))(
+                self.ld(index, ["echo", "ok"], timeout=CHECK_TIMEOUT)))
+        step("화면 크기 (wm size)", lambda: (lambda z: (z is not None, f"{z[0]}×{z[1]}" if z else "모름"))(self.screen_size(index)))
+        step("화면 사진", lambda: (lambda b: (bool(b), f"{len(b) // 1024}KB" if b else "못 찍음"))(self.screenshot(index)))
+        return rows
 
     def packages(self, index: int) -> list[str]:
         text = self.adb(index, "shell pm list packages -3")
@@ -534,6 +631,9 @@ class LdSender:
         size = before.size if before is not None else self._screen_size(con, index)
         inp, snd = self._points(size)
         if inp is None or snd is None:
+            if size is None:              # 0.98: 자리를 안 정한 게 아니라 LDPlayer 와 연결이 안 됨 (화면 사진·크기 모두 못 받음)
+                raise LdError(f"{label}: LDPlayer {index}번 창의 화면을 받지 못해 누를 자리를 계산하지 못했습니다 — "
+                              f"'LDPlayer 설정'의 '연결 점검'을 눌러 보세요. {ADB_HINT}")
             raise LdError(f"{label}: 입력칸·전송 버튼 자리를 정하지 않았습니다 ('LDPlayer 설정'에서 화면 사진을 눌러 정하세요)")
         # 0.96: 어디까지 했는지 결과에 남긴다 (보내지 못했을 때 원인을 바로 찾게)
         self.trace = [f"화면 {size[0]}×{size[1]}" if size else "화면 크기 모름",
@@ -593,9 +693,15 @@ class LdSender:
 
     def _screen_size(self, con, index: int) -> tuple[int, int] | None:
         try:
-            return con.screen_size(index) if hasattr(con, "screen_size") else None
+            size = con.screen_size(index) if hasattr(con, "screen_size") else None
         except Exception:
-            return None
+            size = None
+        if size is None and getattr(self, "_size", None):
+            # 0.98: 안드로이드에 못 물으면 LDPlayer 창 목록의 크기 (6곳 앱은 모두 세로 화면 → 세로로 맞춤)
+            w, h = self._size
+            size = (min(w, h), max(w, h))
+            self.fixes.append(f"화면 크기를 못 물어 LDPlayer 창 설정 크기({size[0]}×{size[1]})로 계산")
+        return size
 
     def send_test(self, text: str) -> tuple[SendResult, str]:
         result = self.send(text)

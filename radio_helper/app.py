@@ -2260,13 +2260,18 @@ def create_app(data_dir: str | None = None) -> Flask:
                          "platform": qconfig.platform(g.conn, key), "cfg": cfg, "matched": matched,
                          "ready": (cfg.index is not None or matched is not None)
                          and ((cfg.input is not None and cfg.send is not None) or key in ldplayer.LD_LAYOUTS)})
-        shot = None
+        shot, check = None, None
         if app_:
             f = db.data_dir() / "inspect" / f"ld_{app_}.png"
             if f.exists():
                 shot = {"file": f.name, "v": int(f.stat().st_mtime)}
+            try:
+                check = json.loads((db.data_dir() / "inspect" / f"ld_check_{app_}.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                check = None
         return render_template("ldplayer.html", rows=rows, app=app_, instances=instances, error=error,
                                console=qconfig.get(g.conn, "ldplayer.console"), shot=shot, packages=packages,
+                               check=check, adb_hint=ldplayer.ADB_HINT,
                                cfg=ldplayer.LdConfig.load(g.conn, app_) if app_ else None,
                                label=qconfig.app_label(app_) if app_ else "",
                                test_message=qconfig.get(g.conn, f"{app_}.test_message") if app_ else "",
@@ -2328,6 +2333,33 @@ def create_app(data_dir: str | None = None) -> Flask:
         db.log(g.conn, "quizbot", f"[{qconfig.app_label(app_)}] LDPlayer {target} 자리 저장: {form('value')}")
         flash({"input": "입력칸", "send": "전송 버튼", "chat": "채팅 목록"}[target] + " 자리를 저장했습니다.")
         return redirect(url_for("ldplayer_page", app=app_) + "#calibrate")
+
+    @app.post("/ldplayer/<app_>/check")
+    def ldplayer_check(app_):
+        """0.98: 연결 점검 — LDPlayer 와 adb 연결이 되는지 단계마다 확인해 보인다 (누르거나 보내지 않음)."""
+        from .quizbot import ldplayer
+
+        if app_ not in qconfig.CHAT_APPS:
+            abort(404)
+        try:
+            con = ld_console()
+            cfg = ldplayer.LdConfig.load(g.conn, app_)
+            index = cfg.index
+            if index is None:
+                found = ldplayer.match_instance(app_, con.instances())
+                index = found["index"] if found else None
+            rows = con.check(index)
+        except Exception as e:
+            rows = [{"step": "ldconsole.exe", "ok": False, "detail": str(e), "sec": 0}]
+        out = db.data_dir() / "inspect"
+        out.mkdir(exist_ok=True)
+        (out / f"ld_check_{app_}.json").write_text(json.dumps({"at": db.now(), "rows": rows}, ensure_ascii=False),
+                                                   encoding="utf-8")
+        bad = [r["step"] for r in rows if not r["ok"]]
+        db.log(g.conn, "quizbot", f"[{qconfig.app_label(app_)}] LDPlayer 연결 점검: "
+               + ("모두 됨" if not bad else "안 됨 — " + ", ".join(bad)))
+        flash("연결 점검을 마쳤습니다. 아래 결과를 보세요." if bad else "연결 점검: 모두 됩니다.", "warn" if bad else "message")
+        return redirect(url_for("ldplayer_page", app=app_) + "#check")
 
     @app.post("/ldplayer/<app_>/run")
     def ldplayer_run(app_):

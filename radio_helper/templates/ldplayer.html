@@ -22,6 +22,8 @@
       <td><span class="badge {{ 'ok' if i.started else 'warn' }}">{{ '켜짐' if i.started else '꺼짐' }}</span></td></tr>{% endfor %}
   </table>
   {% elif not error %}<p class="muted">LDPlayer 창이 없습니다. 다중 실행기에서 창을 만들어 주세요.</p>{% endif %}
+  <p class="muted">도우미가 창을 누르고 화면을 찍으려면 LDPlayer 창마다 <b>ADB 디버깅</b>이 켜져 있어야 합니다:
+    {{ adb_hint }}. 잘 되는지는 아래 앱 이름을 눌러 '연결 점검'으로 확인하세요.</p>
 </div>
 
 <div class="panel table-wrap">
@@ -56,10 +58,22 @@
   <p class="muted">① '화면 찍기'로 지금 창 화면을 가져온 뒤 ② 아래 단추를 고르고 사진에서 그 자리를 누르세요.
     채팅 목록은 왼쪽 위 → 오른쪽 아래 두 번 누릅니다. 채팅을 연 화면(입력칸이 보이는 화면)에서 찍어야 합니다.</p>
   <div class="actions">
-    <form method="post" action="{{ url_for('ldplayer_shot', app_=app) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>화면 찍기</button></form>
+    <form method="post" action="{{ url_for('ldplayer_check', app_=app) }}" data-busy="연결 점검 중… (최대 1분)"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>연결 점검</button></form>
+    <form method="post" action="{{ url_for('ldplayer_shot', app_=app) }}" data-busy="화면 찍는 중… (최대 1분)"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button>화면 찍기</button></form>
     {% if cfg.package %}<form method="post" action="{{ url_for('ldplayer_run', app_=app) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="secondary">앱 켜기</button></form>{% endif %}
     <a class="btn secondary" href="{{ url_for('ldplayer_page', app=app, pk=1) }}">설치된 앱 패키지 보기</a>
   </div>
+  {% if check %}
+  <div id="check" class="table-wrap">
+    <p class="muted">연결 점검 ({{ check.at }}) — 누르거나 보내는 것은 없습니다.</p>
+    <table><tr><th>단계</th><th>결과</th><th>내용</th><th>걸린 시간</th></tr>
+      {% for r in check.rows %}<tr><td>{{ r.step }}</td><td><span class="badge {{ 'ok' if r.ok else 'warn' }}">{{ '됨' if r.ok else '안 됨' }}</span></td>
+        <td><code style="white-space:pre-wrap">{{ r.detail }}</code></td><td>{{ r.sec }}초</td></tr>{% endfor %}
+    </table>
+    {% if check.rows|rejectattr('ok')|list %}<p class="flash warn">화면 크기·화면 사진이 '안 됨'이면 도우미가 그 창을 누를 수 없습니다. {{ adb_hint }}.
+      그다음 다시 '연결 점검'을 눌러 보세요. 그래도 안 되면 이 표를 사진으로 보내 주세요.</p>{% endif %}
+  </div>
+  {% endif %}
   {% if packages %}<p class="muted">설치된 앱: {% for p in packages %}<code>{{ p }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>{% endif %}
   <p>지금 자리 — 입력칸: <b>{{ cfg.input|join(', ') if cfg.input else '없음' }}</b> · 전송 버튼: <b>{{ cfg.send|join(', ') if cfg.send else '없음' }}</b>
     · 채팅 목록: <b>{{ cfg.chat|join(', ') if cfg.chat else '없음 (화면 전체를 봄)' }}</b></p>
@@ -104,4 +118,10 @@
   {% for s in shots %}<p class="muted">{{ s.label }} ({{ s.at }})</p><img src="{{ url_for('inspect_image', name=s.file) }}?v={{ s.v }}" style="max-width:100%;max-height:60vh">{% endfor %}
 </div>
 {% endif %}
+<script>
+  // 0.98: 오래 걸리는 단추는 누르면 바로 '하는 중' 표시 (예전엔 반응이 없는 것처럼 보였음)
+  document.querySelectorAll('form[data-busy]').forEach(f => f.addEventListener('submit', () => {
+    const b = f.querySelector('button'); if (b) { b.disabled = true; b.textContent = f.dataset.busy; }
+  }));
+</script>
 {% endblock %}
