@@ -547,7 +547,7 @@ def test_connection_check_page(client, data_dir, monkeypatch):
     rows = {r["step"]: r for r in con.check(0)}
     assert rows["창 목록 (ldconsole list2)"]["ok"] and "0번 반디창(켜짐)" in rows["창 목록 (ldconsole list2)"]["detail"]
     assert not rows["adb 연결 목록 (adb devices)"]["ok"] and not rows["화면 사진"]["ok"]
-    assert not rows["0번 창 adb 이름 (get-serialno)"]["ok"] and not rows["ld.exe 로 명령"]["ok"]
+    assert not rows["0번 창 adb 이름 (get-serialno)"]["ok"] and not rows["ld.exe 로 명령 (adb 가 안 될 때 대신)"]["ok"]
 
     monkeypatch.setattr(ldplayer, "console", lambda c=None, run=None: con)
     token = csrf(client, "/ldplayer")
@@ -741,3 +741,60 @@ def test_collapsed_chat_panel_is_opened_then_found_by_id(conn):
     ldplayer.LdSender(ldplayer.LdConfig(app="kfn", index=0, input=(240, 742), send=(442, 742)),
                       make_console=lambda: con2, sleep=lambda s: None).send("정답")
     assert con2.dumps == 0 and not any(e[0] == "swipe" for e in con2.log)
+
+
+# ── 1.04: 사용자 '모두 연결 점검: 6곳 중 0곳 됨' — 4곳은 adb 가 되는데 ld.exe 'not found emulator!' 로 안 됨, 2곳은 창이 꺼짐 ──
+def ld_console_with(run):
+    return ldplayer.Console(r"C:\LDPlayer\LDPlayer9\ldconsole.exe", run=run, exists=lambda p: True, uptime=lambda: None)
+
+
+LIST_OFF = ("0,경인방송 iFM,1,1,1,11,12,540,960,240\n4,cpbc빵,0,0,0,0,0,540,960,240\n")
+
+
+def user_pc_run(args, **kw):
+    exe = args[0].split("\\")[-1]
+    if exe == "ldconsole.exe" and args[1] == "list2":
+        return SimpleNamespace(stdout=LIST_OFF.encode(), returncode=0)
+    if exe == "ldconsole.exe" and args[-1] == "get-serialno":
+        return SimpleNamespace(stdout=b"emulator-5554\r\n", returncode=0)
+    if exe == "ld.exe":
+        return SimpleNamespace(stdout=b"not found emulator!\r\n", returncode=1)
+    if exe == "adb.exe" and args[1:] == ["devices"]:
+        return SimpleNamespace(stdout=b"List of devices attached\r\nemulator-5554\tdevice\r\n", returncode=0)
+    if exe == "adb.exe" and "screencap" in args:
+        return SimpleNamespace(stdout=png(False, size=(540, 960)), returncode=0)
+    if exe == "adb.exe" and args[-2:] == ["wm", "size"]:
+        return SimpleNamespace(stdout=b"Physical size: 540x960\r\n", returncode=0)
+    if exe == "adb.exe" and args[-2:] == ["echo", "ok"]:
+        return SimpleNamespace(stdout=b"ok\r\n", returncode=0)
+    return SimpleNamespace(stdout=b"", returncode=0)
+
+
+def test_check_counts_ld_exe_as_fine_when_adb_works_and_names_closed_windows():
+    ldplayer._cache.clear()
+    rows = ld_console_with(user_pc_run).check(0)
+    assert all(r["ok"] for r in rows), [r for r in rows if not r["ok"]]
+    assert "adb 로 되므로 쓰지 않음" in {r["step"]: r for r in rows}["ld.exe 로 명령 (adb 가 안 될 때 대신)"]["detail"]
+    rows = ld_console_with(user_pc_run).check(4)
+    assert rows[-1]["step"] == "4번 창 켜짐" and not rows[-1]["ok"] and "꺼져 있습니다" in rows[-1]["detail"]
+    ldplayer._cache.clear()
+
+
+def test_failed_ld_exe_or_adb_is_not_taken_as_done():
+    """ld.exe 가 'not found emulator!'(끝 번호 1)를 내면 성공으로 보지 않고 ldconsole 로 넘어간다."""
+    ldplayer._cache.clear()
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        exe = args[0].split("\\")[-1]
+        if exe == "ld.exe":
+            return SimpleNamespace(stdout=b"not found emulator!\r\n", returncode=1)
+        if exe == "adb.exe":
+            return SimpleNamespace(stdout=b"", returncode=1)                  # error: device not found (stderr)
+        if args[-1] == "get-serialno":
+            return SimpleNamespace(stdout=b"emulator-5554\r\n", returncode=0)
+        return SimpleNamespace(stdout=b"", returncode=0)
+    ld_console_with(run).tap(0, (1, 2))
+    assert calls[-1][1:] == ["adb", "--index", "0", "--command", "shell input tap 1 2"]
+    ldplayer._cache.clear()

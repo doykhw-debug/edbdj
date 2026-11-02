@@ -274,7 +274,9 @@ class Console:
         ld = ntpath.join(ntpath.dirname(path), "ld.exe")      # 0.98: adb 없이 그 창 안에서 명령 (ld -s 번호 …)
         self.ld_path = ld if exists(ld) else None
 
-    def _run(self, exe: str, args: list[str], timeout: int) -> bytes:
+    def _run(self, exe: str, args: list[str], timeout: int, strict: bool = False) -> bytes:
+        """strict(1.04): 끝난 번호가 0 이 아니거나 'not found' 이면 실패(LdError) — adb·ld.exe 가 실패해도 성공으로 보고
+        다음 방법(ldconsole)으로 넘어가지 않던 것."""
         free = self.free_mb() if self.free_mb else None
         if free is not None and free < LOW_COMMIT_MB:
             raise LdError(f"PC 메모리가 거의 없어(남은 {free}MB) {ntpath.basename(exe)} 를 띄우지 않음 — {MEMORY_HINT}")
@@ -286,7 +288,12 @@ class Console:
         except OSError as e:
             raise LdError(f"{ntpath.basename(exe)} 을 실행하지 못함: {e}")
         out = r.stdout
-        return out if isinstance(out, (bytes, bytearray)) else (out or "").encode("utf-8")
+        out = out if isinstance(out, (bytes, bytearray)) else (out or "").encode("utf-8")
+        if strict:
+            code = getattr(r, "returncode", 0)
+            if (isinstance(code, int) and code != 0) or b"not found" in out.lower():
+                raise LdError(f"{ntpath.basename(exe)} 실패: {out.decode('utf-8', errors='replace').strip()[:120] or f'끝 번호 {code}'}")
+        return out
 
     def booting(self) -> float | None:
         """PC 를 켠 지 BOOT_WAIT 초가 안 됐으면 남은 초, 아니면 None."""
@@ -354,7 +361,7 @@ class Console:
             return None
         try:
             with one_at_a_time(self.lock_path):
-                out = self._run(self.adb_path, ["-s", serial, *args], timeout)
+                out = self._run(self.adb_path, ["-s", serial, *args], timeout, strict=True)
         except LdError:
             _cache.pop(("serial", self.path, index), None)      # 연결 이름이 바뀌었을 수 있음 → 다음에 다시 물음
             fails += 1
@@ -369,7 +376,7 @@ class Console:
             return None
         try:
             with one_at_a_time(self.lock_path):
-                return self._run(self.ld_path, ["-s", str(index), *args], timeout)
+                return self._run(self.ld_path, ["-s", str(index), *args], timeout, strict=True)
         except LdError:
             return None
 
@@ -539,6 +546,12 @@ class Console:
             rows.append({"step": "창 번호", "ok": False, "detail": "몇 번 창인지 모릅니다 (창 이름을 앱 이름으로 바꾸거나 창 번호를 고르세요)",
                          "sec": 0})
             return rows
+        inst = self.instance(index)
+        if inst is None or not inst["started"]:
+            rows.append({"step": f"{index}번 창 켜짐", "ok": False, "sec": 0,
+                         "detail": f"LDPlayer {index}번 창이 " + ("없습니다" if inst is None else "꺼져 있습니다")
+                                   + " — 다중 실행기에서 켜고 방송국 앱의 채팅 화면을 열어 두세요"})
+            return rows
         _cache.pop(("serial", self.path, index), None)
         if self.adb_path:
             step("adb 연결 목록 (adb devices)", lambda: (lambda o: ("device" in o.replace("List of devices attached", ""),
@@ -547,14 +560,23 @@ class Console:
         step(f"{index}번 창 adb 이름 (get-serialno)", lambda: (lambda o: (bool(SERIAL_RE.match(o.strip().splitlines()[-1].strip()))
                                                                         if o.strip() else False, o.strip()[:300] or "(빈 결과)"))(
             self.call("adb", "--index", str(index), "--command", "get-serialno", timeout=CHECK_TIMEOUT)))
+        adb_ok = False
         if self.adb_path:
-            step("adb 로 바로 명령", lambda: (lambda o: (o is not None and b"ok" in o, "응답 없음" if o is None else
-                                                    o.decode("utf-8", errors="replace").strip()[:200]))(
+            adb_ok = step("adb 로 바로 명령", lambda: (lambda o: (o is not None and b"ok" in o, "응답 없음" if o is None else
+                                                             o.decode("utf-8", errors="replace").strip()[:200]))(
                 self.direct(index, ["shell", "echo", "ok"], timeout=CHECK_TIMEOUT)))
         if self.ld_path:
-            step("ld.exe 로 명령", lambda: (lambda o: (o is not None and b"ok" in o, "응답 없음" if o is None else
-                                                  o.decode("utf-8", errors="replace").strip()[:200]))(
-                self.ld(index, ["echo", "ok"], timeout=CHECK_TIMEOUT)))
+            # 1.04: ld.exe 는 adb 가 안 될 때만 쓰는 대신 길 — adb 가 되면 안 돼도 괜찮음 (예전엔 '안 됨'으로 세어 6곳 모두 안 됨으로 보였음)
+            def ld_step():
+                try:
+                    o = self._run(self.ld_path, ["-s", str(index), "echo", "ok"], CHECK_TIMEOUT, strict=True)
+                    ok, detail = b"ok" in o, o.decode("utf-8", errors="replace").strip()[:200]
+                except LdError as e:
+                    ok, detail = False, str(e)
+                if not ok and adb_ok:
+                    return True, f"{detail} — adb 로 되므로 쓰지 않음 (괜찮음)"
+                return ok, detail
+            step("ld.exe 로 명령 (adb 가 안 될 때 대신)", ld_step)
         step("화면 크기 (wm size)", lambda: (lambda z: (z is not None, f"{z[0]}×{z[1]}" if z else "모름"))(self.screen_size(index)))
         step("화면 사진", lambda: (lambda b: (bool(b), f"{len(b) // 1024}KB" if b else "못 찍음"))(self.screenshot(index)))
         return rows

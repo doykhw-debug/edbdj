@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-11-02, 1.03 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-11-02, 1.04 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -54,6 +54,7 @@
 | 1.01 | 사용자 요청: 창 닫힘 실패는 20분까지 — runner.NOT_PRESSED·not_pressed(마지막 실패 문구) 이면 한도 WAIT_RETRIES(20), 아니면 SEND_RETRIES(5). 'ADB 오류 창 먹통': Console.direct 를 one_at_a_time 잠금 안에서, 잇달아 ADB_FAILS(3) 실패 시 ADB_PAUSE(120초) 쉼(_cache adb_fail), power.quiet_error_boxes 를 quizbot main 에서도, check(other_adb=문자용 find_adb) 에 'adb 판' 비교 단계. 오류 창 정체는 실제 PC 미확인 |
 | 1.02 | 사용자 사진: adb.exe 0xc000012d(STATUS_COMMITMENT_LIMIT, 가상 메모리 부족) 계속 → Console._run 이 free_commit_mb < LOW_COMMIT_MB(1000) 이면 띄우지 않고 LdError(MEMORY_HINT: LDPlayer 창 메모리 1GB·페이징 파일·칸 수), check 에 '메모리 여유' 단계. 근본 해결은 사용자 PC 설정 |
 | 1.03 | 사용자가 6창 좌표(540×960, uiautomator bounds·resource-id)를 JSON 으로 보냄 → LD_LAYOUTS 를 그 값의 비율로(차이 ≤3px), ids·prepare(반디 tap when center_play_pause_button / KFN·FEBC swipe when check_paly·v_play2) 추가. LdSender._find_by_id: Console.ui_dump(uiautomator dump → cat) + find_ids, 못 찾으면 prepare 한 번 뒤 다시, 직접 정한 자리가 있으면 안 함. 재생 버튼은 안 누름. 실제 PC 미확인 |
+| 1.04 | 사용자 모두 연결 점검 0/6: 4곳은 adb·wm size·화면 사진 됨, ld.exe 'not found emulator!' 만 실패 / cpbc·극동 창 꺼짐. check: 창 켜짐 단계(꺼지면 바로 멈춤), ld.exe 단계는 adb 되면 ok. Console._run(strict=True) — direct adb·ld.exe 는 끝 번호≠0 또는 'not found' 면 LdError (예전엔 실패를 성공으로 봐 ldconsole 로 안 넘어감). ld.exe 가 왜 'not found emulator' 인지는 모름 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).
