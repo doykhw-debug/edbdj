@@ -143,6 +143,11 @@ LOCK_FILE = "ldconsole.lock"
 LOCK_WAIT = 15           # 0.97: 다른 청취기의 ldconsole 명령이 끝나기를 기다리는 최대 시간 (넘으면 그냥 실행, 0.98: 30 → 15)
 CHECK_TIMEOUT = 6        # 0.98: 연결 점검의 단계마다 기다리는 시간
 ADB_FAILS, ADB_PAUSE = 3, 120   # 1.01: adb.exe 가 잇달아 이만큼 실패하면 이만큼(초) 쉰다 (ld.exe·ldconsole 로)
+# 1.02: 사용자 PC 'adb.exe 응용 프로그램 오류 (0xc000012d)' = 가상 메모리(실제 메모리 + 가상 메모리 파일)가 바닥나 새 프로그램이
+# 켜지지 못함. 남은 메모리가 이보다 적으면 adb·ldconsole·ld.exe 를 띄우지 않는다 (띄우면 오류 창만 쌓임).
+LOW_COMMIT_MB = 1000
+MEMORY_HINT = ("LDPlayer 창마다 설정(톱니) → 퍼포먼스 → 메모리를 1024MB(1GB)로 낮추고(라디오 앱은 이것으로 충분), "
+               "윈도우 가상 메모리(페이징 파일)를 늘리거나, 동시 청취 칸 수를 줄이세요")
 # 0.98: ld.exe 로 찍은 화면이 저장되는 PC 쪽 공유 폴더 (LDPlayer 의 /sdcard/Pictures ↔ 내 문서\XuanZhi9\Pictures)
 SHARED_PICTURES = ("XuanZhi9", "XuanZhi64", "XuanZhi", "leidian9")
 ADB_HINT = ("LDPlayer 창의 설정(톱니) → 기타 설정 → 'ADB 디버깅'을 '로컬 연결 열기'로 바꾸고 저장한 뒤 그 창을 다시 시작하세요 "
@@ -229,15 +234,21 @@ class Console:
     ldconsole 을 부르지 않고, ldconsole 명령은 컴퓨터 전체에서 한 번에 하나씩 (lock_path 잠금 파일)."""
 
     def __init__(self, path: str, run=subprocess.run, shot_dir: Path | None = None, exists=os.path.isfile,
-                 lock_path: Path | None = None, uptime=uptime_seconds):
+                 lock_path: Path | None = None, uptime=uptime_seconds, free_mb=None):
         self.path, self.run, self.shot_dir = path, run, shot_dir
         self.lock_path, self.uptime = lock_path, uptime
+        if free_mb is None:
+            from .lanes import free_commit_mb as free_mb
+        self.free_mb = free_mb
         adb = ntpath.join(ntpath.dirname(path), "adb.exe")
         self.adb_path = adb if exists(adb) else None
         ld = ntpath.join(ntpath.dirname(path), "ld.exe")      # 0.98: adb 없이 그 창 안에서 명령 (ld -s 번호 …)
         self.ld_path = ld if exists(ld) else None
 
     def _run(self, exe: str, args: list[str], timeout: int) -> bytes:
+        free = self.free_mb() if self.free_mb else None
+        if free is not None and free < LOW_COMMIT_MB:
+            raise LdError(f"PC 메모리가 거의 없어(남은 {free}MB) {ntpath.basename(exe)} 를 띄우지 않음 — {MEMORY_HINT}")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             r = self.run([exe, *args], capture_output=True, timeout=timeout, creationflags=flags)
@@ -458,6 +469,10 @@ class Console:
             return ok
 
         step("ldconsole.exe", lambda: (True, self.path))
+        free = self.free_mb() if self.free_mb else None
+        if free is not None:
+            step("메모리 여유 (실제 + 가상 메모리 파일)", lambda: (free >= LOW_COMMIT_MB * 3, f"남은 {free}MB"
+                 + ("" if free >= LOW_COMMIT_MB * 3 else f" — 모자라면 adb.exe 오류(0xc000012d)가 납니다. {MEMORY_HINT}")))
         step("adb.exe (LDPlayer 폴더)", lambda: (bool(self.adb_path), self.adb_path or "없음"))
         if self.adb_path and other_adb and ntpath.normcase(other_adb) != ntpath.normcase(self.adb_path):
             # 1.01: 문자(휴대폰)용 adb 와 LDPlayer adb 의 판이 다르면 서로 상대의 adb 서버를 끄고 다시 켠다

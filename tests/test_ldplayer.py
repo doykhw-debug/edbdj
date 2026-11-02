@@ -646,3 +646,20 @@ def test_listener_suppresses_error_boxes():
 
     seen = []
     assert power.quiet_error_boxes(SimpleNamespace(SetErrorMode=lambda m: seen.append(m))) and seen == [0x8003]
+
+
+def test_no_adb_when_pc_memory_is_almost_gone():
+    """1.02: 'adb.exe 응용 프로그램 오류 (0xc000012d)' = 가상 메모리 부족 → 남은 메모리가 적으면 띄우지 않고 까닭을 알림."""
+    ldplayer._cache.clear()
+    calls = []
+    free = [500]
+    con = ldplayer.Console("ldconsole.exe", run=lambda a, **kw: calls.append(a) or SimpleNamespace(stdout=LIST2.encode()),
+                           uptime=lambda: None, free_mb=lambda: free[0])
+    with pytest.raises(ldplayer.LdError, match="메모리가 거의 없어.*1024MB"):
+        con.instances()
+    assert calls == []
+    rows = {r["step"]: r for r in con.check(0)}
+    assert not rows["메모리 여유 (실제 + 가상 메모리 파일)"]["ok"] and "0xc000012d" in rows["메모리 여유 (실제 + 가상 메모리 파일)"]["detail"]
+    free[0] = 8000
+    assert con.instances() and calls
+    ldplayer._cache.clear()
