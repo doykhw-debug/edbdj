@@ -38,14 +38,23 @@ CONSOLE_ROOTS = (r"C:\LDPlayer", r"D:\LDPlayer", r"E:\LDPlayer", r"C:\Program Fi
 CONSOLE_NAMES = ("ldconsole.exe", "dnconsole.exe")
 
 # 0.90 사용자가 보낸 LDPlayer 6창 화면 사진(9:16)으로 잰 자리 — 안드로이드 화면 대비 비율 (x, y) / 채팅 목록 (왼·위·오른·아래).
+# 1.03: 사용자가 2026-11-02 에 6창(540×960)에서 화면 요소 경계로 확인한 좌표로 맞춤 (거의 같았음).
+# ids: 입력칸·전송 버튼의 화면 요소 이름(resource-id) — 있으면 보낼 때 화면 요소 목록에서 찾아 그 가운데를 누른다.
+# prepare: 채팅 칸이 접혀 입력칸이 안 보일 때 펼치는 동작 (when 의 요소가 화면에 있을 때만 — 엉뚱한 화면에서 누르지 않게).
 # 화면 사진을 눌러 자리를 정하지 않았으면 이 자리를 쓴다 (정하면 그 자리가 우선).
 LD_LAYOUTS = {
-    "ifm": {"input": (0.38, 0.945), "send": (0.87, 0.945), "chat": (0.0, 0.24, 1.0, 0.89)},     # '…채팅 내용을 입력하세요' · 파란 '글쓰기'
-    "ytn": {"input": (0.52, 0.965), "send": (0.965, 0.965), "chat": (0.0, 0.60, 1.0, 0.91)},    # '채팅을 입력해주세요(200자이내)' · 종이비행기
-    "bandi": {"input": (0.38, 0.945), "send": (0.84, 0.945), "chat": (0.0, 0.10, 1.0, 0.84)},   # 반디톡 입력칸 · 파란 '등록'
-    "kfn": {"input": (0.42, 0.775), "send": (0.82, 0.775), "chat": (0.0, 0.10, 1.0, 0.72)},     # '메시지를 입력해 주세요.' · 노란 화살표
-    "cpbc": {"input": (0.40, 0.89), "send": (0.915, 0.89), "chat": (0.0, 0.40, 1.0, 0.86)},     # 빵톡 '메세지를 입력하세요' · 화살표
-    "febc": {"input": (0.45, 0.85), "send": (0.92, 0.85), "chat": (0.0, 0.58, 1.0, 0.81)},      # '실시간 채팅에 참여해 보세요' · 화살표
+    "ifm": {"input": (0.407, 0.945), "send": (0.872, 0.945), "chat": (0.0, 0.24, 1.0, 0.89)},   # 보라톡 · 파란 '글쓰기'
+    "ytn": {"input": (0.519, 0.960), "send": (0.928, 0.960), "chat": (0.0, 0.60, 1.0, 0.91)},  # '채팅을 입력해주세요(200자이내)' · 종이비행기
+    "bandi": {"input": (0.389, 0.942), "send": (0.833, 0.942), "chat": (0.0, 0.10, 1.0, 0.84),  # 반디톡 입력칸 · 파란 '등록'
+              "ids": ("kr.ebs.bandi:id/board_input", "kr.ebs.bandi:id/board_post"),
+              "prepare": {"tap": (0.9, 0.851), "when": "kr.ebs.bandi:id/center_play_pause_button"}},   # 홈 → 반디톡
+    "kfn": {"input": (0.444, 0.773), "send": (0.819, 0.773), "chat": (0.0, 0.10, 1.0, 0.72),    # '메시지를 입력해 주세요.' · 노란 화살표
+            "ids": ("kr.co.digiquitous.korea.armyfm:id/edit_write", "kr.co.digiquitous.korea.armyfm:id/btn_write"),
+            "prepare": {"swipe": ((0.5, 0.615), (0.5, 0.125)), "when": "kr.co.digiquitous.korea.armyfm:id/check_paly"}},
+    "cpbc": {"input": (0.422, 0.890), "send": (0.922, 0.890), "chat": (0.0, 0.40, 1.0, 0.86)},  # 빵톡 '메세지를 입력하세요' · 종이비행기
+    "febc": {"input": (0.467, 0.850), "send": (0.911, 0.850), "chat": (0.0, 0.58, 1.0, 0.81),  # 메시지 입력란 · 파란 화살표
+             "ids": ("net.febc.radio:id/et_message", "net.febc.radio:id/btn_chat_send"),
+             "prepare": {"swipe": ((0.5, 0.7875), (0.5, 0.26)), "when": "net.febc.radio:id/v_play2"}},   # 아래 손잡이를 위로
 }
 # 창 이름으로 그 앱의 LDPlayer 창 찾기 (사용자는 창 이름을 앱 이름으로 바꿔 둠: '경인방송 iFM', 'YTN 라디오' …)
 TITLE_HINTS = {"ifm": ("ifm", "경인"), "ytn": ("ytn",), "bandi": ("반디", "bandi", "ebs"), "kfn": ("kfn", "별사탕", "국방"),
@@ -90,6 +99,26 @@ def layout_point(app: str, target: str, size: tuple[int, int] | None) -> tuple[i
     if lay is None or not size:
         return None
     return int(lay[0] * size[0]), int(lay[1] * size[1])
+
+
+BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
+
+
+def find_ids(xml: str, *ids: str) -> dict:
+    """화면 요소 목록(uiautomator dump) → {resource-id: 가운데 (x, y)} (보이는 것만, 크기 0 은 뺌)."""
+    out = {}
+    for node in re.finditer(r"<node\b[^>]*>", xml or ""):
+        tag = node.group(0)
+        rid = re.search(r'resource-id="([^"]*)"', tag)
+        if not rid or rid.group(1) not in ids or rid.group(1) in out:
+            continue
+        b = BOUNDS_RE.search(tag)
+        if not b:
+            continue
+        x1, y1, x2, y2 = (int(v) for v in b.groups())
+        if x2 > x1 and y2 > y1:
+            out[rid.group(1)] = ((x1 + x2) // 2, (y1 + y2) // 2)
+    return out
 
 
 def layout_box(app: str, size: tuple[int, int] | None) -> tuple[int, int, int, int] | None:
@@ -358,6 +387,18 @@ class Console:
     def keys(self, index: int, *codes: int) -> None:
         self._command(index, ["input", "keyevent", *(str(c) for c in codes)])
 
+    def swipe(self, index: int, a: tuple[int, int], b: tuple[int, int], ms: int = 500) -> None:
+        self._command(index, ["input", "swipe", *(str(int(v)) for v in (*a, *b)), str(ms)])
+
+    def ui_dump(self, index: int) -> str:
+        """1.03: 그 창의 화면 요소 목록(XML) — 입력칸·전송 버튼을 이름(resource-id)으로 찾는다. 못 받으면 ''."""
+        try:
+            self.shell(index, "uiautomator", "dump", "/sdcard/rh_ui.xml")
+            text = self.shell(index, "cat", "/sdcard/rh_ui.xml")
+        except LdError:
+            return ""
+        return text if "<hierarchy" in text else ""
+
     def clear(self, index: int) -> None:
         self.keys(index, KEY_MOVE_END, *([KEY_DEL] * CLEAR_KEYS))
 
@@ -619,8 +660,38 @@ class LdSender:
         self._size = inst.get("size") or getattr(self, "_size", None)
         return con, self.cfg.index
 
-    def _points(self, size) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
-        """입력칸·전송 버튼: 화면 사진을 눌러 정한 자리, 없으면 알려진 자리 (화면 크기로 환산)."""
+    def _find_by_id(self, con, index: int, size) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+        """1.03: 화면 요소 이름으로 입력칸·전송 버튼 찾기. 채팅 칸이 접혀 있으면 한 번 펼친 뒤 다시 찾는다."""
+        lay = LD_LAYOUTS.get(self.cfg.app, {})
+        if "ids" not in lay or not hasattr(con, "ui_dump") or (self.cfg.input and self.cfg.send):
+            return None, None
+        inp_id, snd_id = lay["ids"]
+        prep = lay.get("prepare")
+        for attempt in range(2):
+            xml = con.ui_dump(index)
+            if not xml:
+                return None, None
+            found = find_ids(xml, inp_id, snd_id, *([prep["when"]] if prep else []))
+            if inp_id in found and snd_id in found:
+                if attempt:
+                    self.fixes.append(f"{self.cfg.label} 채팅 칸이 접혀 있어 펼침")
+                return found[inp_id], found[snd_id]
+            if attempt or not prep or prep["when"] not in found or not size:
+                break
+            w, h = size
+            if "swipe" in prep:
+                (ax, ay), (bx, by) = prep["swipe"]
+                con.swipe(index, (int(ax * w), int(ay * h)), (int(bx * w), int(by * h)), 500)
+            else:
+                con.tap(index, (int(prep["tap"][0] * w), int(prep["tap"][1] * h)))
+            self.sleep(1.5)
+        return None, None
+
+    def _points(self, size, found=(None, None)) -> tuple[tuple[int, int] | None, tuple[int, int] | None]:
+        """입력칸·전송 버튼: 화면 사진을 눌러 정한 자리 → 화면 요소 이름으로 찾은 자리(1.03) → 알려진 자리 (화면 크기로 환산)."""
+        if not (self.cfg.input and self.cfg.send) and found[0] and found[1]:
+            self.trace_src = "화면 요소로 찾음"
+            return found
         inp = self.cfg.input or layout_point(self.cfg.app, "input", size)
         snd = self.cfg.send or layout_point(self.cfg.app, "send", size)
         if (inp, snd) != (self.cfg.input, self.cfg.send) and inp and snd:
@@ -680,7 +751,11 @@ class LdSender:
         label = self.cfg.label
         before = self._shot(con, index)
         size = before.size if before is not None else self._screen_size(con, index)
-        inp, snd = self._points(size)
+        self.trace_src = ""
+        found = self._find_by_id(con, index, size)
+        if found[0] and self.fixes and self.fixes[-1].endswith("펼침"):
+            before = self._shot(con, index) or before          # 펼친 뒤 화면으로 다시 (입력칸 확인 사진)
+        inp, snd = self._points(size, found)
         if inp is None or snd is None:
             if size is None:              # 0.98: 자리를 안 정한 게 아니라 LDPlayer 와 연결이 안 됨 (화면 사진·크기 모두 못 받음)
                 raise LdError(f"{label}: LDPlayer {index}번 창의 화면을 받지 못해 누를 자리를 계산하지 못했습니다 — "
@@ -689,7 +764,8 @@ class LdSender:
         # 0.96: 어디까지 했는지 결과에 남긴다 (보내지 못했을 때 원인을 바로 찾게)
         self.trace = [f"화면 {size[0]}×{size[1]}" if size else "화면 크기 모름",
                       "사진 확인 가능" if before is not None else "사진 못 찍음(확인 없이)",
-                      f"입력칸 {inp[0]},{inp[1]} · 전송 {snd[0]},{snd[1]}", f"글 {len(text)}자"]
+                      f"입력칸 {inp[0]},{inp[1]} · 전송 {snd[0]},{snd[1]}" + (f" ({self.trace_src})" if self.trace_src else ""),
+                      f"글 {len(text)}자"]
         box = input_box(before.size, inp) if before is not None else None
         filled, verified = None, False
         for n in range(1, TYPE_TRIES + 1):

@@ -663,3 +663,81 @@ def test_no_adb_when_pc_memory_is_almost_gone():
     free[0] = 8000
     assert con.instances() and calls
     ldplayer._cache.clear()
+
+
+# ── 1.03: 사용자가 확인해 보낸 6창 좌표(540×960)와 화면 요소 이름 ─────────────────────────────
+VERIFIED = {"ifm": ((220, 907), (471, 907)), "ytn": ((280, 922), (501, 922)), "bandi": ((210, 904), (450, 904)),
+            "kfn": ((240, 742), (442, 742)), "cpbc": ((228, 854), (498, 854)), "febc": ((252, 816), (492, 816))}
+
+
+def test_known_layouts_match_user_verified_coordinates():
+    for app, (inp, snd) in VERIFIED.items():
+        for target, want in (("input", inp), ("send", snd)):
+            got = ldplayer.layout_point(app, target, (540, 960))
+            assert abs(got[0] - want[0]) <= 3 and abs(got[1] - want[1]) <= 3, (app, target, got, want)
+
+
+KFN = "kr.co.digiquitous.korea.armyfm:id/"
+
+
+def node(rid, bounds):
+    return f'<node index="0" text="" resource-id="{rid}" class="android.widget.View" bounds="{bounds}" />'
+
+
+def test_find_ids_reads_uiautomator_dump():
+    xml = ("<?xml version='1.0' ?><hierarchy rotation=\"0\">" + node(KFN + "edit_write", "[75,705][405,780]")
+           + node(KFN + "btn_write", "[405,705][480,780]") + node(KFN + "gone", "[0,0][0,0]") + "</hierarchy>")
+    assert ldplayer.find_ids(xml, KFN + "edit_write", KFN + "btn_write", KFN + "gone") == {
+        KFN + "edit_write": (240, 742), KFN + "btn_write": (442, 742)}
+
+
+class PanelConsole(FakeConsole):
+    """KFN 처럼 채팅 칸이 접혀 있으면 입력칸이 화면 요소 목록에 없고, 위로 밀면 펼쳐진다."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.open, self.dumps = False, 0
+
+    def instances(self):
+        return [{"index": 0, "title": "KFN Radio 별사탕", "started": True, "pid": 1, "vbox_pid": 2}]
+
+    def screenshot(self, index):
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGB", (540, 960), (255, 255, 255))
+        if self.text:
+            ImageDraw.Draw(img).rectangle((90, 730, 380, 755), fill=(20, 20, 20))       # 입력칸에 들어간 글
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return out.getvalue()
+
+    def ui_dump(self, index):
+        self.dumps += 1
+        body = node(KFN + "check_paly", "[15,825][135,945]")
+        if self.open:
+            body += node(KFN + "edit_write", "[75,705][405,780]") + node(KFN + "btn_write", "[405,705][480,780]")
+        return f'<hierarchy rotation="0">{body}</hierarchy>'
+
+    def swipe(self, index, a, b, ms=500):
+        self.log.append(("swipe", a, b))
+        self.open = True
+
+    def tap(self, index, point):
+        self.log.append(("tap", tuple(point)))
+        if tuple(point) == (442, 742) and self.text:
+            self.sent.append(self.text)
+            self.text = ""
+
+
+def test_collapsed_chat_panel_is_opened_then_found_by_id(conn):
+    con = PanelConsole()
+    s = ldplayer.LdSender(ldplayer.LdConfig(app="kfn", index=0), make_console=lambda: con, sleep=lambda s: None)
+    r = s.send("정답 감")
+    assert ("swipe", (270, 590), (270, 120)) in con.log                         # 사용자가 알려 준 펼치기 (500ms)
+    assert con.sent == ["정답 감"] and ("tap", (240, 742)) in con.log
+    assert "채팅 칸이 접혀 있어 펼침" in r.detail and "화면 요소로 찾음" in r.detail
+
+    con2 = PanelConsole()                                                       # 직접 정한 자리가 있으면 그 자리 (화면 요소 안 봄)
+    ldplayer.LdSender(ldplayer.LdConfig(app="kfn", index=0, input=(240, 742), send=(442, 742)),
+                      make_console=lambda: con2, sleep=lambda s: None).send("정답")
+    assert con2.dumps == 0 and not any(e[0] == "swipe" for e in con2.log)
