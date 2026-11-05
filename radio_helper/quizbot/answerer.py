@@ -733,6 +733,29 @@ GPT_MODELS = {   # OpenAI API 키 (충전 요금) — 위에서 아래로 대체
     "gpt-5": "gpt-5 — 비쌈 · 추론",
     "gpt-6.1-sol": "gpt-6.1-sol — 비쌈",
 }
+CLAUDE_MODELS = {   # 1.05: Claude 구독(Claude Code)·API 키 모두 — 위에서 아래로 빠르고 가벼움 → 정확하고 무거움 (API 요금: 100만 토큰당 입력/출력)
+    "claude-haiku-5-5": "claude-haiku-5-5 — 가장 빠르고 가벼움 · 한도·요금 가장 적게 씀 (어려운 퀴즈는 덜 정확할 수 있음, API $0.1/$0.5)",
+    "claude-sonnet-5-5": "claude-sonnet-5-5 — 기본 · 권장 (빠르고 정확, API $2/$10)",
+    "claude-opus-5-5": "claude-opus-5-5 — 더 정확 · 구독 한도를 빨리 씀 (API $4/$20)",
+    "claude-fable-5-1": "claude-fable-5-1 — 가장 높은 성능 · 느리고 한도를 가장 빨리 씀 (API $10/$50)",
+}
+# 서버 쪽 대신 실행(fallbacks "default")·새 웹 검색 도구를 받는 모델 — 그 밖의 모델(직접 입력·Haiku)에는 보내지 않는다 (보내면 400)
+FALLBACK_MODELS = ("claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5")
+NEW_SEARCH_MODELS = re.compile(r"^claude-(opus-(5-5|5|4-[678])|sonnet-(5-5|5|4-6)|fable-5)")
+
+
+def claude_request_options(model: str) -> dict:
+    """그 Claude 모델이 받는 요청 설정 (1.05 모델 고르기): 거절 시 대신 실행은 받는 모델에만."""
+    if model in FALLBACK_MODELS:
+        return {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+    return {}
+
+
+def claude_search_tool(model: str, max_uses: int) -> dict:
+    kind = "web_search_20260209" if NEW_SEARCH_MODELS.match(model or "") else "web_search_20250305"
+    return {"type": kind, "name": "web_search", "max_uses": max_uses}
+
+
 CHATGPT_MODELS = {   # ChatGPT 구독 (Codex 로그인) — codex-cli 0.164 모델 목록, 위에서 아래로 사용량이 많아짐
     "gpt-6-luna": "gpt-6-luna — 기본 · 가장 가볍고 사용량 적음",
     "gpt-5.6-luna": "gpt-5.6-luna — 이전 세대 가벼운 모델",
@@ -932,8 +955,7 @@ class ClaudeAnswerer:
             response = self.client.beta.messages.create(
                 model=self.model,
                 max_tokens=16000,
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default",  # 안전 분류기가 거절하면 서버가 권장 모델로 다시 실행
+                **claude_request_options(self.model),   # 안전 분류기가 거절하면 서버가 권장 모델로 다시 실행 (받는 모델만)
                 output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
                 system=system,
                 messages=[{"role": "user", "content": self._content(user, images)}],
@@ -1046,7 +1068,7 @@ class ClaudeAnswerer:
                 response = self.client.messages.create(
                     model=self.model, max_tokens=16000,
                     system=system,
-                    tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": max_searches}],
+                    tools=[claude_search_tool(self.model, max_searches)],
                     output_config={"effort": self.effort}, messages=messages)
             except a.AuthenticationError:
                 raise AnswererError("Claude API 키가 없거나 올바르지 않습니다.")

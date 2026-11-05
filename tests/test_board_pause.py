@@ -65,3 +65,22 @@ def test_model_lists_and_custom_name(client, conn, monkeypatch):
     page = client.get("/quizbot").get_data(as_text=True)
     assert 'value="gpt-4.1-mini-2025-04-14"' in page                              # 목록에 없는 값은 직접 입력 칸에
     assert answerer.REASONING_MODEL.match("gpt-6-luna") and not answerer.REASONING_MODEL.match("gpt-4.1-mini")
+
+
+def test_claude_model_can_be_chosen(client, conn):
+    """1.05 사용자 요청: Claude 도 모델을 고를 수 있게 (구독·API 키 모두)."""
+    page = client.get("/quizbot").get_data(as_text=True)
+    assert 'name="claude_model"' in page and 'value="claude-sonnet-5-5" selected' in page
+    assert "claude-haiku-5-5 — 가장 빠르고" in page and "claude-fable-5-1" in page
+    client.post("/quizbot/settings", data={"csrf_token": csrf(client), "billing": "subscription", "gpt_fallback": "0",
+                                           "claude_model": "claude-haiku-5-5", "claude_model_custom": ""})
+    assert db.get_setting(conn, "quizbot.model") == "claude-haiku-5-5"
+    client.post("/quizbot/settings", data={"csrf_token": csrf(client), "billing": "subscription", "gpt_fallback": "0",
+                                           "claude_model": "__custom__", "claude_model_custom": "claude-opus-4-8"})
+    assert db.get_setting(conn, "quizbot.model") == "claude-opus-4-8"
+    assert 'value="claude-opus-4-8"' in client.get("/quizbot").get_data(as_text=True)
+    client.post("/quizbot/settings", data={"csrf_token": csrf(client), "billing": "subscription", "gpt_fallback": "0",
+                                           "claude_model": "__custom__", "claude_model_custom": "bad model; rm"})
+    assert db.get_setting(conn, "quizbot.model") == "claude-opus-4-8"                   # 이상한 이름은 저장 안 함
+    assert any("Claude 모델: claude-haiku-5-5" in m for (m,) in conn.execute("SELECT message FROM events"))
+    assert answerer.make(conn).model == "claude-opus-4-8"

@@ -1547,6 +1547,7 @@ def create_app(data_dir: str | None = None) -> Flask:
             gpt_model=qconfig.get(c, "quizbot.gpt_model"), chatgpt_model=qconfig.get(c, "quizbot.chatgpt_model"),
             codex_check=codex_cli.saved_check(c), codex_found=bool(codex_cli.find_codex()),
             gpt_usage=answerer.usage_today(c), gpt_models=answerer.GPT_MODELS, chatgpt_models=answerer.CHATGPT_MODELS,
+            claude_model=qconfig.get(c, "quizbot.model"), claude_models=answerer.CLAUDE_MODELS,
             custom_model=CUSTOM_MODEL,
             can_open_login=not server.is_server() and not g.get("remote"),
             programs=programs_, days_label=qschedule.days_label, day_names=qschedule.DAY_NAMES,
@@ -1591,6 +1592,12 @@ def create_app(data_dir: str | None = None) -> Flask:
             value = form(name).strip()
             return form(name + "_custom").strip() if value == CUSTOM_MODEL else value
 
+        if "claude_model" in request.form:     # 1.05: Claude 모델 고르기
+            claude_model = picked("claude_model")
+            if claude_model and re.fullmatch(r"[A-Za-z0-9._:\[\]-]{2,60}", claude_model):
+                if claude_model != qconfig.get(g.conn, "quizbot.model"):
+                    db.log(g.conn, "quizbot", f"Claude 모델: {claude_model}")
+                db.set_setting(g.conn, "quizbot.model", claude_model)
         gpt_model = picked("gpt_model")
         if gpt_model and re.fullmatch(r"[A-Za-z0-9._:-]{2,60}", gpt_model):
             db.set_setting(g.conn, "quizbot.gpt_model", gpt_model)
@@ -2508,7 +2515,7 @@ def create_app(data_dir: str | None = None) -> Flask:
                 and not k.startswith((f"{app_}.ld_", f"{app_}.platform"))] + \
                [k for k in qconfig.DEFAULTS if k.startswith("quizbot.")
                 and k not in ("quizbot.autostart", "quizbot.billing", "quizbot.billing_fallback",
-                              "quizbot.gpt_fallback", "quizbot.gpt_model", "quizbot.chatgpt_model")]   # AI 연결은 설정 화면에서
+                              "quizbot.gpt_fallback", "quizbot.gpt_model", "quizbot.chatgpt_model", "quizbot.model")]   # AI 연결은 설정 화면에서
         if request.method == "POST":
             for k in keys:
                 if k in request.form:

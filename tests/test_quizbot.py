@@ -683,3 +683,15 @@ def test_send_test_message_typed_by_user(client, conn, monkeypatch):
                                        "test_message": "FM4U 화이팅"})            # 앱마다 따로 저장
     assert db.get_setting(conn, "mini.test_message") == "FM4U 화이팅"
     assert db.get_setting(conn, "gorilla.test_message") == "웬디 언니 오늘도 화이팅!"
+
+
+def test_claude_request_options_follow_chosen_model():
+    """1.05: 거절 시 대신 실행(fallbacks)·새 웹 검색은 받는 모델에만 보낸다 (Haiku·직접 입력한 예전 모델에 보내면 400)."""
+    for model in ("claude-haiku-5-5", "claude-opus-4-8"):
+        client, msgs = fake_client(json.dumps(analysis()))
+        answerer.ClaudeAnswerer(model=model, client=client).analyze("방송", "[07:10:00] 오늘의 퀴즈", [])
+        assert "fallbacks" not in msgs.calls[0] and "betas" not in msgs.calls[0] and msgs.calls[0]["model"] == model
+    for model in ("claude-fable-5-1", "claude-opus-5-5"):
+        assert answerer.claude_request_options(model)["fallbacks"] == "default"
+    assert answerer.claude_search_tool("claude-sonnet-5-5", 3)["type"] == "web_search_20260209"
+    assert answerer.claude_search_tool("claude-haiku-5-5", 3)["type"] == "web_search_20250305"
