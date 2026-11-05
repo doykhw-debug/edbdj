@@ -1,4 +1,4 @@
-# 인수 문서 — 지금 상태와 남은 일 (2026-11-05, 1.05 기준)
+# 인수 문서 — 지금 상태와 남은 일 (2026-11-05, 1.06 기준)
 
 ## 무엇을 하는 프로그램인가
 윈도우 PC 에서 도는 Flask 관리 화면(127.0.0.1:5000) + 듣기 실행기(quizbot). 라디오 앱 소리를 받아쓰고(faster-whisper, RTX 5070 Ti),
@@ -56,6 +56,7 @@
 | 1.03 | 사용자가 6창 좌표(540×960, uiautomator bounds·resource-id)를 JSON 으로 보냄 → LD_LAYOUTS 를 그 값의 비율로(차이 ≤3px), ids·prepare(반디 tap when center_play_pause_button / KFN·FEBC swipe when check_paly·v_play2) 추가. LdSender._find_by_id: Console.ui_dump(uiautomator dump → cat) + find_ids, 못 찾으면 prepare 한 번 뒤 다시, 직접 정한 자리가 있으면 안 함. 재생 버튼은 안 누름. 실제 PC 미확인 |
 | 1.04 | 사용자 모두 연결 점검 0/6: 4곳은 adb·wm size·화면 사진 됨, ld.exe 'not found emulator!' 만 실패 / cpbc·극동 창 꺼짐. check: 창 켜짐 단계(꺼지면 바로 멈춤), ld.exe 단계는 adb 되면 ok. Console._run(strict=True) — direct adb·ld.exe 는 끝 번호≠0 또는 'not found' 면 LdError (예전엔 실패를 성공으로 봐 ldconsole 로 안 넘어감). ld.exe 가 왜 'not found emulator' 인지는 모름 |
 | 1.05 | 사용자 요청 Claude 모델 고르기: answerer.CLAUDE_MODELS(haiku-5-5·sonnet-5-5 기본·opus-5-5·fable-5-1) + 직접 입력, /quizbot/settings 의 claude_model → quizbot.model (일반 설정 목록에서는 뺌). claude_request_options: fallbacks "default" 는 FALLBACK_MODELS 만, claude_search_tool: web_search_20260209 는 NEW_SEARCH_MODELS 만 (Haiku 5.5 등은 20250305) |
+| 1.06 | 사용자 'api 아닌 pc 구독제에서 똑같이': Claude 모델 select 를 quizbot.html 구독 칸(billing_fallback 위)으로 옮김. 구독 경로(cli.run model=self.model)는 1.05 에서도 적용됐음 — 시험 추가 |
 
 ## Aside 규칙 요약 (사용자가 Aside 작업지침으로 정함 — 코드에 반영됨, 설정 boards.aside_rules)
 - 정본 파일: 사용자 PC artifacts 폴더의 `나머지게시판_이어쓰기.json`·`실제등록_증빙.json`·`제출결과_미확인_보류.json`(+ `현재2804항목_참여유형_운영대상.csv`).

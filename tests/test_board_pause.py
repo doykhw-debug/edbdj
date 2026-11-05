@@ -1,6 +1,7 @@
 """0.73: 게시판 읽기·쓰기 정지 (채팅만) · 설정 화면 GPT 모델 목록."""
 
 from datetime import datetime
+from types import SimpleNamespace
 
 from conftest import csrf
 
@@ -71,6 +72,9 @@ def test_claude_model_can_be_chosen(client, conn):
     """1.05 사용자 요청: Claude 도 모델을 고를 수 있게 (구독·API 키 모두)."""
     page = client.get("/quizbot").get_data(as_text=True)
     assert 'name="claude_model"' in page and 'value="claude-sonnet-5-5" selected' in page
+    sub = page.index("<b>Claude 구독</b>")                                       # 1.06: 구독 칸 안에 (API 키 칸 앞)
+    assert sub < page.index('name="claude_model"') < page.index('name="api_key"')
+    assert "PC 구독(Claude Code)과 API 키 모두 이 모델로" in page
     assert "claude-haiku-5-5 — 가장 빠르고" in page and "claude-fable-5-1" in page
     client.post("/quizbot/settings", data={"csrf_token": csrf(client), "billing": "subscription", "gpt_fallback": "0",
                                            "claude_model": "claude-haiku-5-5", "claude_model_custom": ""})
@@ -84,3 +88,8 @@ def test_claude_model_can_be_chosen(client, conn):
     assert db.get_setting(conn, "quizbot.model") == "claude-opus-4-8"                   # 이상한 이름은 저장 안 함
     assert any("Claude 모델: claude-haiku-5-5" in m for (m,) in conn.execute("SELECT message FROM events"))
     assert answerer.make(conn).model == "claude-opus-4-8"
+    calls = []                                                                        # 구독(Claude Code)으로도 그 모델
+    a = answerer.make(conn)
+    a.cli = SimpleNamespace(run=lambda *x, **kw: calls.append(kw) or {"data": {}, "text": "", "texts": []})
+    a._call("시스템", "내용", {"type": "object"})
+    assert answerer.billing(conn) == "subscription" and calls[0]["model"] == "claude-opus-4-8"
